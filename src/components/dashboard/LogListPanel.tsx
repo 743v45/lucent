@@ -5,41 +5,56 @@ import {
   LoadingOutlined,
   CloseCircleOutlined,
 } from '@ant-design/icons';
+import type { LogEntry, AgentType } from '../../types';
 import './LogListPanel.css';
 
 const { Text } = Typography;
 
-export function LogListPanel({ logs, selectedId, onSelectLog, loading }) {
-  const getLogIcon = (log) => {
-    if (log.error) return <CloseCircleOutlined className="log-icon error" />;
-    if (log.duration === 0) return <LoadingOutlined className="log-icon in-progress" />;
+interface LogListPanelProps {
+  logs: LogEntry[];
+  selectedId: string | null;
+  onSelectLog: (id: string) => void;
+  loading: boolean;
+}
+
+export function LogListPanel({
+  logs,
+  selectedId,
+  onSelectLog,
+  loading,
+}: LogListPanelProps): JSX.Element {
+  const getLogIcon = (log: LogEntry): JSX.Element => {
+    if (log.error) {
+      return <CloseCircleOutlined className="log-icon error" />;
+    }
+    if (log.duration === 0) {
+      return <LoadingOutlined className="log-icon in-progress" />;
+    }
     return <CheckCircleOutlined className="log-icon success" />;
   };
 
-  const getAgentTypeTag = (agentType) => {
+  const getAgentTypeTag = (agentType: AgentType): JSX.Element => {
     if (agentType === 'main') {
       return <Tag color="blue">Main</Tag>;
     }
-    if (agentType === 'sub') {
-      return <Tag color="default">Sub</Tag>;
-    }
-    return null;
+    return <Tag color="default">Sub</Tag>;
   };
 
-  const getProviderTag = (provider) => {
-    const colors = {
+  const getProviderTag = (provider: string): JSX.Element | null => {
+    const colors: Record<string, string> = {
       openai: 'green',
       claude: 'blue',
     };
-    return <Tag color={colors[provider] || 'default'}>{provider}</Tag>;
+    const color = colors[provider] || 'default';
+    return <Tag color={color}>{provider}</Tag>;
   };
 
-  const formatDuration = (ms) => {
+  const formatDuration = (ms: number): string => {
     if (ms < 1000) return `${ms}ms`;
     return `${(ms / 1000).toFixed(1)}s`;
   };
 
-  const formatTime = (timestamp) => {
+  const formatTime = (timestamp: string): string => {
     const date = new Date(timestamp);
     return date.toLocaleTimeString('zh-CN', {
       hour: '2-digit',
@@ -84,9 +99,14 @@ export function LogListPanel({ logs, selectedId, onSelectLog, loading }) {
                 <div className="log-item-top">
                   <Space size="small">
                     {getLogIcon(log)}
-                    <Text strong>{log.metadata?.model || 'Unknown'}</Text>
+                    <Text strong>{log.metadata.model || 'Unknown'}</Text>
                     {getAgentTypeTag(log.agentType)}
-                    {getProviderTag(log.metadata?.provider)}
+                    {log.subAgentType && (
+                      <Tag color="purple" style={{ fontSize: 10 }}>
+                        {log.subAgentType}
+                      </Tag>
+                    )}
+                    {getProviderTag(log.metadata.provider)}
                   </Space>
                 </div>
                 <div className="log-item-bottom">
@@ -100,7 +120,7 @@ export function LogListPanel({ logs, selectedId, onSelectLog, loading }) {
                   )}
                   {log.tokenUsage && (
                     <Text type="secondary" style={{ fontSize: 12 }}>
-                      · {log.tokenUsage.inputTokens + log.tokenUsage.outputTokens} tokens
+                      · {log.tokenUsage.input_tokens + log.tokenUsage.output_tokens} tokens
                     </Text>
                   )}
                 </div>

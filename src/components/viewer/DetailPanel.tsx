@@ -1,21 +1,34 @@
-import React, { useState } from 'react';
-import { Tabs, Empty, Spin, Card } from 'antd';
-import { FileTextOutlined, CheckCircleOutlined, DatabaseOutlined, MessageOutlined, InfoCircleOutlined } from '@ant-design/icons';
+import React from 'react';
+import { Tabs, Empty, Card, Typography } from 'antd';
+import {
+  FileTextOutlined,
+  CheckCircleOutlined,
+  DatabaseOutlined,
+  MessageOutlined,
+  InfoCircleOutlined,
+} from '@ant-design/icons';
 import ReactJson from 'react-json-view-lite';
 import 'react-json-view-lite/dist/index.css';
+import type { LogEntry, TabType } from '../../types';
 import './DetailPanel.css';
 
+const { Text } = Typography;
+
+interface DetailPanelProps {
+  log: LogEntry | null;
+  activeTab: TabType;
+  onTabChange: (tab: TabType) => void;
+}
+
 const TAB_ITEMS = [
-  { key: 'request', label: 'Request', icon: <FileTextOutlined /> },
-  { key: 'response', label: 'Response', icon: <CheckCircleOutlined /> },
-  { key: 'kvcache', label: 'KV-Cache', icon: <DatabaseOutlined /> },
-  { key: 'context', label: 'Context', icon: <MessageOutlined /> },
-  { key: 'meta', label: 'Meta', icon: <InfoCircleOutlined /> },
+  { key: 'request' as TabType, label: 'Request', icon: <FileTextOutlined /> },
+  { key: 'response' as TabType, label: 'Response', icon: <CheckCircleOutlined /> },
+  { key: 'kvcache' as TabType, label: 'KV-Cache', icon: <DatabaseOutlined /> },
+  { key: 'context' as TabType, label: 'Context', icon: <MessageOutlined /> },
+  { key: 'meta' as TabType, label: 'Meta', icon: <InfoCircleOutlined /> },
 ];
 
-export function DetailPanel({ log, activeTab, onTabChange }) {
-  const [loading, setLoading] = useState(false);
-
+export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): JSX.Element {
   if (!log) {
     return (
       <div className="detail-panel">
@@ -43,13 +56,17 @@ export function DetailPanel({ log, activeTab, onTabChange }) {
     <div className="detail-panel">
       <div className="panel-header">
         <div className="header-info">
-          <span className="header-time">{new Date(log.timestamp).toLocaleString('zh-CN')}</span>
-          <span className="header-url">{log.request.url}</span>
+          <Text className="header-time" type="secondary">
+            {new Date(log.timestamp).toLocaleString('zh-CN')}
+          </Text>
+          <Text className="header-url" ellipsis={{ tooltip: log.request.url }}>
+            {log.request.url}
+          </Text>
         </div>
       </div>
       <Tabs
         activeKey={activeTab}
-        onChange={onTabChange}
+        onChange={(key) => onTabChange(key as TabType)}
         items={tabItems}
         className="detail-tabs"
       />
@@ -57,7 +74,12 @@ export function DetailPanel({ log, activeTab, onTabChange }) {
   );
 }
 
-function TabContent({ tabKey, log }) {
+interface TabContentProps {
+  tabKey: TabType;
+  log: LogEntry;
+}
+
+function TabContent({ tabKey, log }: TabContentProps): JSX.Element {
   const content = getTabContent(tabKey, log);
 
   if (!content) {
@@ -72,14 +94,6 @@ function TabContent({ tabKey, log }) {
     return (
       <div className="tab-json">
         <ReactJson src={content.data} theme="vscode" collapsed={2} />
-      </div>
-    );
-  }
-
-  if (content.type === 'text') {
-    return (
-      <div className="tab-text">
-        <pre>{content.data}</pre>
       </div>
     );
   }
@@ -99,7 +113,12 @@ function TabContent({ tabKey, log }) {
   return <Empty description="暂无数据" />;
 }
 
-function getTabContent(tabKey, log) {
+interface TabContentData {
+  type: 'json' | 'cards';
+  data: unknown;
+}
+
+function getTabContent(tabKey: TabType, log: LogEntry): TabContentData | null {
   switch (tabKey) {
     case 'request':
       return {
@@ -130,6 +149,7 @@ function getTabContent(tabKey, log) {
         data: [
           { title: '缓存命中', content: log.kvCache.hitRate || 'N/A' },
           { title: '读取字节', content: log.kvCache.readBytes || 0 },
+          { title: '写入字节', content: log.kvCache.writeBytes || 0 },
           { title: '缓存内容', content: log.kvCache.content || '无' },
         ],
       };
@@ -147,11 +167,16 @@ function getTabContent(tabKey, log) {
         data: [
           { title: 'Agent 类型', content: log.agentType === 'main' ? '主 Agent' : '辅 Agent' },
           { title: '子类型', content: log.subAgentType || '无' },
-          { title: '模型', content: log.metadata?.model || 'Unknown' },
-          { title: '提供商', content: log.metadata?.provider || 'Unknown' },
+          { title: '模型', content: log.metadata.model || 'Unknown' },
+          { title: '提供商', content: log.metadata.provider || 'Unknown' },
           { title: '耗时', content: `${log.duration}ms` },
-          { title: '流式', content: log.metadata?.stream ? '是' : '否' },
-          { title: 'Token 使用', content: log.tokenUsage ? `${log.tokenUsage.inputTokens} + ${log.tokenUsage.outputTokens}` : 'N/A' },
+          { title: '流式', content: log.metadata.stream ? '是' : '否' },
+          {
+            title: 'Token 使用',
+            content: log.tokenUsage
+              ? `${log.tokenUsage.input_tokens} + ${log.tokenUsage.output_tokens}`
+              : 'N/A',
+          },
         ],
       };
 

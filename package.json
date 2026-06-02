@@ -3,59 +3,44 @@
   "version": "0.1.0",
   "description": "AI Agent Proxy Server - OpenAI/Claude API interceptor and visualizer",
   "license": "MIT",
-  "main": "electron/main.js",
   "type": "module",
   "author": "taevas",
+  "bin": {
+    "agentproxy": "./bin/cli.js"
+  },
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
-    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
-    "electron:build": "npm run build && electron-builder",
-    "start:proxy": "node server/index.js",
-    "lint": "eslint src --ext .js,.jsx,.ts,.tsx",
-    "test": "echo \"Tests not implemented yet\""
+    "build": "tsc && vite build",
+    "start": "node server/index.js",
+    "preview": "vite preview"
   },
   "dependencies": {
-    "antd": "^5.22.5",
-    "@ant-design/icons": "^5.5.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "antd": "^5.22.5",
+    "@ant-design/icons": "^5.5.1",
     "react-json-view-lite": "^2.1.0",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "express": "^4.21.2",
+    "compression": "^1.7.5",
+    "open": "^10.1.0",
+    "commander": "^13.1.0"
   },
   "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@types/node": "^22.10.2",
+    "@types/ws": "^8.5.13",
+    "@types/express": "^5.0.0",
+    "@types/compression": "^1.7.5",
     "@vitejs/plugin-react": "^4.5.2",
     "vite": "^6.3.5",
-    "electron": "^33.3.1",
-    "electron-builder": "^25.1.8",
-    "concurrently": "^9.1.2",
-    "wait-on": "^8.0.1",
+    "typescript": "^5.7.2",
     "eslint": "^9.18.0",
-    "tailwindcss": "^3.4.17",
-    "autoprefixer": "^10.4.20",
-    "postcss": "^8.4.49"
+    "@typescript-eslint/eslint-plugin": "^8.19.1",
+    "@typescript-eslint/parser": "^8.19.1"
   },
-  "build": {
-    "appId": "com.agentproxy.app",
-    "productName": "AgentProxy",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "electron/**",
-      "dist/**",
-      "server/**",
-      "node_modules/**"
-    ],
-    "mac": {
-      "target": ["dmg"],
-      "category": "public.app-category.developer-tools"
-    },
-    "win": {
-      "target": ["nsis"]
-    },
-    "linux": {
-      "target": ["AppImage"]
-    }
+  "engines": {
+    "node": ">=20.0.0"
   }
 }
