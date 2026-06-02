@@ -1,0 +1,61 @@
+{
+  "name": "agentproxy",
+  "version": "0.1.0",
+  "description": "AI Agent Proxy Server - OpenAI/Claude API interceptor and visualizer",
+  "license": "MIT",
+  "main": "electron/main.js",
+  "type": "module",
+  "author": "taevas",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "electron:dev": "concurrently \"npm run dev\" \"wait-on http://localhost:5173 && electron .\"",
+    "electron:build": "npm run build && electron-builder",
+    "start:proxy": "node server/index.js",
+    "lint": "eslint src --ext .js,.jsx,.ts,.tsx",
+    "test": "echo \"Tests not implemented yet\""
+  },
+  "dependencies": {
+    "antd": "^5.22.5",
+    "@ant-design/icons": "^5.5.1",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-json-view-lite": "^2.1.0",
+    "ws": "^8.21.0"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "^4.5.2",
+    "vite": "^6.3.5",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "concurrently": "^9.1.2",
+    "wait-on": "^8.0.1",
+    "eslint": "^9.18.0",
+    "tailwindcss": "^3.4.17",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49"
+  },
+  "build": {
+    "appId": "com.agentproxy.app",
+    "productName": "AgentProxy",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "electron/**",
+      "dist/**",
+      "server/**",
+      "node_modules/**"
+    ],
+    "mac": {
+      "target": ["dmg"],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "linux": {
+      "target": ["AppImage"]
+    }
+  }
+}
