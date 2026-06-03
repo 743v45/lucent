@@ -111,7 +111,7 @@ export function LogListPanel({
 
     return (
       <span
-        className="shrink-0 text-text-tertiary text-sm cursor-default"
+        className="shrink-0 text-text-tertiary text-[13px] cursor-default"
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
         title={formatFullDate(timestamp)}
@@ -148,7 +148,7 @@ export function LogListPanel({
           />
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto p-2">
           {logs.map((log) => {
             const isSelected = selectedId === log.id;
             const { tag: agentTag, color: agentColor } = getAgentTypeTag(log.agentType);
@@ -157,11 +157,11 @@ export function LogListPanel({
                 key={log.id}
                 onClick={() => onSelectLog(log.id)}
                 className={`
-                  h-[56px] px-3 py-1.5 flex flex-col justify-center gap-1 cursor-pointer
-                  transition-colors duration-150
+                  mb-2 p-2 rounded-lg flex flex-col gap-1.5 cursor-pointer
+                  transition-colors duration-150 border
                   ${isSelected
-                    ? 'bg-bg-elevated border-l-2 border-l-brand-accent'
-                    : 'hover:bg-bg-surface border-l-2 border-l-transparent'
+                    ? 'bg-bg-elevated border-brand-accent'
+                    : 'bg-bg-surface border-border-subtle hover:border-border-primary'
                   }
                 `}
               >
@@ -190,7 +190,7 @@ export function LogListPanel({
                   </span>
                   {log.response && (
                     <span
-                      className={`text-sm font-[510] shrink-0 ${
+                      className={`font-[510] shrink-0 ${
                         log.response.status < 400 ? 'text-success' : 'text-error'
                       }`}
                     >
