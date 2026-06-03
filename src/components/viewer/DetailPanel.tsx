@@ -53,15 +53,15 @@ function CopyButton({ onCopy }: { onCopy: () => void }) {
   );
 }
 
-// ==================== Toggle Button ====================
+// ==================== Collapse Button ====================
 
-function ToggleButton({ mode, onToggle }: { mode: 'json' | 'text'; onToggle: () => void }) {
+function CollapseButton({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
   return (
     <button
       onClick={onToggle}
       className="px-3 py-0.5 text-[13px] font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
     >
-      {mode === 'json' ? 'Text' : 'JSON'}
+      {collapsed ? '展开' : '折叠'}
     </button>
   );
 }
@@ -74,9 +74,9 @@ interface DetailPanelProps {
   onTabChange: (tab: TabType) => void;
 }
 
-interface BodyViewMode {
-  request: 'json' | 'text';
-  response: 'json' | 'text';
+interface BodyCollapsedState {
+  request: boolean;
+  response: boolean;
 }
 
 const TAB_CONFIG: { key: TabType; label: string }[] = [
@@ -88,15 +88,15 @@ const TAB_CONFIG: { key: TabType; label: string }[] = [
 ];
 
 export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): JSX.Element {
-  const [bodyViewMode, setBodyViewMode] = useState<BodyViewMode>({
-    request: 'json',
-    response: 'json',
+  const [bodyCollapsed, setBodyCollapsed] = useState<BodyCollapsedState>({
+    request: false, // 默认展开
+    response: false,
   });
 
-  const toggleBodyViewMode = useCallback((type: 'request' | 'response') => {
-    setBodyViewMode(prev => ({
+  const toggleBodyCollapsed = useCallback((type: 'request' | 'response') => {
+    setBodyCollapsed(prev => ({
       ...prev,
-      [type]: prev[type] === 'json' ? 'text' : 'json',
+      [type]: !prev[type],
     }));
   }, []);
 
@@ -120,8 +120,8 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         return (
           <RequestTab
             log={log}
-            bodyViewMode={bodyViewMode.request}
-            onToggleViewMode={() => toggleBodyViewMode('request')}
+            bodyCollapsed={bodyCollapsed.request}
+            onToggleCollapsed={() => toggleBodyCollapsed('request')}
             onCopy={copyBody}
           />
         );
@@ -129,8 +129,8 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         return (
           <ResponseTab
             log={log}
-            bodyViewMode={bodyViewMode.response}
-            onToggleViewMode={() => toggleBodyViewMode('response')}
+            bodyCollapsed={bodyCollapsed.response}
+            onToggleCollapsed={() => toggleBodyCollapsed('response')}
             onCopy={copyBody}
           />
         );
@@ -266,23 +266,24 @@ function HeadersDisplay({ headers }: { headers: Record<string, string> | undefin
 
 function JsonBlock({
   data,
-  viewMode = 'json',
+  collapsed = false,
 }: {
   data: unknown;
-  viewMode?: 'json' | 'text';
+  collapsed?: boolean;
 }) {
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
 
-  // Text 模式：显示原始文本
-  if (viewMode === 'text') {
+  if (collapsed) {
+    // 折叠模式：显示单行预览
+    const preview = text.slice(0, 100) + (text.length > 100 ? '...' : '');
     return (
-      <pre className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary whitespace-pre-wrap break-words overflow-auto">
-        {text}
+      <pre className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary whitespace-nowrap overflow-hidden">
+        {preview}
       </pre>
     );
   }
 
-  // JSON 模式：使用 JsonView，每2级折叠一次（level < 2 表示展开0级和1级）
+  // 展开模式：使用 JsonView，每2级折叠一次（level < 2 表示展开0级和1级）
   const jsonData = typeof data === 'string' ? data : data;
   return (
     <div
@@ -298,12 +299,12 @@ function JsonBlock({
 
 interface RequestTabProps {
   log: LogEntry;
-  bodyViewMode: 'json' | 'text';
-  onToggleViewMode: () => void;
+  bodyCollapsed: boolean;
+  onToggleCollapsed: () => void;
   onCopy: (data: unknown) => void;
 }
 
-function RequestTab({ log, bodyViewMode, onToggleViewMode, onCopy }: RequestTabProps): JSX.Element {
+function RequestTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: RequestTabProps): JSX.Element {
   return (
     <div className="flex flex-col h-full bg-bg-deep">
       <div className="p-4">
@@ -317,12 +318,12 @@ function RequestTab({ log, bodyViewMode, onToggleViewMode, onCopy }: RequestTabP
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
-            <ToggleButton mode={bodyViewMode} onToggle={onToggleViewMode} />
+            <CollapseButton collapsed={bodyCollapsed} onToggle={onToggleCollapsed} />
             <CopyButton onCopy={() => onCopy(log.request.body)} />
           </div>
         </div>
         <div className="flex-1 min-h-0">
-          <JsonBlock data={log.request.body} viewMode={bodyViewMode} />
+          <JsonBlock data={log.request.body} collapsed={bodyCollapsed} />
         </div>
       </div>
     </div>
@@ -333,12 +334,12 @@ function RequestTab({ log, bodyViewMode, onToggleViewMode, onCopy }: RequestTabP
 
 interface ResponseTabProps {
   log: LogEntry;
-  bodyViewMode: 'json' | 'text';
-  onToggleViewMode: () => void;
+  bodyCollapsed: boolean;
+  onToggleCollapsed: () => void;
   onCopy: (data: unknown) => void;
 }
 
-function ResponseTab({ log, bodyViewMode, onToggleViewMode, onCopy }: ResponseTabProps): JSX.Element {
+function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: ResponseTabProps): JSX.Element {
   const response = log.response;
 
   return (
@@ -354,12 +355,12 @@ function ResponseTab({ log, bodyViewMode, onToggleViewMode, onCopy }: ResponseTa
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
-            <ToggleButton mode={bodyViewMode} onToggle={onToggleViewMode} />
+            <CollapseButton collapsed={bodyCollapsed} onToggle={onToggleCollapsed} />
             <CopyButton onCopy={() => onCopy(response.body)} />
           </div>
         </div>
         <div className="flex-1 min-h-0">
-          <JsonBlock data={response.body} viewMode={bodyViewMode} />
+          <JsonBlock data={response.body} collapsed={bodyCollapsed} />
         </div>
       </div>
     </div>
