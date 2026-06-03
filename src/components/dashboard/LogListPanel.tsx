@@ -1,9 +1,4 @@
 import { Empty, Spin, Typography } from 'antd';
-import {
-  CheckCircleOutlined,
-  LoadingOutlined,
-  CloseCircleOutlined,
-} from '@ant-design/icons';
 import type { LogEntry, AgentType } from '../../types';
 
 const { Text } = Typography;
@@ -32,27 +27,17 @@ export function LogListPanel({
   onSelectLog,
   loading,
 }: LogListPanelProps): JSX.Element {
-  const getLogIcon = (log: LogEntry): JSX.Element => {
-    if (log.error) {
-      return <CloseCircleOutlined className="text-sm text-error" />;
-    }
-    if (log.duration === 0) {
-      return <LoadingOutlined className="text-sm text-warning animate-spin" />;
-    }
-    return <CheckCircleOutlined className="text-sm text-success" />;
-  };
-
   const getAgentTypeTag = (agentType: AgentType): JSX.Element => {
     if (agentType === 'main') {
       return (
-        <span className="px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary text-brand-accent">
-          M
+        <span className="px-2 py-0.5 rounded text-sm font-[510] bg-brand-accent/20 text-brand-accent">
+          MainAgent
         </span>
       );
     }
     return (
-      <span className="px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary text-text-tertiary">
-        S
+      <span className="px-2 py-0.5 rounded text-sm font-[510] bg-bg-surface text-text-tertiary">
+        SubAgent
       </span>
     );
   };
@@ -62,13 +47,13 @@ export function LogListPanel({
     return `${(ms / 1000).toFixed(1)}s`;
   };
 
-  const formatTime = (timestamp: string): string => {
+  const formatDate = (timestamp: string): string => {
     const date = new Date(timestamp);
-    return date.toLocaleTimeString('zh-CN', {
+    return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${date.toLocaleTimeString('zh-CN', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-    });
+    })}`;
   };
 
   return (
@@ -111,19 +96,30 @@ export function LogListPanel({
                   }
                 `}
               >
-                {/* 行1：模型名 + 标签 + 状态码 */}
+                {/* 行1：Agent类型 + 模型名 + SubAgent类型 */}
                 <div className="flex items-center gap-2 text-sm leading-[1.3]">
-                  {getLogIcon(log)}
+                  {getAgentTypeTag(log.agentType)}
                   <span
                     className="text-text-primary truncate flex-1 min-w-0 font-[510]"
                     title={log.metadata.model}
                   >
                     {shortenModel(log.metadata.model)}
                   </span>
-                  {getAgentTypeTag(log.agentType)}
                   {log.subAgentType && (
-                    <span className="px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary text-text-tertiary">
+                    <span className="px-2 py-0.5 rounded text-sm font-[510] bg-bg-surface text-text-tertiary">
                       {log.subAgentType}
+                    </span>
+                  )}
+                </div>
+
+                {/* 行2：时间 + 耗时 + 状态码 */}
+                <div className="flex items-center gap-2 text-[13px] leading-[1.3] text-text-tertiary">
+                  <span className="shrink-0">
+                    {formatDate(log.timestamp)}
+                  </span>
+                  {log.duration > 0 && (
+                    <span className="shrink-0">
+                      {formatDuration(log.duration)}
                     </span>
                   )}
                   {log.response && (
@@ -133,23 +129,6 @@ export function LogListPanel({
                       }`}
                     >
                       {log.response.status}
-                    </span>
-                  )}
-                </div>
-
-                {/* 行2：时间 + 耗时 + token */}
-                <div className="flex items-center gap-2 text-[13px] leading-[1.3] text-text-tertiary">
-                  <span className="shrink-0">
-                    {formatTime(log.timestamp)}
-                  </span>
-                  {log.duration > 0 && (
-                    <span className="shrink-0">
-                      {formatDuration(log.duration)}
-                    </span>
-                  )}
-                  {log.tokenUsage && (
-                    <span className="text-text-quaternary text-xs ml-auto shrink-0">
-                      {log.tokenUsage.input_tokens + log.tokenUsage.output_tokens}t
                     </span>
                   )}
                 </div>
