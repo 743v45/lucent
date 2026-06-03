@@ -19,7 +19,10 @@ function App(): JSX.Element {
     (params.get('tab') as TabType) || 'request'
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(300);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const saved = localStorage.getItem('logListWidth');
+    return saved ? parseInt(saved, 10) : 300;
+  });
   const isDragging = useRef(false);
 
   // 同步状态到 URL
@@ -108,7 +111,9 @@ function App(): JSX.Element {
     isDragging.current = false;
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
-  }, []);
+    // 保存宽度到 localStorage
+    localStorage.setItem('logListWidth', String(sidebarWidth));
+  }, [sidebarWidth]);
 
   // 绑定全局鼠标事件
   useEffect(() => {
