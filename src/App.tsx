@@ -8,26 +8,42 @@ import { useLogs } from './hooks/useLogs';
 import { useWebSocket } from './hooks/useWebSocket';
 import { useEventSource } from './hooks/useEventSource';
 import { exportLogs } from './utils/api';
+import { ArrowPathIcon, ArrowUpTrayIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import type { LogEntry, TabType } from './types';
-import './App.css';
-
-console.log('[App.tsx] Component loaded');
 
 function App(): JSX.Element {
-  console.log('[App] Rendering...');
-
-  // 状态管理
-  const [selectedLogId, setSelectedLogId] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<TabType>('request');
+  // 读取初始 URL 参数
+  const params = new URLSearchParams(window.location.search);
+  const [selectedLogId, setSelectedLogId] = useState<string | null>(params.get('log'));
+  const [activeTab, setActiveTab] = useState<TabType>(
+    (params.get('tab') as TabType) || 'request'
+  );
   const [settingsOpen, setSettingsOpen] = useState(false);
 
-  // 使用自定义 Hooks
-  const { status: proxyStatus, loading: statusLoading, enable, disable } = useProxyStatus();
+  // 同步状态到 URL
+  const updateUrl = useCallback((logId: string | null, tab: TabType) => {
+    const p = new URLSearchParams();
+    if (logId) p.set('log', logId);
+    if (tab !== 'request') p.set('tab', tab);
+    const qs = p.toString();
+    history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname);
+  }, []);
+
+  // 包装回调：同时更新状态和 URL
+  const handleSelectLog = useCallback((id: string) => {
+    setSelectedLogId(id);
+    updateUrl(id, activeTab);
+  }, [activeTab, updateUrl]);
+
+  const handleTabChange = useCallback((tab: TabType) => {
+    setActiveTab(tab);
+    updateUrl(selectedLogId, tab);
+  }, [selectedLogId, updateUrl]);
+
+  const { status: proxyStatus, refresh: refreshStatus } = useProxyStatus();
   const { logs, loading: logsLoading, loadLogs, addLog } = useLogs();
 
-  // WebSocket + SSE 双通道实时推送
   const handleNewLog = useCallback((log: LogEntry) => {
-    console.log('[App] New log received:', log.id);
     addLog(log);
   }, [addLog]);
 
@@ -37,7 +53,6 @@ function App(): JSX.Element {
     onDisconnect: useCallback(() => console.log('[App] WebSocket disconnected'), []),
   });
 
-  // SSE 作为备选通道（浏览器原生支持，无需额外依赖）
   useEventSource({
     onLog: handleNewLog,
     onConnect: useCallback(() => console.log('[App] SSE connected'), []),
@@ -45,20 +60,6 @@ function App(): JSX.Element {
   });
 
   const selectedLog = logs.find(log => log.id === selectedLogId);
-
-  // 切换代理状态
-  const handleToggleProxy = async () => {
-    try {
-      if (proxyStatus.enabled) {
-        await disable();
-      } else {
-        await enable();
-      }
-    } catch (err) {
-      console.error('Failed to toggle proxy:', err);
-      alert(err instanceof Error ? err.message : '操作失败');
-    }
-  };
 
   const settingsValue: import('./types').SettingsContextValue = {
     preferences: {
@@ -70,11 +71,13 @@ function App(): JSX.Element {
       showFullTools: false,
     },
     updatePreferences: (updates: Partial<typeof settingsValue.preferences>) => {
-      if (updates.activeTab) setActiveTab(updates.activeTab);
+      if (updates.activeTab) {
+        setActiveTab(updates.activeTab);
+        updateUrl(selectedLogId, updates.activeTab);
+      }
     },
   };
 
-  // 导出日志处理
   const handleExportLogs = async () => {
     try {
       const result = await exportLogs('jsonl', false);
@@ -83,87 +86,73 @@ function App(): JSX.Element {
       }
     } catch (err) {
       console.error('Failed to export logs:', err);
-      alert('导出失败: ' + (err instanceof Error ? err.message : '未知错误'));
     }
   };
 
   return (
     <SettingsContext.Provider value={settingsValue}>
-      <div className="app-container">
-        {/* 控制栏 */}
-        <div className="control-bar">
-          <div className="control-bar-left">
-            <h1 className="app-title">AgentProxy</h1>
-            <span className="app-subtitle">AI Agent 代理服务器</span>
+      <div className="flex flex-col w-screen h-screen bg-bg-deep text-text-primary">
+        {/* 顶栏 */}
+        <div className="flex items-center h-[51px] px-5 bg-bg-panel border-b border-border-subtle shrink-0">
+          {/* 左：标题 */}
+          <div className="flex items-center gap-3">
+            <h1 className="text-[19px] font-[510] tracking-[-0.24px] text-text-primary">
+              AgentProxy
+            </h1>
+            <span className="text-[15px] text-text-quaternary">AI Agent 代理</span>
           </div>
 
-          <div className="control-bar-center">
-            <div className="proxy-status">
-              <span className="status-label">代理状态:</span>
-              <span className={`status-indicator ${proxyStatus.enabled ? 'enabled' : 'disabled'}`}>
-                {proxyStatus.enabled ? '● 已启用' : '○ 未启用'}
-              </span>
-              {proxyStatus.running && (
-                <span className="port-info">
-                  (代理端口: {proxyStatus.proxyPort})
-                </span>
-              )}
+          {/* 中：状态 */}
+          <div className="flex-1 flex items-center justify-center gap-3">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-bg-hover border border-border-subtle">
+              <span className="text-[15px] text-success font-[510]">● 运行中</span>
+              <span className="text-[14px] text-text-quaternary">:{proxyStatus.proxyPort}</span>
             </div>
           </div>
 
-          <div className="control-bar-right">
+          {/* 右：操作 */}
+          <div className="flex items-center gap-2">
             <button
-              className={`proxy-toggle-button ${proxyStatus.enabled ? 'enabled' : 'disabled'}`}
-              onClick={handleToggleProxy}
-              disabled={statusLoading}
-            >
-              {statusLoading ? '...' : proxyStatus.enabled ? '禁用代理' : '启用代理'}
-            </button>
-            <button
-              className="refresh-button"
+              className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
               onClick={loadLogs}
               disabled={logsLoading}
-              title="刷新日志"
+              title="刷新"
             >
-              {logsLoading ? '...' : '🔄'}
+              <ArrowPathIcon className="w-[18px] h-[18px]" />
             </button>
             <button
-              className="export-button"
+              className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
               onClick={handleExportLogs}
-              title="导出日志"
+              title="导出"
             >
-              📤
+              <ArrowUpTrayIcon className="w-[18px] h-[18px]" />
             </button>
             <button
-              className="settings-button"
+              className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
               onClick={() => setSettingsOpen(true)}
-              title="代理配置"
+              title="配置"
             >
-              ⚙️
+              <Cog6ToothIcon className="w-[18px] h-[18px]" />
             </button>
           </div>
         </div>
 
-        {/* 主内容区 */}
-        <div className="main-split">
+        {/* 主区域 */}
+        <div className="flex flex-1 overflow-hidden">
           <LogListPanel
             logs={logs}
             selectedId={selectedLogId}
-            onSelectLog={setSelectedLogId}
+            onSelectLog={handleSelectLog}
             loading={logsLoading}
           />
           <DetailPanel
             log={selectedLog || null}
             activeTab={activeTab}
-            onTabChange={setActiveTab}
+            onTabChange={handleTabChange}
           />
         </div>
 
-        {/* 设置弹窗 */}
-        <SettingsModal
-          open={settingsOpen}
-          onClose={() => setSettingsOpen(false)}
-        />
+        <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
       </div>
     </SettingsContext.Provider>
   );
