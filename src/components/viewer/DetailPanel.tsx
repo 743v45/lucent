@@ -275,12 +275,14 @@ function JsonBlock({
 
   return (
     <div
-      className={`text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary overflow-auto json-view-enhanced ${
-        collapsed ? 'max-h-[60px]' : 'h-full'
-      }`}
+      className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary overflow-auto json-view-enhanced"
       style={{ backgroundColor: '#08090a' }}
     >
-      <JsonView data={jsonData} shouldExpandNode={(level) => level < 2} {...darkStyles} />
+      <JsonView
+        data={jsonData}
+        shouldExpandNode={(level) => collapsed ? level < 2 : true}
+        {...darkStyles}
+      />
     </div>
   );
 }
