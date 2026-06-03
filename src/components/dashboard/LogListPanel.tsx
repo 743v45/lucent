@@ -8,6 +8,7 @@ interface LogListPanelProps {
   selectedId: string | null;
   onSelectLog: (id: string) => void;
   loading: boolean;
+  width: number;
 }
 
 /** 截断模型名，保留关键信息 */
@@ -26,6 +27,7 @@ export function LogListPanel({
   selectedId,
   onSelectLog,
   loading,
+  width,
 }: LogListPanelProps): JSX.Element {
   const getAgentTypeTag = (agentType: AgentType): JSX.Element => {
     if (agentType === 'main') {
@@ -57,7 +59,10 @@ export function LogListPanel({
   };
 
   return (
-    <div className="w-[300px] h-full flex flex-col border-r border-border-subtle bg-bg-panel">
+    <div
+      className="h-full flex flex-col border-r border-border-subtle bg-bg-panel shrink-0"
+      style={{ width }}
+    >
       {/* Header */}
       <div className="px-4 py-3 border-b border-border-subtle flex items-baseline gap-2">
         <Text className="text-text-primary text-[15px] font-[510]">

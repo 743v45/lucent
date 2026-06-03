@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { LogListPanel } from './components/dashboard/LogListPanel';
 import { DetailPanel } from './components/viewer/DetailPanel';
 import { SettingsContext } from './contexts/SettingsContext';
@@ -19,6 +19,8 @@ function App(): JSX.Element {
     (params.get('tab') as TabType) || 'request'
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [sidebarWidth, setSidebarWidth] = useState(300);
+  const isDragging = useRef(false);
 
   // 同步状态到 URL
   const updateUrl = useCallback((logId: string | null, tab: TabType) => {
@@ -89,6 +91,35 @@ function App(): JSX.Element {
     }
   };
 
+  // 拖拽分割栏处理
+  const handleMouseDown = useCallback(() => {
+    isDragging.current = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
+  const handleMouseMove = useCallback((e: MouseEvent) => {
+    if (!isDragging.current) return;
+    const newWidth = Math.max(200, Math.min(500, e.clientX));
+    setSidebarWidth(newWidth);
+  }, []);
+
+  const handleMouseUp = useCallback(() => {
+    isDragging.current = false;
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  }, []);
+
+  // 绑定全局鼠标事件
+  useEffect(() => {
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [handleMouseMove, handleMouseUp]);
+
   return (
     <SettingsContext.Provider value={settingsValue}>
       <div className="flex flex-col w-screen h-screen bg-bg-deep text-text-primary">
@@ -144,6 +175,12 @@ function App(): JSX.Element {
             selectedId={selectedLogId}
             onSelectLog={handleSelectLog}
             loading={logsLoading}
+            width={sidebarWidth}
+          />
+          {/* 拖拽分割栏 */}
+          <div
+            className="w-1 bg-border-subtle hover:bg-brand-accent cursor-col-resize transition-colors shrink-0"
+            onMouseDown={handleMouseDown}
           />
           <DetailPanel
             log={selectedLog || null}
