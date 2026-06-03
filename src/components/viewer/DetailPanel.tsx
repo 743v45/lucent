@@ -160,6 +160,20 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
           >
             {log.request.method}
           </span>
+          {log.response && (
+            <>
+              <span
+                className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
+                  log.response.status >= 400 ? 'text-error' : 'text-success'
+                }`}
+              >
+                HTTP {log.response.status}
+              </span>
+              <span className="text-text-quaternary text-sm">
+                {log.response.statusText}
+              </span>
+            </>
+          )}
         </div>
         <div className="text-sm text-text-tertiary truncate" title={log.request.url}>
           {log.request.url}
@@ -326,23 +340,10 @@ interface ResponseTabProps {
 
 function ResponseTab({ log, bodyViewMode, onToggleViewMode, onCopy }: ResponseTabProps): JSX.Element {
   const response = log.response;
-  const isError = response.status >= 400;
 
   return (
     <div className="flex flex-col h-full bg-bg-deep">
       <div className="p-4">
-        {/* 状态信息 */}
-        <div className="mb-4 flex items-center gap-2">
-          <span
-            className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
-              isError ? 'text-error' : 'text-success'
-            }`}
-          >
-            HTTP {response.status}
-          </span>
-          <span className="text-text-quaternary text-sm">{response.statusText}</span>
-        </div>
-
         <CollapsibleSection title="Headers">
           <HeadersDisplay headers={response.headers} />
         </CollapsibleSection>
