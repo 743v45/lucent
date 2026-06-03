@@ -30,25 +30,25 @@ export function LogListPanel({
   loading,
   width,
 }: LogListPanelProps): JSX.Element {
-  // MainAgent: 金色 #FACC15, SubAgent: 淡橙色 #FB923C
+  // MainAgent: 金色加灰 #C9A227, SubAgent: 橙色加灰 #B87A4A
   const getAgentTypeTag = (agentType: AgentType): { tag: JSX.Element; color: string } => {
     if (agentType === 'main') {
       return {
         tag: (
-          <span className="px-2 py-0.5 rounded text-sm font-[510] bg-[#FACC15]/20 text-[#FACC15]">
+          <span className="px-2 py-0.5 rounded text-sm font-[510] bg-[#C9A227]/20 text-[#C9A227]">
             MainAgent
           </span>
         ),
-        color: 'text-[#FACC15]',
+        color: 'text-[#C9A227]',
       };
     }
     return {
       tag: (
-        <span className="px-2 py-0.5 rounded text-sm font-[510] bg-[#FB923C]/20 text-[#FB923C]">
+        <span className="px-2 py-0.5 rounded text-sm font-[510] bg-[#B87A4A]/20 text-[#B87A4A]">
           SubAgent
         </span>
       ),
-      color: 'text-[#FB923C]',
+      color: 'text-[#B87A4A]',
     };
   };
 
