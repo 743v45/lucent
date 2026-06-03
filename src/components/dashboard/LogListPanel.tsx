@@ -30,19 +30,26 @@ export function LogListPanel({
   loading,
   width,
 }: LogListPanelProps): JSX.Element {
-  const getAgentTypeTag = (agentType: AgentType): JSX.Element => {
+  // MainAgent: 金色 #FACC15, SubAgent: 淡橙色 #FB923C
+  const getAgentTypeTag = (agentType: AgentType): { tag: JSX.Element; color: string } => {
     if (agentType === 'main') {
-      return (
-        <span className="px-2 py-0.5 rounded text-sm font-[510] bg-brand-accent/20 text-brand-accent">
-          MainAgent
-        </span>
-      );
+      return {
+        tag: (
+          <span className="px-2 py-0.5 rounded text-sm font-[510] bg-[#FACC15]/20 text-[#FACC15]">
+            MainAgent
+          </span>
+        ),
+        color: 'text-[#FACC15]',
+      };
     }
-    return (
-      <span className="px-2 py-0.5 rounded text-sm font-[510] bg-purple-500/20 text-purple-400">
-        SubAgent
-      </span>
-    );
+    return {
+      tag: (
+        <span className="px-2 py-0.5 rounded text-sm font-[510] bg-[#FB923C]/20 text-[#FB923C]">
+          SubAgent
+        </span>
+      ),
+      color: 'text-[#FB923C]',
+    };
   };
 
   const formatDuration = (ms: number): string => {
@@ -144,6 +151,7 @@ export function LogListPanel({
         <div className="flex-1 overflow-y-auto">
           {logs.map((log) => {
             const isSelected = selectedId === log.id;
+            const { tag: agentTag, color: agentColor } = getAgentTypeTag(log.agentType);
             return (
               <div
                 key={log.id}
@@ -159,9 +167,9 @@ export function LogListPanel({
               >
                 {/* 行1：Agent类型 tag + 模型名 + 时间 */}
                 <div className="flex items-center gap-2 text-sm leading-[1.3]">
-                  {getAgentTypeTag(log.agentType)}
+                  {agentTag}
                   <span
-                    className="text-text-primary truncate flex-1 min-w-0 font-[510]"
+                    className={`truncate flex-1 min-w-0 font-[510] ${agentColor}`}
                     title={log.metadata.model}
                   >
                     {shortenModel(log.metadata.model)}
@@ -182,10 +190,8 @@ export function LogListPanel({
                   </span>
                   {log.response && (
                     <span
-                      className={`px-2 py-0.5 rounded text-sm font-[510] shrink-0 ${
-                        log.response.status < 400
-                          ? 'bg-success/20 text-success'
-                          : 'bg-error/20 text-error'
+                      className={`text-sm font-[510] shrink-0 ${
+                        log.response.status < 400 ? 'text-success' : 'text-error'
                       }`}
                     >
                       {log.response.status}
