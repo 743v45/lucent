@@ -683,7 +683,7 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
     <div className="p-4">
       <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-3">
         <div className="space-y-3 text-lg">
-          <MetaRow label="Agent 类型" value={log.agentType === 'main' ? '主 Agent' : '辅 Agent'} />
+          <MetaRow label="Agent 类型" value={log.agentType === 'main' ? 'MainAgent' : 'SubAgent'} />
           {log.subAgentType && <MetaRow label="子类型" value={log.subAgentType} />}
           <MetaRow label="模型" value={log.metadata.model || 'Unknown'} />
           <MetaRow label="提供商" value={log.metadata.provider || 'Unknown'} />
