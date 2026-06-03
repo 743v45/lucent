@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from 'react';
 import { Empty, Spin, Typography } from 'antd';
 import type { LogEntry, AgentType } from '../../types';
 
@@ -49,13 +50,68 @@ export function LogListPanel({
     return `${(ms / 1000).toFixed(1)}s`;
   };
 
-  const formatDate = (timestamp: string): string => {
+  const formatTime = (timestamp: string): string => {
     const date = new Date(timestamp);
-    return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${date.toLocaleTimeString('zh-CN', {
+    return date.toLocaleTimeString('zh-CN', {
       hour: '2-digit',
       minute: '2-digit',
       second: '2-digit',
-    })}`;
+    });
+  };
+
+  const formatFullDate = (timestamp: string): string => {
+    const date = new Date(timestamp);
+    return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${formatTime(timestamp)}`;
+  };
+
+  // 截断 URL，只显示路径部分
+  const shortenUrl = (url: string): string => {
+    try {
+      const u = new URL(url);
+      // 只显示路径，去掉域名
+      return u.pathname + (u.search ? u.search.slice(0, 20) : '');
+    } catch {
+      return url.slice(0, 30);
+    }
+  };
+
+  // 时间 hover 显示日期的组件
+  const TimeWithTooltip = ({ timestamp }: { timestamp: string }) => {
+    const [showDate, setShowDate] = useState(false);
+    const timeoutRef = useRef<number | null>(null);
+
+    const handleMouseEnter = () => {
+      timeoutRef.current = window.setTimeout(() => {
+        setShowDate(true);
+      }, 1000);
+    };
+
+    const handleMouseLeave = () => {
+      if (timeoutRef.current) {
+        window.clearTimeout(timeoutRef.current);
+        timeoutRef.current = null;
+      }
+      setShowDate(false);
+    };
+
+    useEffect(() => {
+      return () => {
+        if (timeoutRef.current) {
+          window.clearTimeout(timeoutRef.current);
+        }
+      };
+    }, []);
+
+    return (
+      <span
+        className="shrink-0 text-text-tertiary text-sm cursor-default"
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        title={formatFullDate(timestamp)}
+      >
+        {showDate ? formatFullDate(timestamp) : formatTime(timestamp)}
+      </span>
+    );
   };
 
   return (
@@ -64,11 +120,11 @@ export function LogListPanel({
       style={{ width }}
     >
       {/* Header */}
-      <div className="px-4 py-3 border-b border-border-subtle flex items-baseline gap-2">
+      <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
         <Text className="text-text-primary text-[15px] font-[510]">
           通信记录
         </Text>
-        <Text className="text-text-tertiary text-sm">
+        <Text className="text-text-quaternary text-sm">
           {logs.length} 条
         </Text>
       </div>
@@ -101,7 +157,7 @@ export function LogListPanel({
                   }
                 `}
               >
-                {/* 行1：Agent类型 + 模型名 + SubAgent类型 */}
+                {/* 行1：Agent类型 tag + 模型名 + 时间 */}
                 <div className="flex items-center gap-2 text-sm leading-[1.3]">
                   {getAgentTypeTag(log.agentType)}
                   <span
@@ -110,19 +166,18 @@ export function LogListPanel({
                   >
                     {shortenModel(log.metadata.model)}
                   </span>
-                  {log.subAgentType && (
-                    <span className="px-2 py-0.5 rounded text-sm font-[510] bg-bg-surface text-text-tertiary">
-                      {log.subAgentType}
-                    </span>
-                  )}
+                  <TimeWithTooltip timestamp={log.timestamp} />
                 </div>
 
-                {/* 行2：时间 + 耗时 + 状态码 */}
+                {/* 行2：请求地址 + 耗时 + 状态码 */}
                 <div className="flex items-center gap-2 text-[13px] leading-[1.3]">
-                  <span className="shrink-0 w-[150px] text-text-tertiary">
-                    {formatDate(log.timestamp)}
+                  <span
+                    className="text-text-quaternary truncate flex-1 min-w-0"
+                    title={log.request.url}
+                  >
+                    {shortenUrl(log.request.url)}
                   </span>
-                  <span className="shrink-0 w-[50px] text-text-tertiary">
+                  <span className="shrink-0 text-text-tertiary w-[50px] text-right">
                     {log.duration > 0 ? formatDuration(log.duration) : '-'}
                   </span>
                   {log.response && (
