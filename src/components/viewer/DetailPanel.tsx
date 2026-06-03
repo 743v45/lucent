@@ -1,7 +1,6 @@
 import { useState, useCallback } from 'react';
 import type { LogEntry, TabType } from '../../types';
 import { JsonView, darkStyles } from 'react-json-view-lite';
-import { useAutoScrollToBottom } from '../../hooks/useAutoScrollToBottom';
 import 'react-json-view-lite/dist/index.css';
 
 // ==================== Chevron Icon ====================
@@ -145,7 +144,7 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         </div>
 
         {/* Tab Content */}
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 min-h-0">
           {renderTabContent()}
         </div>
       </div>
@@ -158,20 +157,16 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
 function CollapsibleSection({
   title,
   defaultExpanded = false,
-  onExpandChange,
   children,
 }: {
   title: string;
   defaultExpanded?: boolean;
-  onExpandChange?: (expanded: boolean) => void;
   children: React.ReactNode;
 }) {
   const [expanded, setExpanded] = useState(defaultExpanded);
 
   const handleToggle = () => {
-    const newState = !expanded;
-    setExpanded(newState);
-    onExpandChange?.(newState);
+    setExpanded(!expanded);
   };
 
   return (
@@ -213,21 +208,16 @@ function HeadersDisplay({ headers }: { headers: Record<string, string> | undefin
 function JsonBlock({
   data,
   viewMode = 'json',
-  scrollRef,
 }: {
   data: unknown;
   viewMode?: 'json' | 'text';
-  scrollRef?: React.RefObject<HTMLDivElement>;
 }) {
   const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
 
   // Text 模式：显示原始文本
   if (viewMode === 'text') {
     return (
-      <pre
-        ref={scrollRef}
-        className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-lg overflow-auto max-h-96 font-mono text-text-secondary whitespace-pre-wrap break-words"
-      >
+      <pre className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-lg overflow-auto font-mono text-text-secondary whitespace-pre-wrap break-words">
         {text}
       </pre>
     );
@@ -236,10 +226,7 @@ function JsonBlock({
   // JSON 模式：使用带折叠功能的 JsonView
   const jsonData = typeof data === 'string' ? data : data;
   return (
-    <div
-      ref={scrollRef}
-      className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-lg overflow-auto max-h-96 font-mono text-text-secondary"
-    >
+    <div className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-lg overflow-auto font-mono text-text-secondary">
       <JsonView data={jsonData} shouldExpandNode={(level) => level < 2} {...darkStyles} />
     </div>
   );
@@ -255,16 +242,14 @@ interface RequestTabProps {
 }
 
 function RequestTab({ log, bodyViewMode, onToggleViewMode, onCopy }: RequestTabProps): JSX.Element {
-  const { scrollRef, scrollToBottom } = useAutoScrollToBottom();
-
   return (
-    <div className="p-4">
-      <CollapsibleSection title="Headers" onExpandChange={scrollToBottom}>
+    <div className="p-4 flex flex-col h-full">
+      <CollapsibleSection title="Headers">
         <HeadersDisplay headers={log.request.headers} />
       </CollapsibleSection>
 
       {/* Body */}
-      <div>
+      <div className="flex-1 min-h-0 flex flex-col">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
@@ -282,7 +267,9 @@ function RequestTab({ log, bodyViewMode, onToggleViewMode, onCopy }: RequestTabP
             </button>
           </div>
         </div>
-        <JsonBlock data={log.request.body} viewMode={bodyViewMode} scrollRef={scrollRef} />
+        <div className="flex-1 min-h-0">
+          <JsonBlock data={log.request.body} viewMode={bodyViewMode} />
+        </div>
       </div>
     </div>
   );
@@ -298,12 +285,11 @@ interface ResponseTabProps {
 }
 
 function ResponseTab({ log, bodyViewMode, onToggleViewMode, onCopy }: ResponseTabProps): JSX.Element {
-  const { scrollRef, scrollToBottom } = useAutoScrollToBottom();
   const response = log.response;
   const isError = response.status >= 400;
 
   return (
-    <div className="p-4">
+    <div className="p-4 flex flex-col h-full">
       {/* 状态信息 */}
       <div className="mb-4 flex items-center gap-2">
         <span
@@ -316,12 +302,12 @@ function ResponseTab({ log, bodyViewMode, onToggleViewMode, onCopy }: ResponseTa
         <span className="text-text-quaternary text-sm">{response.statusText}</span>
       </div>
 
-      <CollapsibleSection title="Headers" onExpandChange={scrollToBottom}>
+      <CollapsibleSection title="Headers">
         <HeadersDisplay headers={response.headers} />
       </CollapsibleSection>
 
       {/* Body */}
-      <div>
+      <div className="flex-1 min-h-0 flex flex-col">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
@@ -339,7 +325,9 @@ function ResponseTab({ log, bodyViewMode, onToggleViewMode, onCopy }: ResponseTa
             </button>
           </div>
         </div>
-        <JsonBlock data={response.body} viewMode={bodyViewMode} scrollRef={scrollRef} />
+        <div className="flex-1 min-h-0">
+          <JsonBlock data={response.body} viewMode={bodyViewMode} />
+        </div>
       </div>
     </div>
   );
@@ -735,7 +723,7 @@ function MetaRow({
 }) {
   return (
     <div className="flex justify-between items-center">
-      <span className="text-text-quaternary">{label}</span>
+      <span className="text-text-secondary">{label}</span>
       <span
         className={`text-text-primary ${mono ? 'font-mono text-sm' : ''} ${valueClassName}`}
       >
