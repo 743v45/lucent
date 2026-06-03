@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import type { LogEntry, TabType } from '../../types';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import 'react-json-view-lite/dist/index.css';
@@ -19,6 +19,50 @@ function ChevronIcon({ expanded }: { expanded: boolean }) {
         clipRule="evenodd"
       />
     </svg>
+  );
+}
+
+// ==================== Copy Button ====================
+
+function CopyButton({ onCopy }: { onCopy: () => void }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleClick = () => {
+    onCopy();
+    setCopied(true);
+  };
+
+  useEffect(() => {
+    if (copied) {
+      const timer = setTimeout(() => setCopied(false), 1500);
+      return () => clearTimeout(timer);
+    }
+  }, [copied]);
+
+  return (
+    <button
+      onClick={handleClick}
+      className={`px-3 py-0.5 text-[13px] font-[510] rounded-md transition-colors ${
+        copied
+          ? 'text-success bg-success/20'
+          : 'text-text-quaternary hover:text-text-secondary bg-bg-active'
+      }`}
+    >
+      {copied ? '已复制' : '复制'}
+    </button>
+  );
+}
+
+// ==================== Toggle Button ====================
+
+function ToggleButton({ mode, onToggle }: { mode: 'json' | 'text'; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      className="px-3 py-0.5 text-[13px] font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
+    >
+      {mode === 'json' ? 'Text' : 'JSON'}
+    </button>
   );
 }
 
@@ -259,18 +303,8 @@ function RequestTab({ log, bodyViewMode, onToggleViewMode, onCopy }: RequestTabP
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
-            <button
-              onClick={onToggleViewMode}
-              className="px-3 py-0.5 text-sm font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
-            >
-              {bodyViewMode === 'json' ? 'Text' : 'JSON'}
-            </button>
-            <button
-              onClick={() => onCopy(log.request.body)}
-              className="px-3 py-0.5 text-sm font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
-            >
-              复制
-            </button>
+            <ToggleButton mode={bodyViewMode} onToggle={onToggleViewMode} />
+            <CopyButton onCopy={() => onCopy(log.request.body)} />
           </div>
         </div>
         <div className="flex-1 min-h-0">
@@ -319,18 +353,8 @@ function ResponseTab({ log, bodyViewMode, onToggleViewMode, onCopy }: ResponseTa
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
-            <button
-              onClick={onToggleViewMode}
-              className="px-3 py-0.5 text-sm font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
-            >
-              {bodyViewMode === 'json' ? 'Text' : 'JSON'}
-            </button>
-            <button
-              onClick={() => onCopy(response.body)}
-              className="px-3 py-0.5 text-sm font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
-            >
-              复制
-            </button>
+            <ToggleButton mode={bodyViewMode} onToggle={onToggleViewMode} />
+            <CopyButton onCopy={() => onCopy(response.body)} />
           </div>
         </div>
         <div className="flex-1 min-h-0">
