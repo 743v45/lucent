@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react';
-import { Modal, Form, Input, Button, Space, message, Divider } from 'antd';
+import { Modal, Form, Input, Button, Space, message, Divider, Select, Tooltip } from 'antd';
 import {
   PlusOutlined,
   SaveOutlined,
   CheckCircleOutlined,
   CopyOutlined,
-  ThunderboltOutlined,
   EditOutlined,
   DeleteOutlined,
+  ThunderboltOutlined,
 } from '@ant-design/icons';
+import { ProviderIcon } from '../common/ProviderIcon';
 import {
   getProxyConfig,
   getProfileFull,
@@ -19,7 +20,7 @@ import {
   deleteProfile,
   testConnection,
 } from '../../utils/api';
-import type { ProxyConfig } from '../../types';
+import type { ProxyConfig, ProviderType } from '../../types';
 
 interface SettingsModalProps {
   open: boolean;
@@ -62,6 +63,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       form.setFieldsValue({
         upstreamBaseUrl: profile.upstreamBaseUrl,
         apiKey: profile.apiKey,
+        provider: profile.provider,
       });
       setTestResult(null);
     } catch {
@@ -92,6 +94,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       await updateProfile(selected, {
         upstreamBaseUrl: values.upstreamBaseUrl,
         apiKey: values.apiKey,
+        provider: values.provider,
       });
       message.success('保存成功');
       await loadConfig();
@@ -134,9 +137,10 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         name,
         upstreamBaseUrl: 'https://api.anthropic.com',
         apiKey: '',
+        provider: 'anthropic',
       });
-      await loadConfig();
-      setSelected(name);
+      setSelected(name);  // 先设置选中新创建的
+      await loadConfig();  // 再加载配置，这样 selected 会在 profiles 中
       message.success(`已创建 ${name}`);
     } catch {
       message.error('创建失败');
@@ -233,6 +237,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                 <span className={`flex-1 truncate ${p.name === selected ? 'font-[510] text-text-primary' : 'text-text-secondary'}`}>
                   {p.name}
                 </span>
+                <Tooltip title={p.provider === 'openai' ? 'OpenAI' : 'Anthropic'}>
+                  <ProviderIcon type={p.provider || 'anthropic'} size={18} />
+                </Tooltip>
               </div>
             ))}
           </div>
@@ -296,21 +303,34 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
           <Form form={form} layout="vertical">
             <Form.Item
+              label="代理类型"
+              name="provider"
+              className="mb-4"
+            >
+              <Select
+                options={[
+                  { label: 'Anthropic (Claude)', value: 'anthropic' },
+                  { label: 'OpenAI (GPT)', value: 'openai' },
+                ]}
+              />
+            </Form.Item>
+
+            <Form.Item
               label="上游地址"
               name="upstreamBaseUrl"
               rules={[{ required: true, message: '请输入上游地址' }]}
+              className="mb-4"
             >
               <Input placeholder="https://api.anthropic.com" />
             </Form.Item>
 
-            <Form.Item label="API Key" name="apiKey">
+            <Form.Item label="API Key" name="apiKey" className="mb-4">
               <Input.Password
                 placeholder="sk-ant-...（留空使用 Claude 配置的 key）"
-                className="!bg-bg-input !text-text-primary !border-border-standard"
               />
             </Form.Item>
 
-            <Form.Item>
+            <Form.Item className="mb-2">
               <Space>
                 <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
                   保存
