@@ -71,14 +71,14 @@ export function LogListPanel({
     return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${formatTime(timestamp)}`;
   };
 
-  // 截断 URL，只显示路径部分
+  // 截断 URL，去掉协议，显示完整地址
   const shortenUrl = (url: string): string => {
     try {
       const u = new URL(url);
-      // 只显示路径，去掉域名
-      return u.pathname + (u.search ? u.search.slice(0, 20) : '');
+      // 去掉协议，显示域名+路径
+      return u.host + u.pathname + (u.search ? u.search.slice(0, 20) : '');
     } catch {
-      return url.slice(0, 30);
+      return url.replace(/^https?:\/\//, '').slice(0, 40);
     }
   };
 
