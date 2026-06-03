@@ -14,7 +14,7 @@ export interface LogEntry {
   tokenUsage?: TokenUsage;
   metadata: Metadata;
   kvCache?: KVCacheInfo;
-  context?: unknown;
+  context?: ContextData;
   error?: string;
 }
 
@@ -89,7 +89,14 @@ export interface Metadata {
 }
 
 export interface KVCacheInfo {
-  hitRate?: string;
+  hitRate?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
+  totalCachedTokens?: number;
+  system?: string[];
+  messages?: string[];
+  tools?: string[];
+  // 旧字段兼容
   readBytes?: number;
   writeBytes?: number;
   content?: string;
@@ -116,7 +123,7 @@ export interface AppState {
 
 export type TabType = 'request' | 'response' | 'kvcache' | 'context' | 'meta';
 
-export type Theme = 'light' | 'dark';
+export type Theme = 'light';
 
 // ==================== 过滤选项 ====================
 export interface FilterOptions {
@@ -141,4 +148,83 @@ export interface SettingsContextValue {
   updatePreferences: (updates: Partial<Preferences>) => void;
   claudeSettings?: Record<string, unknown>;
   updateClaudeSettings?: (settings: Record<string, unknown>) => void;
+}
+
+// ==================== Context 数据 ====================
+export interface ContextData {
+  messages?: ContextMessage[];
+  summary?: ContextSummary;
+  systemPrompt?: string;
+  tools?: Tool[];
+  contextWindow?: ContextWindowInfo;
+}
+
+export interface ContextMessage {
+  role: string;
+  content: string | ContentBlock[];
+  timestamp: string;
+  tool_use_id?: string;
+  name?: string;
+  id?: string;
+}
+
+export interface ContextSummary {
+  totalMessages: number;
+  userMessages: number;
+  assistantMessages: number;
+  toolMessages: number;
+  systemPromptLength: number;
+  toolsCount: number;
+  duration: number;
+}
+
+export interface ContextWindowInfo {
+  totalTokens: number;
+  contextSize: number;
+  usedPercentage: number;
+  remainingPercentage: number;
+}
+
+// ==================== 代理配置 ====================
+
+export interface ProxyProfile {
+  name: string;
+  upstreamBaseUrl: string;
+  apiKey: string;
+  proxyPort: number;
+}
+
+// API 返回的脱敏 profile
+export interface SafeProxyProfile {
+  name: string;
+  upstreamBaseUrl: string;
+  proxyPort: number;
+  apiKeySet: boolean;
+  apiKeyPreview: string;
+}
+
+export interface ProxyConfig {
+  activeProfile: string;
+  profiles: SafeProxyProfile[];
+}
+
+// 编辑时返回的完整 profile
+export interface ProfileFull {
+  name: string;
+  upstreamBaseUrl: string;
+  apiKey: string;
+  proxyPort: number;
+}
+
+export interface CreateProfileData {
+  name: string;
+  upstreamBaseUrl: string;
+  apiKey: string;
+  proxyPort: number;
+}
+
+export interface UpdateProfileData {
+  upstreamBaseUrl?: string;
+  apiKey?: string;
+  proxyPort?: number;
 }

@@ -5,12 +5,17 @@ node_modules/
 dist/
 build/
 out/
+server/server/
+server/src/
 
 # Logs
 *.log
 npm-debug.log*
+logs/
 
-# OS files
+# Temp/test files
+test-react.mjs
+test.html
 .DS_Store
 Thumbs.db
 

@@ -1,5 +1,4 @@
-import React from 'react';
-import { List, Empty, Spin, Tag, Typography, Space } from 'antd';
+import { List, Empty, Spin, Tag, Typography } from 'antd';
 import {
   CheckCircleOutlined,
   LoadingOutlined,
@@ -16,6 +15,17 @@ interface LogListPanelProps {
   onSelectLog: (id: string) => void;
   loading: boolean;
 }
+
+/** 截断模型名，保留关键信息 */
+const shortenModel = (model: string): string => {
+  if (!model || model === 'unknown') return 'unknown';
+  // claude-3-5-sonnet-20241022 → claude-3.5-sonnet
+  return model
+    .replace(/-\d{8}$/, '')           // 去掉末尾日期 20241022
+    .replace(/^claude-(\d)-(\d)-/, 'claude-$1.$2-') // claude-3-5 → claude-3.5
+    .replace(/^gpt-4-(\d+)/, 'gpt-4$1')             // gpt-4-0125 → gpt-40125
+    .replace(/^gpt-3\.5-turbo.*$/, 'gpt-3.5-turbo');
+};
 
 export function LogListPanel({
   logs,
@@ -35,18 +45,9 @@ export function LogListPanel({
 
   const getAgentTypeTag = (agentType: AgentType): JSX.Element => {
     if (agentType === 'main') {
-      return <Tag color="blue">Main</Tag>;
+      return <Tag color="blue" className="log-tag">M</Tag>;
     }
-    return <Tag color="default">Sub</Tag>;
-  };
-
-  const getProviderTag = (provider: string): JSX.Element | null => {
-    const colors: Record<string, string> = {
-      openai: 'green',
-      claude: 'blue',
-    };
-    const color = colors[provider] || 'default';
-    return <Tag color={color}>{provider}</Tag>;
+    return <Tag color="default" className="log-tag">S</Tag>;
   };
 
   const formatDuration = (ms: number): string => {
@@ -66,12 +67,8 @@ export function LogListPanel({
   return (
     <div className="log-list-panel">
       <div className="panel-header">
-        <Space direction="vertical" size="small" style={{ width: '100%' }}>
-          <Text strong>通信记录</Text>
-          <Text type="secondary" style={{ fontSize: 12 }}>
-            共 {logs.length} 条
-          </Text>
-        </Space>
+        <Text strong>通信记录</Text>
+        <Text type="secondary" className="panel-count">{logs.length} 条</Text>
       </div>
 
       {loading ? (
@@ -96,32 +93,34 @@ export function LogListPanel({
               onClick={() => onSelectLog(log.id)}
             >
               <div className="log-item-content">
-                <div className="log-item-top">
-                  <Space size="small">
-                    {getLogIcon(log)}
-                    <Text strong>{log.metadata.model || 'Unknown'}</Text>
+                {/* 第一行：状态 + 时间 + 耗时 + tags */}
+                <div className="log-row-primary">
+                  {getLogIcon(log)}
+                  <span className="log-time">{formatTime(log.timestamp)}</span>
+                  {log.duration > 0 && (
+                    <span className="log-duration">{formatDuration(log.duration)}</span>
+                  )}
+                  <span className="log-tags">
                     {getAgentTypeTag(log.agentType)}
                     {log.subAgentType && (
-                      <Tag color="purple" style={{ fontSize: 10 }}>
-                        {log.subAgentType}
-                      </Tag>
+                      <Tag color="purple" className="log-tag">{log.subAgentType}</Tag>
                     )}
-                    {getProviderTag(log.metadata.provider)}
-                  </Space>
+                  </span>
                 </div>
-                <div className="log-item-bottom">
-                  <Text type="secondary" style={{ fontSize: 12 }}>
-                    {formatTime(log.timestamp)}
-                  </Text>
-                  {log.duration > 0 && (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      · {formatDuration(log.duration)}
-                    </Text>
+                {/* 第二行：模型名 + 状态码 */}
+                <div className="log-row-secondary">
+                  <span className="log-model" title={log.metadata.model}>
+                    {shortenModel(log.metadata.model)}
+                  </span>
+                  {log.response && (
+                    <span className={`log-status ${log.response.status < 400 ? 'ok' : 'err'}`}>
+                      {log.response.status}
+                    </span>
                   )}
                   {log.tokenUsage && (
-                    <Text type="secondary" style={{ fontSize: 12 }}>
-                      · {log.tokenUsage.input_tokens + log.tokenUsage.output_tokens} tokens
-                    </Text>
+                    <span className="log-tokens">
+                      {log.tokenUsage.input_tokens + log.tokenUsage.output_tokens}t
+                    </span>
                   )}
                 </div>
               </div>

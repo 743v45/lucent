@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AgentProxy - SSE 示例</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #333;
+      padding: 20px;
+    }
+    h1 { font-size: 20px; margin-bottom: 8px; }
+    .subtitle { color: #999; font-size: 13px; margin-bottom: 20px; }
+
+    /* 连接状态 */
+    .status-bar {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 16px; background: #fff; border-radius: 8px;
+      margin-bottom: 16px; border: 1px solid #e0e0e0;
+    }
+    .status-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #d9d9d9; flex-shrink: 0;
+    }
+    .status-dot.connected { background: #52c41a; }
+    .status-dot.connecting { background: #faad14; animation: pulse 1s infinite; }
+    .status-dot.disconnected { background: #ff4d4f; }
+    @keyframes pulse { 50% { opacity: 0.4; } }
+    .status-text { font-size: 13px; }
+    .status-text .label { color: #999; }
+    .btn {
+      padding: 6px 16px; border: 1px solid #d9d9d9; border-radius: 6px;
+      background: #fff; cursor: pointer; font-size: 13px; margin-left: auto;
+    }
+    .btn:hover { border-color: #1890ff; color: #1890ff; }
+    .btn.danger { border-color: #ff4d4f; color: #ff4d4f; }
+    .btn.danger:hover { background: #fff1f0; }
+
+    /* 事件列表 */
+    .event-list {
+      background: #fff; border-radius: 8px; border: 1px solid #e0e0e0;
+      overflow: hidden;
+    }
+    .event-header {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 16px; border-bottom: 1px solid #e0e0e0;
+    }
+    .event-header h2 { font-size: 14px; }
+    .event-count { font-size: 12px; color: #999; }
+    .events {
+      max-height: 500px; overflow-y: auto; padding: 8px 0;
+    }
+    .event-item {
+      padding: 8px 16px; border-bottom: 1px solid #f0f0f0;
+      font-size: 12px; font-family: 'SF Mono', Menlo, monospace;
+    }
+    .event-item:hover { background: #fafafa; }
+    .event-item .time { color: #999; margin-right: 8px; }
+    .event-item .type { color: #1890ff; font-weight: 500; }
+    .event-item .body { color: #333; margin-top: 4px; white-space: pre-wrap; word-break: break-all; }
+    .empty { text-align: center; padding: 40px; color: #999; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <h1>AgentProxy SSE 示例</h1>
+  <p class="subtitle">使用浏览器原生 EventSource 接收实时日志推送</p>
+
+  <!-- 连接状态 -->
+  <div class="status-bar">
+    <div class="status-dot" id="dot"></div>
+    <div class="status-text">
+      <span class="label">状态：</span>
+      <span id="status">未连接</span>
+    </div>
+    <button class="btn" id="connectBtn" onclick="connect()">连接</button>
+    <button class="btn danger" id="disconnectBtn" onclick="disconnect()" disabled>断开</button>
+  </div>
+
+  <!-- 事件列表 -->
+  <div class="event-list">
+    <div class="event-header">
+      <h2>收到的事件</h2>
+      <span class="event-count" id="count">0 条</span>
+    </div>
+    <div class="events" id="events">
+      <div class="empty">点击"连接"开始接收实时日志</div>
+    </div>
+  </div>
+
+  <script>
+    let es = null;
+    let eventCount = 0;
+
+    function setStatus(state, text) {
+      const dot = document.getElementById('dot');
+      const status = document.getElementById('status');
+      const connectBtn = document.getElementById('connectBtn');
+      const disconnectBtn = document.getElementById('disconnectBtn');
+
+      dot.className = 'status-dot ' + state;
+      status.textContent = text;
+      connectBtn.disabled = state === 'connected' || state === 'connecting';
+      disconnectBtn.disabled = state === 'disconnected';
+    }
+
+    function addEvent(type, data) {
+      eventCount++;
+      const eventsEl = document.getElementById('events');
+
+      // 清除空状态提示
+      if (eventCount === 1) {
+        eventsEl.innerHTML = '';
+      }
+
+      const item = document.createElement('div');
+      item.className = 'event-item';
+
+      const time = new Date().toLocaleTimeString('zh-CN');
+      let bodyStr = '';
+      try {
+        bodyStr = JSON.stringify(typeof data === 'string' ? JSON.parse(data) : data, null, 2);
+      } catch {
+        bodyStr = String(data);
+      }
+
+      item.innerHTML = `
+        <span class="time">${time}</span>
+        <span class="type">[${type}]</span>
+        <div class="body">${bodyStr}</div>
+      `;
+
+      eventsEl.insertBefore(item, eventsEl.firstChild);
+      document.getElementById('count').textContent = eventCount + ' 条';
+    }
+
+    function connect() {
+      if (es) es.close();
+
+      setStatus('connecting', '连接中...');
+      eventCount = 0;
+
+      es = new EventSource('/api/logs/stream');
+
+      // 监听 connected 事件
+      es.addEventListener('connected', (e) => {
+        setStatus('connected', '已连接');
+        addEvent('connected', e.data);
+      });
+
+      // 监听 log 事件
+      es.addEventListener('log', (e) => {
+        addEvent('log', e.data);
+      });
+
+      // 连接错误
+      es.onerror = () => {
+        if (es.readyState === EventSource.CLOSED) {
+          setStatus('disconnected', '连接已关闭');
+        } else {
+          setStatus('connecting', '重连中...');
+        }
+      };
+    }
+
+    function disconnect() {
+      if (es) {
+        es.close();
+        es = null;
+      }
+      setStatus('disconnected', '已断开');
+    }
+
+    // 页面关闭时断开
+    window.addEventListener('beforeunload', disconnect);
+  </script>
+</body>
+</html>

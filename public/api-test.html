@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>API 测试</title>
+</head>
+<body>
+    <h1>AgentProxy API 测试</h1>
+    <div id="result">加载中...</div>
+    <script>
+        fetch('/api/logs')
+            .then(r => r.json())
+            .then(data => {
+                const log = data.logs[0];
+                document.getElementById('result').innerHTML = `
+                    <h2>✅ API 连接成功！</h2>
+                    <p>日志总数: ${data.logs.length}</p>
+                    <h3>第一条日志:</h3>
+                    <pre>${JSON.stringify({
+                        id: log.id,
+                        url: log.request.url,
+                        model: log.metadata.model,
+                        has_response: log.response !== null
+                    }, null, 2)}</pre>
+                `;
+            })
+            .catch(err => {
+                document.getElementById('result').innerHTML = `<h2 style="color:red">❌ 错误: ${err.message}</h2>`;
+            });
+    </script>
+</body>
+</html>

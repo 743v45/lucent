@@ -5,18 +5,44 @@ import zhCN from 'antd/locale/zh_CN';
 import App from './App';
 import './index.css';
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <ConfigProvider
-      locale={zhCN}
-      theme={{
-        algorithm: theme.defaultAlgorithm,
-        token: {
-          colorPrimary: '#1890ff',
-        },
-      }}
-    >
-      <App />
-    </ConfigProvider>
-  </React.StrictMode>
-);
+console.log('[main.tsx] Starting...');
+
+const rootElement = document.getElementById('root');
+
+if (!rootElement) {
+  console.error('[main.tsx] Root element not found!');
+  document.body.innerHTML = '<h1 style="color:red;text-align:center;padding:50px;">错误：找不到 root 元素</h1>';
+} else {
+  console.log('[main.tsx] Root element found');
+
+  try {
+    const root = ReactDOM.createRoot(rootElement);
+    console.log('[main.tsx] Root created');
+
+    root.render(
+      <React.StrictMode>
+        <ConfigProvider
+          locale={zhCN}
+          theme={{
+            algorithm: theme.defaultAlgorithm,
+            token: {
+              colorPrimary: '#1890ff',
+            },
+          }}
+        >
+          <App />
+        </ConfigProvider>
+      </React.StrictMode>
+    );
+
+    console.log('[main.tsx] Render complete');
+  } catch (error) {
+    console.error('[main.tsx] Render failed:', error);
+    rootElement.innerHTML = `
+      <div style="padding:50px;text-align:center;">
+        <h1 style="color:red;">应用加载失败</h1>
+        <pre style="background:#f5f5f5;padding:20px;border-radius:8px;overflow:auto;">${error}</pre>
+      </div>
+    `;
+  }
+}
