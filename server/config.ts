@@ -15,12 +15,12 @@ export interface ProxyProfile {
   name: string;
   upstreamBaseUrl: string;
   apiKey: string;
-  proxyPort: number;
 }
 
 export interface ProxyConfig {
+  proxyPort: number; // 全局代理端口
   profiles: ProxyProfile[];
-  activeProfile: string; // profile 的 name
+  activeProfile: string; // UI 记忆上次选择的 profile
 }
 
 // 旧格式（用于数据迁移）
@@ -35,13 +35,13 @@ interface LegacyConfig {
 const CONFIG_PATH = join(homedir(), '.agentproxy', 'config.json');
 
 const DEFAULT_CONFIG: ProxyConfig = {
+  proxyPort: 7048,
   activeProfile: 'Claude 官方',
   profiles: [
     {
       name: 'Claude 官方',
       upstreamBaseUrl: 'https://api.anthropic.com',
       apiKey: '',
-      proxyPort: 7048,
     },
   ],
 };
@@ -76,19 +76,50 @@ function isLegacyConfig(data: unknown): data is LegacyConfig {
  */
 function migrateLegacyConfig(legacy: LegacyConfig): ProxyConfig {
   return {
+    proxyPort: legacy.proxyPort || 7048,
     activeProfile: '默认',
     profiles: [
       {
         name: '默认',
         upstreamBaseUrl: legacy.upstreamBaseUrl,
         apiKey: legacy.apiKey ?? '',
-        proxyPort: legacy.proxyPort || 7048,
       },
     ],
   };
 }
 
 // ==================== 核心 API ====================
+
+/**
+ * 检测是否为旧的新格式配置（profiles 中包含 proxyPort）
+ */
+function isOldNewFormat(data: unknown): data is { profiles: Array<{ proxyPort?: number }>; activeProfile?: string } {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'profiles' in data &&
+    Array.isArray(data.profiles) &&
+    data.profiles.length > 0 &&
+    'proxyPort' in data.profiles[0]
+  );
+}
+
+/**
+ * 迁移旧的新格式配置（profiles 中有 proxyPort）到新格式
+ */
+function migrateOldNewFormat(old: { profiles: Array<{ proxyPort?: number }>; activeProfile?: string }): ProxyConfig {
+  // 从第一个 profile 中提取端口，或使用默认值
+  const proxyPort = old.profiles[0]?.proxyPort || 7048;
+
+  // 移除每个 profile 中的 proxyPort
+  const profiles = old.profiles.map(({ proxyPort: _, ...rest }) => rest);
+
+  return {
+    proxyPort,
+    activeProfile: old.activeProfile || profiles[0]?.name || '默认',
+    profiles,
+  };
+}
 
 /**
  * 加载配置（从磁盘读取）
@@ -108,7 +139,16 @@ export function loadConfig(): ProxyConfig {
         return cachedConfig;
       }
 
-      if ('profiles' in parsed && 'activeProfile' in parsed) {
+      if (isOldNewFormat(parsed)) {
+        const migrated = migrateOldNewFormat(parsed);
+        // 自动保存迁移后的新格式
+        saveConfig(migrated);
+        console.log('[Config] 旧的新格式配置已迁移（proxyPort 移到全局）');
+        cachedConfig = migrated;
+        return cachedConfig;
+      }
+
+      if ('profiles' in parsed && 'proxyPort' in parsed) {
         cachedConfig = parsed as ProxyConfig;
         return cachedConfig;
       }
@@ -239,11 +279,11 @@ export function deleteProfile(name: string): ProxyConfig | null {
 export function getSafeConfig() {
   const config = getConfig();
   return {
+    proxyPort: config.proxyPort,
     activeProfile: config.activeProfile,
     profiles: config.profiles.map(p => ({
       name: p.name,
       upstreamBaseUrl: p.upstreamBaseUrl,
-      proxyPort: p.proxyPort,
       apiKeySet: p.apiKey.length > 0,
       apiKeyPreview: p.apiKey
         ? p.apiKey.slice(0, 8) + '****' + p.apiKey.slice(-4)

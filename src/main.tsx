@@ -26,7 +26,7 @@ if (!rootElement) {
           theme={{
             algorithm: theme.defaultAlgorithm,
             token: {
-              colorPrimary: '#1890ff',
+              colorPrimary: '#5e6ad2',
             },
           }}
         >

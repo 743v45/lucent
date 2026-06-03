@@ -1,8 +1,46 @@
-/* 全局重置 */
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
+@import "tailwindcss";
+
+@theme {
+  /* Linear 背景 */
+  --color-bg-deep: #08090a;
+  --color-bg-panel: #0f1011;
+  --color-bg-surface: #191a1b;
+  --color-bg-elevated: #28282c;
+  --color-bg-hover: rgba(255, 255, 255, 0.03);
+  --color-bg-active: rgba(255, 255, 255, 0.04);
+  --color-bg-input: rgba(255, 255, 255, 0.02);
+
+  /* Linear 文字 */
+  --color-text-primary: #f7f8f8;
+  --color-text-secondary: #d0d6e0;
+  --color-text-tertiary: #8a8f98;
+  --color-text-quaternary: #62666d;
+
+  /* Linear 品牌 */
+  --color-brand: #5e6ad2;
+  --color-brand-accent: #7170ff;
+  --color-brand-hover: #828fff;
+
+  /* 状态色 */
+  --color-success: #27a644;
+  --color-success-emerald: #10b981;
+  --color-success-hover: #389e0d;
+  --color-error: #f87171;
+  --color-warning: #fbbf24;
+  --color-tool: #fb923c;
+
+  /* 边框 */
+  --color-border-primary: #23252a;
+  --color-border-secondary: #34343a;
+  --color-border-subtle: rgba(255, 255, 255, 0.05);
+  --color-border-standard: rgba(255, 255, 255, 0.08);
+}
+
+@layer base {
+  /* 全局重置 - 必须放在 base 层，否则优先级太高会覆盖 Tailwind 工具类 */
+  *, ::before, ::after {
+    box-sizing: border-box;
+  }
 }
 
 html, body, #root {
@@ -12,17 +50,18 @@ html, body, #root {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue',
-    Arial, 'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji',
-    'Segoe UI Symbol', 'Noto Color Emoji';
+  font-family: 'Inter Variable', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-feature-settings: "cv01", "ss03";
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background: var(--color-bg-deep);
+  color: var(--color-text-primary);
 }
 
 /* 滚动条 */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 6px;
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
@@ -30,15 +69,181 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: rgba(0, 0, 0, 0.3);
+  background: rgba(255, 255, 255, 0.15);
 }
 
-/* Ant Design 覆盖 */
+/* ==================== Ant Design 暗色覆盖 ==================== */
+
 .ant-layout {
   background: transparent;
+}
+
+/* Modal */
+.ant-modal .ant-modal-content {
+  background: var(--color-bg-panel);
+  border: 1px solid var(--color-border-standard);
+}
+
+.ant-modal .ant-modal-header {
+  background: transparent;
+  border-bottom: 1px solid var(--color-border-subtle);
+}
+
+.ant-modal .ant-modal-title {
+  color: var(--color-text-primary);
+}
+
+.ant-modal .ant-modal-close {
+  color: var(--color-text-tertiary);
+}
+
+.ant-modal .ant-modal-close:hover {
+  color: var(--color-text-primary);
+}
+
+/* Form */
+.ant-form-item-label > label {
+  color: var(--color-text-secondary) !important;
+  font-size: 13px;
+  font-weight: 510;
+  letter-spacing: -0.13px;
+}
+
+/* Input */
+.ant-input,
+.ant-input-password .ant-input,
+.ant-input-number {
+  background: var(--color-bg-input) !important;
+  border: 1px solid var(--color-border-standard) !important;
+  color: var(--color-text-primary) !important;
+  border-radius: 6px;
+}
+
+/* InputNumber 内部 input */
+.ant-input-number input {
+  background: transparent !important;
+  color: var(--color-text-primary) !important;
+}
+
+/* 隐藏 InputNumber 的 +/- 按钮 */
+.ant-input-number-handler-wrap {
+  display: none !important;
+}
+
+.ant-input-number:hover .ant-input-number-handler-wrap,
+.ant-input-number:focus .ant-input-number-handler-wrap,
+.ant-input-number-focused .ant-input-number-handler-wrap {
+  display: none !important;
+}
+
+.ant-input-number {
+  padding-right: 0 !important;
+}
+
+/* Input.Password 图标按钮 */
+.ant-input-password-icon,
+.ant-input-password-icon:hover {
+  color: var(--color-text-tertiary) !important;
+}
+
+.ant-input::placeholder {
+  color: var(--color-text-quaternary) !important;
+}
+
+.ant-input:focus,
+.ant-input-focused {
+  border-color: var(--color-brand-accent) !important;
+  box-shadow: 0 0 0 2px rgba(113, 112, 255, 0.15) !important;
+}
+
+/* Tabs */
+.ant-tabs .ant-tabs-tab {
+  color: var(--color-text-tertiary);
+}
+
+.ant-tabs .ant-tabs-tab-active .ant-tabs-tab-btn {
+  color: var(--color-text-primary);
+}
+
+/* Button - Primary */
+.ant-btn-primary {
+  background: var(--color-brand) !important;
+  border-color: var(--color-brand) !important;
+  border-radius: 6px;
+}
+
+.ant-btn-primary:hover {
+  background: var(--color-brand-hover) !important;
+  border-color: var(--color-brand-hover) !important;
+}
+
+/* Button - Default (Ghost) */
+.ant-btn-default {
+  background: var(--color-bg-input) !important;
+  border: 1px solid var(--color-border-primary) !important;
+  color: var(--color-text-secondary) !important;
+  border-radius: 6px;
+}
+
+.ant-btn-default:hover {
+  background: var(--color-bg-active) !important;
+  color: var(--color-text-primary) !important;
+}
+
+/* Button - Dashed */
+.ant-btn-dashed {
+  background: transparent !important;
+  border: 1px dashed var(--color-border-secondary) !important;
+  color: var(--color-text-tertiary) !important;
+  border-radius: 6px;
+}
+
+.ant-btn-dashed:hover {
+  border-color: var(--color-brand-accent) !important;
+  color: var(--color-brand-accent) !important;
+}
+
+/* Button - Text */
+.ant-btn-text {
+  color: var(--color-text-tertiary);
+}
+
+.ant-btn-text:hover {
+  background: var(--color-bg-hover) !important;
+  color: var(--color-text-primary) !important;
+}
+
+/* Divider */
+.ant-divider {
+  border-color: var(--color-border-subtle);
+}
+
+/* Spin */
+.ant-spin-text {
+  color: var(--color-text-tertiary);
+}
+
+/* Empty */
+.ant-empty-description {
+  color: var(--color-text-tertiary) !important;
+}
+
+/* Tag */
+.ant-tag {
+  background: transparent !important;
+  border-color: var(--color-border-primary) !important;
+  color: var(--color-text-secondary) !important;
+}
+
+/* Message toast */
+.ant-message-notice-content {
+  background: var(--color-bg-surface) !important;
+  border: 1px solid var(--color-border-standard);
+  border-radius: 8px;
+  color: var(--color-text-primary);
 }

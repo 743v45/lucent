@@ -647,7 +647,6 @@ app.get('/api/config/:name/full', (req, res) => {
       name: profile.name,
       upstreamBaseUrl: profile.upstreamBaseUrl,
       apiKey: profile.apiKey,
-      proxyPort: profile.proxyPort,
     });
   } catch (error) {
     console.error('[AgentProxy] 获取配置详情失败:', error);
@@ -740,20 +739,42 @@ app.post('/api/config/test', async (req, res) => {
     }
 
     const startTime = Date.now();
-    const testUrl = `${url.replace(/\/+$/, '')}/v1/messages`;
 
-    const response = await fetch(testUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'anthropic-version': '2023-06-01',
-        'x-api-key': apiKey || '',
-      },
-      body: JSON.stringify({
+    // 检测 API 类型：OpenAI 格式还是 Anthropic 格式
+    const isOpenAI = url.includes('/v1/chat/completions') || url.includes('openai');
+    const baseUrl = url.replace(/\/v1\/(chat\/completions|completions|messages).*$/, '');
+
+    let testUrl: string;
+    let testBody: any;
+    let headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    };
+
+    if (isOpenAI) {
+      // OpenAI 格式
+      testUrl = `${baseUrl}/v1/chat/completions`;
+      headers['authorization'] = `Bearer ${apiKey || ''}`;
+      testBody = {
+        model: 'gpt-4o-mini',
+        max_tokens: 1,
+        messages: [{ role: 'user', content: 'hi' }],
+      };
+    } else {
+      // Anthropic 格式
+      testUrl = `${baseUrl}/v1/messages`;
+      headers['anthropic-version'] = '2023-06-01';
+      headers['x-api-key'] = apiKey || '';
+      testBody = {
         model: 'claude-sonnet-4-6',
         max_tokens: 1,
         messages: [{ role: 'user', content: 'hi' }],
-      }),
+      };
+    }
+
+    const response = await fetch(testUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(testBody),
     });
 
     const duration = Date.now() - startTime;
@@ -872,18 +893,18 @@ export async function startServer(): Promise<void> {
 
   // 加载配置
   Config.loadConfig();
-  const activeConfig = Config.getActiveProfile();
+  const config = Config.getConfig();
 
   currentLogFile = getLogFilePath();
 
   // 清理过期日志
   cleanupOldLogs();
 
-  // 启动代理服务器
-  const proxyPort = activeConfig?.proxyPort ?? CONFIG.proxyPort;
+  // 启动代理服务器（从全局配置读取端口）
+  const proxyPort = config.proxyPort ?? CONFIG.proxyPort;
   try {
     proxyServer = await startProxyServer({ port: proxyPort });
-    console.log(`[AgentProxy] 代理服务器已启动`);
+    console.log(`[AgentProxy] 代理服务器已启动，端口: ${proxyPort}`);
   } catch (error) {
     console.error('[AgentProxy] 代理服务器启动失败:', error);
     throw error;
@@ -902,8 +923,9 @@ export async function startServer(): Promise<void> {
 
   return new Promise<void>((resolve, reject) => {
     server.listen(CONFIG.webPort, '127.0.0.1', () => {
+      const config = Config.getConfig();
       console.log(`[AgentProxy] Web UI: http://127.0.0.1:${CONFIG.webPort}`);
-      console.log(`[AgentProxy] 代理端口: ${CONFIG.proxyPort}`);
+      console.log(`[AgentProxy] 代理端口: ${config.proxyPort ?? CONFIG.proxyPort}`);
       console.log(`[AgentProxy] 日志文件: ${currentLogFile}`);
       console.log(`[AgentProxy] 日志目录: ${CONFIG.logDir}`);
 
@@ -923,11 +945,12 @@ export async function startServer(): Promise<void> {
 }
 
 export function getServerStatus(): ProxyStatus {
+  const config = Config.getConfig();
   return {
     enabled: proxyEnabled,
     running: true,
     webPort: CONFIG.webPort,
-    proxyPort: CONFIG.proxyPort,
+    proxyPort: config.proxyPort ?? CONFIG.proxyPort,
     logFile: currentLogFile,
     connectedClients: logClients.size,
   };

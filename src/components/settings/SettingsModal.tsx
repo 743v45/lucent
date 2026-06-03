@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Modal, Form, Input, InputNumber, Button, Space, message, Divider, Typography } from 'antd';
+import { Modal, Form, Input, Button, Space, message, Divider } from 'antd';
 import {
   PlusOutlined,
   SaveOutlined,
@@ -21,8 +21,6 @@ import {
 } from '../../utils/api';
 import type { ProxyConfig } from '../../types';
 
-const { Text } = Typography;
-
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
@@ -38,7 +36,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [nameInput, setNameInput] = useState('');
   const [form] = Form.useForm();
 
-  // 加载配置
   useEffect(() => {
     if (open) loadConfig();
   }, [open]);
@@ -55,7 +52,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  // 选中 profile 时加载表单
   useEffect(() => {
     if (selected) loadProfileForm(selected);
   }, [selected]);
@@ -66,7 +62,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       form.setFieldsValue({
         upstreamBaseUrl: profile.upstreamBaseUrl,
         apiKey: profile.apiKey,
-        proxyPort: profile.proxyPort,
       });
       setTestResult(null);
     } catch {
@@ -74,13 +69,11 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  // 选中（仅编辑，不激活）
   const handleSelect = (name: string) => {
     setSelected(name);
     setEditingName(false);
   };
 
-  // 激活使用
   const handleActivate = async () => {
     try {
       await setActiveProfile(selected);
@@ -91,7 +84,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  // 保存
   const handleSave = async () => {
     try {
       const values = await form.validateFields();
@@ -100,7 +92,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       await updateProfile(selected, {
         upstreamBaseUrl: values.upstreamBaseUrl,
         apiKey: values.apiKey,
-        proxyPort: values.proxyPort,
       });
       message.success('保存成功');
       await loadConfig();
@@ -111,7 +102,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  // 测试
   const handleTest = async () => {
     try {
       const values = await form.getFieldsValue(['upstreamBaseUrl', 'apiKey']);
@@ -131,10 +121,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  // 新增（自动命名）
   const handleCreate = async () => {
     try {
-      // 生成默认名称: default, default 2, default 3 ...
       const existing = config?.profiles.map(p => p.name) ?? [];
       let name = 'default';
       let i = 2;
@@ -146,7 +134,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         name,
         upstreamBaseUrl: 'https://api.anthropic.com',
         apiKey: '',
-        proxyPort: 7048,
       });
       await loadConfig();
       setSelected(name);
@@ -156,7 +143,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  // 改名
   const handleRename = async () => {
     if (!nameInput.trim() || nameInput === selected) {
       setEditingName(false);
@@ -178,7 +164,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  // 删除 profile
   const handleDelete = async () => {
     if ((config?.profiles.length ?? 0) <= 1) {
       message.warning('至少保留一个代理配置');
@@ -199,9 +184,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  // 复制环境变量
   const handleCopyEnv = () => {
-    const port = form.getFieldValue('proxyPort') ?? 7048;
+    const port = config?.proxyPort ?? 7048;
     const envCmd = `export ANTHROPIC_BASE_URL=http://127.0.0.1:${port}`;
     navigator.clipboard.writeText(envCmd).then(() => {
       message.success('已复制到剪贴板');
@@ -215,7 +199,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
   return (
     <Modal
-      title="代理配置"
+      title={<span className="text-text-primary text-[17px] font-[510]">代理配置</span>}
       open={open}
       onCancel={onClose}
       width={780}
@@ -223,45 +207,28 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       destroyOnClose
     >
       {/* 左右结构 */}
-      <div style={{ display: 'flex', gap: 0, minHeight: 400, marginTop: -8 }}>
+      <div className="flex min-h-[420px] -mt-2">
         {/* 左侧：profile 列表 */}
-        <div style={{
-          width: 180,
-          borderRight: '1px solid #f0f0f0',
-          paddingRight: 16,
-          display: 'flex',
-          flexDirection: 'column',
-        }}>
-          <Text strong style={{ marginBottom: 12, fontSize: 13, color: '#999' }}>代理列表</Text>
+        <div className="w-[180px] border-r border-border-subtle pr-4 flex flex-col">
+          <span className="text-[13px] font-[510] text-text-quaternary uppercase tracking-wider mb-3">
+            代理列表
+          </span>
 
-          <div style={{ flex: 1, overflow: 'auto' }}>
+          <div className="flex-1 overflow-auto">
             {profiles.map(p => (
               <div
                 key={p.name}
                 onClick={() => handleSelect(p.name)}
-                style={{
-                  padding: '8px 12px',
-                  marginBottom: 4,
-                  borderRadius: 6,
-                  cursor: 'pointer',
-                  background: p.name === selected ? '#e6f4ff' : 'transparent',
-                  borderLeft: p.name === selected ? '3px solid #1890ff' : '3px solid transparent',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  fontSize: 13,
-                }}
+                className={`flex items-center gap-2 px-3 py-2 mb-1 rounded-md cursor-pointer text-[15px] transition-colors ${
+                  p.name === selected
+                    ? 'bg-bg-elevated border-l-2 border-l-brand-accent'
+                    : 'border-l-2 border-l-transparent hover:bg-bg-surface'
+                }`}
               >
                 {p.name === config?.activeProfile && (
-                  <CheckCircleOutlined style={{ color: '#52c41a', fontSize: 12 }} />
+                  <CheckCircleOutlined className="text-success text-[13px]" />
                 )}
-                <span style={{
-                  flex: 1,
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  whiteSpace: 'nowrap',
-                  fontWeight: p.name === selected ? 500 : 400,
-                }}>
+                <span className={`flex-1 truncate ${p.name === selected ? 'font-[510] text-text-primary' : 'text-text-secondary'}`}>
                   {p.name}
                 </span>
               </div>
@@ -274,16 +241,16 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             onClick={handleCreate}
             block
             size="small"
-            style={{ marginTop: 8 }}
+            className="!mt-2"
           >
             添加代理
           </Button>
         </div>
 
         {/* 右侧：配置编辑 */}
-        <div style={{ flex: 1, paddingLeft: 16 }}>
+        <div className="flex-1 pl-4">
           {/* 标题行：名称 + 使用按钮 */}
-          <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+          <div className="flex items-center mb-4">
             {editingName ? (
               <Input
                 size="small"
@@ -291,21 +258,21 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                 onChange={e => setNameInput(e.target.value)}
                 onPressEnter={handleRename}
                 onBlur={handleRename}
-                style={{ width: 160, marginRight: 8 }}
+                className="!w-[160px] !mr-2"
                 autoFocus
               />
             ) : (
               <span
-                style={{ fontSize: 16, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 4 }}
+                className="text-lg font-[510] text-text-primary cursor-pointer flex items-center gap-1 hover:text-brand-accent transition-colors"
                 onClick={() => { setEditingName(true); setNameInput(selected); }}
                 title="点击重命名"
               >
                 {selected}
-                <EditOutlined style={{ fontSize: 12, color: '#999' }} />
+                <EditOutlined className="text-[13px] text-text-quaternary" />
               </span>
             )}
 
-            <div style={{ flex: 1 }} />
+            <div className="flex-1" />
 
             {!isActive && (
               <Button
@@ -318,10 +285,10 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               </Button>
             )}
             {isActive && (
-              <Text type="secondary" style={{ fontSize: 12 }}>
-                <CheckCircleOutlined style={{ color: '#52c41a', marginRight: 4 }} />
+              <span className="text-sm text-text-tertiary flex items-center gap-1">
+                <CheckCircleOutlined className="text-success" />
                 当前使用中
-              </Text>
+              </span>
             )}
           </div>
 
@@ -335,11 +302,10 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             </Form.Item>
 
             <Form.Item label="API Key" name="apiKey">
-              <Input.Password placeholder="sk-ant-...（留空使用 Claude 配置的 key）" />
-            </Form.Item>
-
-            <Form.Item label="代理端口" name="proxyPort">
-              <InputNumber min={1024} max={65535} style={{ width: '100%' }} />
+              <Input.Password
+                placeholder="sk-ant-...（留空使用 Claude 配置的 key）"
+                className="!bg-bg-input !text-text-primary !border-border-standard"
+              />
             </Form.Item>
 
             <Form.Item>
@@ -354,55 +320,48 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             </Form.Item>
 
             {testResult && (
-              <div style={{
-                padding: '8px 12px',
-                borderRadius: 6,
-                background: testResult.ok ? '#f6ffed' : '#fff2e8',
-                border: `1px solid ${testResult.ok ? '#b7eb8f' : '#ffbb96'}`,
-                fontSize: 13,
-                marginBottom: 16,
-              }}>
+              <div className={`px-3 py-2 rounded-lg text-[15px] mb-4 border ${
+                testResult.ok
+                  ? 'bg-success/10 border-success/20 text-success'
+                  : 'bg-warning/10 border-warning/20 text-warning'
+              }`}>
                 {testResult.ok ? '✅' : '⚠️'} {testResult.message}
                 {testResult.duration > 0 && (
-                  <span style={{ marginLeft: 8, color: '#999' }}>{testResult.duration}ms</span>
+                  <span className="ml-2 text-text-quaternary">{testResult.duration}ms</span>
                 )}
               </div>
             )}
           </Form>
 
-          <Divider style={{ margin: '12px 0' }} />
+          <Divider className="!my-3 !border-border-subtle" />
 
+          {/* 使用方式 */}
           <div>
-            <Text strong style={{ fontSize: 13 }}>使用方式</Text>
-            <div style={{
-              marginTop: 8,
-              padding: '8px 12px',
-              background: '#fafafa',
-              borderRadius: 6,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-            }}>
-              <code style={{ fontSize: 12 }}>
-                export ANTHROPIC_BASE_URL=http://127.0.0.1:{form.getFieldValue('proxyPort') ?? 7048}
+            <span className="text-[17px] font-[510] text-text-secondary">使用方式</span>
+            <div className="mt-2 px-4 py-2 bg-bg-input rounded-lg border border-border-subtle flex items-center justify-between">
+              <code className="text-sm text-text-secondary font-mono">
+                export ANTHROPIC_BASE_URL=http://127.0.0.1:{config?.proxyPort ?? 7048}
               </code>
               <Button
                 type="text"
                 size="small"
                 icon={<CopyOutlined />}
                 onClick={handleCopyEnv}
+                className="!text-text-quaternary hover:!text-text-primary"
               />
             </div>
           </div>
 
-          <Divider style={{ margin: '12px 0' }} />
+          <Divider className="!my-3 !border-border-subtle" />
 
+          {/* 删除 */}
           <Button
             type="text"
             danger
             icon={<DeleteOutlined />}
             onClick={handleDelete}
             size="small"
+            className="!text-error/60 hover:!text-error"
           >
             删除此代理配置
           </Button>

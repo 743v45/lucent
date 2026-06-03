@@ -1,11 +1,10 @@
-import { List, Empty, Spin, Tag, Typography } from 'antd';
+import { Empty, Spin, Typography } from 'antd';
 import {
   CheckCircleOutlined,
   LoadingOutlined,
   CloseCircleOutlined,
 } from '@ant-design/icons';
 import type { LogEntry, AgentType } from '../../types';
-import './LogListPanel.css';
 
 const { Text } = Typography;
 
@@ -35,19 +34,27 @@ export function LogListPanel({
 }: LogListPanelProps): JSX.Element {
   const getLogIcon = (log: LogEntry): JSX.Element => {
     if (log.error) {
-      return <CloseCircleOutlined className="log-icon error" />;
+      return <CloseCircleOutlined className="text-sm text-error" />;
     }
     if (log.duration === 0) {
-      return <LoadingOutlined className="log-icon in-progress" />;
+      return <LoadingOutlined className="text-sm text-warning animate-spin" />;
     }
-    return <CheckCircleOutlined className="log-icon success" />;
+    return <CheckCircleOutlined className="text-sm text-success" />;
   };
 
   const getAgentTypeTag = (agentType: AgentType): JSX.Element => {
     if (agentType === 'main') {
-      return <Tag color="blue" className="log-tag">M</Tag>;
+      return (
+        <span className="px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary text-brand-accent">
+          M
+        </span>
+      );
     }
-    return <Tag color="default" className="log-tag">S</Tag>;
+    return (
+      <span className="px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary text-text-tertiary">
+        S
+      </span>
+    );
   };
 
   const formatDuration = (ms: number): string => {
@@ -65,68 +72,91 @@ export function LogListPanel({
   };
 
   return (
-    <div className="log-list-panel">
-      <div className="panel-header">
-        <Text strong>通信记录</Text>
-        <Text type="secondary" className="panel-count">{logs.length} 条</Text>
+    <div className="w-[300px] h-full flex flex-col border-r border-border-subtle bg-bg-panel">
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-border-subtle flex items-baseline gap-2">
+        <Text className="text-text-primary text-[15px] font-[510]">
+          通信记录
+        </Text>
+        <Text className="text-text-tertiary text-sm">
+          {logs.length} 条
+        </Text>
       </div>
 
       {loading ? (
-        <div className="panel-loading">
+        <div className="flex-1 flex items-center justify-center min-h-[200px]">
           <Spin tip="加载中..." />
         </div>
       ) : logs.length === 0 ? (
-        <div className="panel-empty">
+        <div className="flex-1 flex items-center justify-center min-h-[200px]">
           <Empty
             description="暂无通信记录"
             image={Empty.PRESENTED_IMAGE_SIMPLE}
           />
         </div>
       ) : (
-        <List
-          className="log-list"
-          dataSource={logs}
-          renderItem={(log) => (
-            <List.Item
-              key={log.id}
-              className={`log-item ${selectedId === log.id ? 'selected' : ''}`}
-              onClick={() => onSelectLog(log.id)}
-            >
-              <div className="log-item-content">
-                {/* 第一行：状态 + 时间 + 耗时 + tags */}
-                <div className="log-row-primary">
+        <div className="flex-1 overflow-y-auto">
+          {logs.map((log) => {
+            const isSelected = selectedId === log.id;
+            return (
+              <div
+                key={log.id}
+                onClick={() => onSelectLog(log.id)}
+                className={`
+                  h-[56px] px-3 py-1.5 flex flex-col justify-center gap-1 cursor-pointer
+                  transition-colors duration-150
+                  ${isSelected
+                    ? 'bg-bg-elevated border-l-2 border-l-brand-accent'
+                    : 'hover:bg-bg-surface border-l-2 border-l-transparent'
+                  }
+                `}
+              >
+                {/* 行1：模型名 + 标签 + 状态码 */}
+                <div className="flex items-center gap-2 text-sm leading-[1.3]">
                   {getLogIcon(log)}
-                  <span className="log-time">{formatTime(log.timestamp)}</span>
-                  {log.duration > 0 && (
-                    <span className="log-duration">{formatDuration(log.duration)}</span>
-                  )}
-                  <span className="log-tags">
-                    {getAgentTypeTag(log.agentType)}
-                    {log.subAgentType && (
-                      <Tag color="purple" className="log-tag">{log.subAgentType}</Tag>
-                    )}
-                  </span>
-                </div>
-                {/* 第二行：模型名 + 状态码 */}
-                <div className="log-row-secondary">
-                  <span className="log-model" title={log.metadata.model}>
+                  <span
+                    className="text-text-primary truncate flex-1 min-w-0 font-[510]"
+                    title={log.metadata.model}
+                  >
                     {shortenModel(log.metadata.model)}
                   </span>
+                  {getAgentTypeTag(log.agentType)}
+                  {log.subAgentType && (
+                    <span className="px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary text-text-tertiary">
+                      {log.subAgentType}
+                    </span>
+                  )}
                   {log.response && (
-                    <span className={`log-status ${log.response.status < 400 ? 'ok' : 'err'}`}>
+                    <span
+                      className={`text-xs font-[510] shrink-0 ${
+                        log.response.status < 400 ? 'text-success' : 'text-error'
+                      }`}
+                    >
                       {log.response.status}
                     </span>
                   )}
+                </div>
+
+                {/* 行2：时间 + 耗时 + token */}
+                <div className="flex items-center gap-2 text-[13px] leading-[1.3] text-text-tertiary">
+                  <span className="shrink-0">
+                    {formatTime(log.timestamp)}
+                  </span>
+                  {log.duration > 0 && (
+                    <span className="shrink-0">
+                      {formatDuration(log.duration)}
+                    </span>
+                  )}
                   {log.tokenUsage && (
-                    <span className="log-tokens">
+                    <span className="text-text-quaternary text-xs ml-auto shrink-0">
                       {log.tokenUsage.input_tokens + log.tokenUsage.output_tokens}t
                     </span>
                   )}
                 </div>
               </div>
-            </List.Item>
-          )}
-        />
+            );
+          })}
+        </div>
       )}
     </div>
   );

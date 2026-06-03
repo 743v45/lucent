@@ -191,20 +191,19 @@ export interface ProxyProfile {
   name: string;
   upstreamBaseUrl: string;
   apiKey: string;
-  proxyPort: number;
 }
 
 // API 返回的脱敏 profile
 export interface SafeProxyProfile {
   name: string;
   upstreamBaseUrl: string;
-  proxyPort: number;
   apiKeySet: boolean;
   apiKeyPreview: string;
 }
 
 export interface ProxyConfig {
-  activeProfile: string;
+  proxyPort: number; // 全局代理端口
+  activeProfile?: string; // UI 记忆上次选择的 profile
   profiles: SafeProxyProfile[];
 }
 
@@ -213,18 +212,15 @@ export interface ProfileFull {
   name: string;
   upstreamBaseUrl: string;
   apiKey: string;
-  proxyPort: number;
 }
 
 export interface CreateProfileData {
   name: string;
   upstreamBaseUrl: string;
   apiKey: string;
-  proxyPort: number;
 }
 
 export interface UpdateProfileData {
   upstreamBaseUrl?: string;
   apiKey?: string;
-  proxyPort?: number;
 }
