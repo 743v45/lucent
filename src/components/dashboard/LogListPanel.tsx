@@ -36,7 +36,7 @@ export function LogListPanel({
       );
     }
     return (
-      <span className="px-2 py-0.5 rounded text-sm font-[510] bg-bg-surface text-text-tertiary">
+      <span className="px-2 py-0.5 rounded text-sm font-[510] bg-purple-500/20 text-purple-400">
         SubAgent
       </span>
     );
@@ -113,19 +113,19 @@ export function LogListPanel({
                 </div>
 
                 {/* 行2：时间 + 耗时 + 状态码 */}
-                <div className="flex items-center gap-2 text-[13px] leading-[1.3] text-text-tertiary">
-                  <span className="shrink-0">
+                <div className="flex items-center gap-2 text-[13px] leading-[1.3]">
+                  <span className="shrink-0 w-[150px] text-text-tertiary">
                     {formatDate(log.timestamp)}
                   </span>
-                  {log.duration > 0 && (
-                    <span className="shrink-0">
-                      {formatDuration(log.duration)}
-                    </span>
-                  )}
+                  <span className="shrink-0 w-[50px] text-text-tertiary">
+                    {log.duration > 0 ? formatDuration(log.duration) : '-'}
+                  </span>
                   {log.response && (
                     <span
-                      className={`text-xs font-[510] shrink-0 ${
-                        log.response.status < 400 ? 'text-success' : 'text-error'
+                      className={`px-2 py-0.5 rounded text-sm font-[510] shrink-0 ${
+                        log.response.status < 400
+                          ? 'bg-success/20 text-success'
+                          : 'bg-error/20 text-error'
                       }`}
                     >
                       {log.response.status}
