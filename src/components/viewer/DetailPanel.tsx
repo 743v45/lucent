@@ -271,23 +271,13 @@ function JsonBlock({
   data: unknown;
   collapsed?: boolean;
 }) {
-  const text = typeof data === 'string' ? data : JSON.stringify(data, null, 2);
-
-  if (collapsed) {
-    // 折叠模式：显示单行预览
-    const preview = text.slice(0, 100) + (text.length > 100 ? '...' : '');
-    return (
-      <pre className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary whitespace-nowrap overflow-hidden">
-        {preview}
-      </pre>
-    );
-  }
-
-  // 展开模式：使用 JsonView，每2级折叠一次（level < 2 表示展开0级和1级）
   const jsonData = typeof data === 'string' ? data : data;
+
   return (
     <div
-      className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary overflow-auto json-view-enhanced"
+      className={`text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary overflow-auto json-view-enhanced ${
+        collapsed ? 'max-h-[60px]' : 'h-full'
+      }`}
       style={{ backgroundColor: '#08090a' }}
     >
       <JsonView data={jsonData} shouldExpandNode={(level) => level < 2} {...darkStyles} />
