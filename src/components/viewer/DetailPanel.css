@@ -1,1 +1,94 @@
 /* Styles moved to Tailwind CSS classes in DetailPanel.tsx */
+
+/* ==================== Enhanced JSON View Styles ==================== */
+
+/* 覆盖 react-json-view-lite 的默认样式，增强颜色效果 */
+.json-view-enhanced {
+  /* Key 样式 - 更加醒目的粉红色 */
+  --json-key-color: #f7768e;
+  /* String 样式 - 柔和的绿色 */
+  --json-string-color: #9ece6a;
+  /* Number 样式 - 明亮的黄色 */
+  --json-number-color: #e0af68;
+  /* Boolean 样式 - 紫色 */
+  --json-boolean-color: #bb9af7;
+  /* Null 样式 - 红色 */
+  --json-null-color: #f7768e;
+  /* 标点符号样式 */
+  --json-punctuation-color: rgba(163, 190, 140, 0.8);
+}
+
+/* 确保背景是纯黑色 */
+.json-view-enhanced {
+  background: #08090a !important;
+}
+
+/* 强制覆盖 react-json-view-lite 内部元素的白色背景 */
+.json-view-enhanced ._GzYRV,
+.json-view-enhanced ._2IvMF,
+.json-view-enhanced [class*="_GzYRV"],
+.json-view-enhanced [class*="_2IvMF"] {
+  background: transparent !important;
+}
+
+/* 折叠按钮和箭头颜色 - 黑色背景上需要亮色 */
+.json-view-enhanced ._f10Tu,
+.json-view-enhanced ._1MFti,
+.json-view-enhanced ._1UmXx,
+.json-view-enhanced ._1LId0,
+.json-view-enhanced ._oLqym,
+.json-view-enhanced ._2AXVT {
+  color: var(--json-punctuation-color) !important;
+}
+
+/* 展开提示 "..." 颜色 */
+.json-view-enhanced ._1pNG9,
+.json-view-enhanced ._2KJWg {
+  color: var(--json-punctuation-color) !important;
+}
+
+/* Key 名称样式 - _1MGIk */
+.json-view-enhanced ._1MGIk {
+  color: var(--json-key-color) !important;
+}
+
+/* String 样式 - _vGjyY */
+.json-view-enhanced ._vGjyY {
+  color: var(--json-string-color) !important;
+}
+
+/* Number 样式 - 需要找到实际的类名 */
+.json-view-enhanced [class*="number"] {
+  color: var(--json-number-color) !important;
+}
+
+/* Boolean 样式 - _3zQKs */
+.json-view-enhanced ._3zQKs {
+  color: var(--json-boolean-color) !important;
+}
+
+/* 标点符号样式 - _3uHL6, _3eOF8 */
+.json-view-enhanced ._3uHL6,
+.json-view-enhanced ._3eOF8 {
+  color: var(--json-punctuation-color) !important;
+}
+
+/* 滚动条样式 */
+.json-view-enhanced::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+.json-view-enhanced::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+}
+
+.json-view-enhanced::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 4px;
+}
+
+.json-view-enhanced::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.3);
+}

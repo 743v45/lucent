@@ -2,6 +2,7 @@ import { useState, useCallback } from 'react';
 import type { LogEntry, TabType } from '../../types';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import 'react-json-view-lite/dist/index.css';
+import './DetailPanel.css';
 
 // ==================== Chevron Icon ====================
 
@@ -144,7 +145,7 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         </div>
 
         {/* Tab Content */}
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0 bg-bg-deep">
           {renderTabContent()}
         </div>
       </div>
@@ -217,16 +218,19 @@ function JsonBlock({
   // Text 模式：显示原始文本
   if (viewMode === 'text') {
     return (
-      <pre className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-lg overflow-auto font-mono text-text-secondary whitespace-pre-wrap break-words">
+      <pre className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary whitespace-pre-wrap break-words overflow-auto">
         {text}
       </pre>
     );
   }
 
-  // JSON 模式：使用带折叠功能的 JsonView
+  // JSON 模式：使用 JsonView，每2级折叠一次（level < 2 表示展开0级和1级）
   const jsonData = typeof data === 'string' ? data : data;
   return (
-    <div className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-lg overflow-auto font-mono text-text-secondary">
+    <div
+      className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary overflow-auto json-view-enhanced"
+      style={{ backgroundColor: '#08090a' }}
+    >
       <JsonView data={jsonData} shouldExpandNode={(level) => level < 2} {...darkStyles} />
     </div>
   );
@@ -243,13 +247,15 @@ interface RequestTabProps {
 
 function RequestTab({ log, bodyViewMode, onToggleViewMode, onCopy }: RequestTabProps): JSX.Element {
   return (
-    <div className="p-4 flex flex-col h-full">
-      <CollapsibleSection title="Headers">
-        <HeadersDisplay headers={log.request.headers} />
-      </CollapsibleSection>
+    <div className="flex flex-col h-full bg-bg-deep">
+      <div className="p-4">
+        <CollapsibleSection title="Headers">
+          <HeadersDisplay headers={log.request.headers} />
+        </CollapsibleSection>
+      </div>
 
       {/* Body */}
-      <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col bg-bg-deep px-4 pb-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
@@ -289,25 +295,27 @@ function ResponseTab({ log, bodyViewMode, onToggleViewMode, onCopy }: ResponseTa
   const isError = response.status >= 400;
 
   return (
-    <div className="p-4 flex flex-col h-full">
-      {/* 状态信息 */}
-      <div className="mb-4 flex items-center gap-2">
-        <span
-          className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
-            isError ? 'text-error' : 'text-success'
-          }`}
-        >
-          HTTP {response.status}
-        </span>
-        <span className="text-text-quaternary text-sm">{response.statusText}</span>
+    <div className="flex flex-col h-full bg-bg-deep">
+      <div className="p-4">
+        {/* 状态信息 */}
+        <div className="mb-4 flex items-center gap-2">
+          <span
+            className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
+              isError ? 'text-error' : 'text-success'
+            }`}
+          >
+            HTTP {response.status}
+          </span>
+          <span className="text-text-quaternary text-sm">{response.statusText}</span>
+        </div>
+
+        <CollapsibleSection title="Headers">
+          <HeadersDisplay headers={response.headers} />
+        </CollapsibleSection>
       </div>
 
-      <CollapsibleSection title="Headers">
-        <HeadersDisplay headers={response.headers} />
-      </CollapsibleSection>
-
       {/* Body */}
-      <div className="flex-1 min-h-0 flex flex-col">
+      <div className="flex-1 min-h-0 flex flex-col bg-bg-deep px-4 pb-4">
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
@@ -340,12 +348,6 @@ interface KVCacheTabProps {
 }
 
 function KVCacheTab({ log }: KVCacheTabProps): JSX.Element {
-  const [collapsed, setCollapsed] = useState({
-    tools: false,
-    system: false,
-    messages: false,
-  });
-
   const data = log.kvCache;
   if (!data || (!data.system?.length && !data.messages?.length && !data.tools?.length)) {
     return (
@@ -354,10 +356,6 @@ function KVCacheTab({ log }: KVCacheTabProps): JSX.Element {
       </div>
     );
   }
-
-  const toggleCollapse = (key: keyof typeof collapsed) => {
-    setCollapsed(prev => ({ ...prev, [key]: !prev[key] }));
-  };
 
   const copyAllCache = () => {
     const parts: string[] = [];
@@ -383,6 +381,60 @@ function KVCacheTab({ log }: KVCacheTabProps): JSX.Element {
       : hitRate > 30
         ? 'text-warning'
         : 'text-error';
+
+  // 生成所有缓存条目：工具 -> 系统提示词 -> 消息
+  const allItems: Array<{ type: 'tool' | 'system' | 'message'; text: string; index: number }> = [];
+
+  if (data.tools && data.tools.length > 0) {
+    data.tools.forEach((text, i) => {
+      allItems.push({ type: 'tool', text, index: i });
+    });
+  }
+  if (data.system && data.system.length > 0) {
+    data.system.forEach((text, i) => {
+      allItems.push({ type: 'system', text, index: i });
+    });
+  }
+  if (data.messages && data.messages.length > 0) {
+    data.messages.forEach((text, i) => {
+      allItems.push({ type: 'message', text, index: i });
+    });
+  }
+
+  // 折叠状态：每个条目独立控制
+  const [collapsedMap, setCollapsedMap] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    allItems.forEach(item => {
+      initial[`${item.type}-${item.index}`] = false; // 默认全部展开
+    });
+    return initial;
+  });
+
+  const toggleCollapse = (key: string) => {
+    setCollapsedMap(prev => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const getLabel = (item: { type: 'tool' | 'system' | 'message'; text: string; index: number }) => {
+    switch (item.type) {
+      case 'tool':
+        return '工具';
+      case 'system':
+        return '系统提示词';
+      case 'message':
+        return '消息';
+    }
+  };
+
+  const getLabelColor = (type: 'tool' | 'system' | 'message') => {
+    switch (type) {
+      case 'tool':
+        return 'text-tool';
+      case 'system':
+        return 'text-warning';
+      case 'message':
+        return 'text-brand-accent';
+    }
+  };
 
   return (
     <div className="p-4">
@@ -413,80 +465,33 @@ function KVCacheTab({ log }: KVCacheTabProps): JSX.Element {
         </button>
       </div>
 
-      {/* Tools 区块 */}
-      {data.tools && data.tools.length > 0 && (
-        <div className="mb-3 bg-bg-surface/50 rounded-lg border border-border-subtle">
-          <button
-            onClick={() => toggleCollapse('tools')}
-            className="flex items-center gap-2 w-full text-left px-3 py-2 text-[15px] font-[510] text-text-secondary hover:text-text-primary transition-colors"
-          >
-            <ChevronIcon expanded={!collapsed.tools} />
-            工具定义 ({data.tools.length})
-          </button>
-          {!collapsed.tools && (
-            <div className="px-3 pb-3 space-y-2">
-              {data.tools.map((text, i) => (
-                <pre
-                  key={i}
-                  className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-md overflow-auto max-h-40 font-mono text-text-secondary whitespace-pre-wrap break-words"
-                >
-                  {text}
-                </pre>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+      {/* 每个条目独立框 */}
+      <div className="space-y-3">
+        {allItems.map((item) => {
+          const key = `${item.type}-${item.index}`;
+          const isCollapsed = collapsedMap[key];
 
-      {/* System 区块 */}
-      {data.system && data.system.length > 0 && (
-        <div className="mb-3 bg-bg-surface/50 rounded-lg border border-border-subtle">
-          <button
-            onClick={() => toggleCollapse('system')}
-            className="flex items-center gap-2 w-full text-left px-3 py-2 text-[15px] font-[510] text-text-secondary hover:text-text-primary transition-colors"
-          >
-            <ChevronIcon expanded={!collapsed.system} />
-            系统提示词 ({data.system.length})
-          </button>
-          {!collapsed.system && (
-            <div className="px-3 pb-3 space-y-2">
-              {data.system.map((text, i) => (
-                <pre
-                  key={i}
-                  className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-md overflow-auto max-h-40 font-mono text-text-secondary whitespace-pre-wrap break-words"
-                >
-                  {text}
-                </pre>
-              ))}
+          return (
+            <div key={key} className="bg-bg-surface/50 rounded-lg border border-border-subtle">
+              <button
+                onClick={() => toggleCollapse(key)}
+                className="flex items-center gap-2 w-full text-left px-3 py-2 text-[15px] font-[510] text-text-secondary hover:text-text-primary transition-colors"
+              >
+                <ChevronIcon expanded={!isCollapsed} />
+                <span className={getLabelColor(item.type)}>{getLabel(item)}</span>
+                <span className="text-text-quaternary">#{item.index + 1}</span>
+              </button>
+              {!isCollapsed && (
+                <div className="px-3 pb-3">
+                  <pre className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-md overflow-auto max-h-40 font-mono text-text-secondary whitespace-pre-wrap break-words">
+                    {item.text}
+                  </pre>
+                </div>
+              )}
             </div>
-          )}
-        </div>
-      )}
-
-      {/* Messages 区块 */}
-      {data.messages && data.messages.length > 0 && (
-        <div className="mb-3 bg-bg-surface/50 rounded-lg border border-border-subtle">
-          <button
-            onClick={() => toggleCollapse('messages')}
-            className="flex items-center gap-2 w-full text-left px-3 py-2 text-[15px] font-[510] text-text-secondary hover:text-text-primary transition-colors"
-          >
-            <ChevronIcon expanded={!collapsed.messages} />
-            缓存消息 ({data.messages.length})
-          </button>
-          {!collapsed.messages && (
-            <div className="px-3 pb-3 space-y-2">
-              {data.messages.map((text, i) => (
-                <pre
-                  key={i}
-                  className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-md overflow-auto max-h-40 font-mono text-text-secondary whitespace-pre-wrap break-words"
-                >
-                  {text}
-                </pre>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
+          );
+        })}
+      </div>
     </div>
   );
 }

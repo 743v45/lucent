@@ -226,7 +226,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                 }`}
               >
                 {p.name === config?.activeProfile && (
-                  <CheckCircleOutlined className="text-success text-[13px]" />
+                  <span className="text-white text-[13px] [&_.anticon]:!text-white">
+                    <CheckCircleOutlined />
+                  </span>
                 )}
                 <span className={`flex-1 truncate ${p.name === selected ? 'font-[510] text-text-primary' : 'text-text-secondary'}`}>
                   {p.name}
@@ -286,7 +288,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             )}
             {isActive && (
               <span className="text-sm text-text-tertiary flex items-center gap-1">
-                <CheckCircleOutlined className="text-success" />
+                <CheckCircleOutlined className="text-white" />
                 当前使用中
               </span>
             )}
