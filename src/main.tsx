@@ -3,11 +3,12 @@ import ReactDOM from 'react-dom/client';
 import { ConfigProvider, theme } from 'antd';
 import zhCN from 'antd/locale/zh_CN';
 import App from './App';
+import { ROOT_ELEMENT_ID, THEME_PRIMARY_COLOR } from './constants';
 import './index.css';
 
 console.log('[main.tsx] Starting...');
 
-const rootElement = document.getElementById('root');
+const rootElement = document.getElementById(ROOT_ELEMENT_ID);
 
 if (!rootElement) {
   console.error('[main.tsx] Root element not found!');
@@ -26,7 +27,7 @@ if (!rootElement) {
           theme={{
             algorithm: theme.defaultAlgorithm,
             token: {
-              colorPrimary: '#5e6ad2',
+              colorPrimary: THEME_PRIMARY_COLOR,
             },
           }}
         >

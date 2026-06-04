@@ -6,8 +6,7 @@
  */
 import { useEffect, useRef, useCallback } from 'react';
 import type { LogEntry } from '../types';
-
-const SSE_URL = `/api/logs/stream`;
+import { SSE_ENDPOINT, MAX_RECONNECT_ATTEMPTS, RECONNECT_BASE_DELAY_MS, RECONNECT_MAX_DELAY_MS } from '../constants';
 
 interface EventSourceOptions {
   onLog?: (log: LogEntry) => void;
@@ -25,7 +24,7 @@ export function useEventSource({
   const esRef = useRef<EventSource | null>(null);
   const reconnectTimeoutRef = useRef<number>();
   const reconnectAttemptsRef = useRef(0);
-  const maxReconnectAttempts = 10;
+  const maxReconnectAttempts = MAX_RECONNECT_ATTEMPTS;
 
   // 用 ref 持有最新回调，避免频繁重建 EventSource
   const callbacksRef = useRef({ onLog, onConnect, onDisconnect, onError });
@@ -40,7 +39,7 @@ export function useEventSource({
     }
 
     try {
-      const es = new EventSource(SSE_URL);
+      const es = new EventSource(SSE_ENDPOINT);
       esRef.current = es;
 
       es.addEventListener('connected', () => {
@@ -68,7 +67,7 @@ export function useEventSource({
         // 自动重连
         if (reconnectAttemptsRef.current < maxReconnectAttempts) {
           reconnectAttemptsRef.current++;
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
+          const delay = Math.min(RECONNECT_BASE_DELAY_MS * Math.pow(2, reconnectAttemptsRef.current), RECONNECT_MAX_DELAY_MS);
           console.log(`[SSE] Reconnecting in ${delay}ms (attempt ${reconnectAttemptsRef.current})`);
           reconnectTimeoutRef.current = window.setTimeout(() => connect(), delay);
         }

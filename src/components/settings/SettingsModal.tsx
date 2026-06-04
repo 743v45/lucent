@@ -25,6 +25,7 @@ import {
 } from '../../utils/api';
 import type { ProxyConfig, ApiProviderType, SafeProxyProfile } from '../../types';
 import { API_TYPE_LABELS } from '../../types';
+import { DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URLS, ENV_VAR_NAMES, SETTINGS_MODAL_WIDTH, DEFAULT_PROFILE_NAME } from '../../constants';
 
 interface SettingsModalProps {
   open: boolean;
@@ -151,7 +152,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       if (!group) return;
 
       const existing = group.profiles.map(p => p.name);
-      let name = 'default';
+      let name = DEFAULT_PROFILE_NAME;
       let i = 2;
       while (existing.includes(name)) {
         name = `default ${i}`;
@@ -257,7 +258,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   };
 
   const handleCopyEnv = () => {
-    const port = config?.proxyPort ?? 7048;
+    const port = config?.proxyPort ?? DEFAULT_PROXY_PORT;
     const envVar = getEnvVarName(selectedApiType);
     const envCmd = `export ${envVar}=http://127.0.0.1:${port}`;
     navigator.clipboard.writeText(envCmd).then(() => {
@@ -278,23 +279,11 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   };
 
   const getDefaultBaseUrl = (apiType: ApiProviderType): string => {
-    const defaults: Record<ApiProviderType, string> = {
-      'anthropic-messages': 'https://api.anthropic.com',
-      'openai-chat': 'https://api.openai.com',
-      'openai-responses': 'https://api.openai.com',
-      'gemini-generate': 'https://generativelanguage.googleapis.com',
-    };
-    return defaults[apiType];
+    return DEFAULT_UPSTREAM_URLS[apiType];
   };
 
   const getEnvVarName = (apiType: ApiProviderType): string => {
-    const envVars: Record<ApiProviderType, string> = {
-      'anthropic-messages': 'ANTHROPIC_BASE_URL',
-      'openai-chat': 'OPENAI_BASE_URL',
-      'openai-responses': 'OPENAI_BASE_URL',
-      'gemini-generate': 'GEMINI_BASE_URL',
-    };
-    return envVars[apiType];
+    return ENV_VAR_NAMES[apiType];
   };
 
   const renderProfileItem = (profile: SafeProxyProfile, apiType: ApiProviderType) => {
@@ -339,7 +328,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       title={<span className="text-text-primary text-[17px] font-[510]">代理配置</span>}
       open={open}
       onCancel={onClose}
-      width={780}
+      width={SETTINGS_MODAL_WIDTH}
       footer={null}
       destroyOnClose
     >
@@ -501,7 +490,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             <span className="text-[17px] font-[510] text-text-secondary">使用方式</span>
             <div className="mt-2 px-4 py-2 bg-bg-input rounded-lg border border-border-subtle flex items-center justify-between">
               <code className="text-sm text-text-secondary font-mono">
-                export {getEnvVarName(selectedApiType)}=http://127.0.0.1:{config?.proxyPort ?? 7048}
+                export {getEnvVarName(selectedApiType)}=http://127.0.0.1:{config?.proxyPort ?? DEFAULT_PROXY_PORT}
               </code>
               <Button
                 type="text"

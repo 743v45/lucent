@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Empty, Spin, Typography } from 'antd';
 import type { LogEntry, AgentType } from '../../types';
+import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, HTTP_ERROR_STATUS_THRESHOLD } from '../../constants';
 
 const { Text } = Typography;
 
@@ -53,8 +54,8 @@ export function LogListPanel({
   };
 
   const formatDuration = (ms: number): string => {
-    if (ms < 1000) return `${ms}ms`;
-    return `${(ms / 1000).toFixed(1)}s`;
+    if (ms < MS_TO_S_THRESHOLD) return `${ms}ms`;
+    return `${(ms / MS_TO_S_THRESHOLD).toFixed(1)}s`;
   };
 
   const formatTime = (timestamp: string): string => {
@@ -76,9 +77,9 @@ export function LogListPanel({
     try {
       const u = new URL(url);
       // 去掉协议，显示域名+路径
-      return u.host + u.pathname + (u.search ? u.search.slice(0, 20) : '');
+      return u.host + u.pathname + (u.search ? u.search.slice(0, URL_SEARCH_PREVIEW_LENGTH) : '');
     } catch {
-      return url.replace(/^https?:\/\//, '').slice(0, 40);
+      return url.replace(/^https?:\/\//, '').slice(0, URL_FALLBACK_PREVIEW_LENGTH);
     }
   };
 
@@ -90,7 +91,7 @@ export function LogListPanel({
     const handleMouseEnter = () => {
       timeoutRef.current = window.setTimeout(() => {
         setShowDate(true);
-      }, 1000);
+      }, DATE_HOVER_DELAY_MS);
     };
 
     const handleMouseLeave = () => {
@@ -191,7 +192,7 @@ export function LogListPanel({
                   {log.response && (
                     <span
                       className={`font-[510] shrink-0 ${
-                        log.response.status < 400 ? 'text-success' : 'text-error'
+                        log.response.status < HTTP_ERROR_STATUS_THRESHOLD ? 'text-success' : 'text-error'
                       }`}
                     >
                       {log.response.status}

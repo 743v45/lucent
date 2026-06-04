@@ -5,31 +5,40 @@ import { SettingsContext } from './contexts/SettingsContext';
 import { SettingsModal } from './components/settings/SettingsModal';
 import { useProxyStatus } from './hooks/useProxyStatus';
 import { useLogs } from './hooks/useLogs';
-import { useWebSocket } from './hooks/useWebSocket';
 import { useEventSource } from './hooks/useEventSource';
 import { exportLogs } from './utils/api';
 import { ArrowPathIcon, ArrowUpTrayIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
 import type { LogEntry, TabType } from './types';
+import {
+  URL_PARAM_LOG_ID,
+  URL_PARAM_TAB,
+  STORAGE_KEY_SIDEBAR_WIDTH,
+  SIDEBAR_DEFAULT_WIDTH,
+  SIDEBAR_MIN_WIDTH,
+  SIDEBAR_MAX_WIDTH,
+  DEFAULT_THEME,
+  DEFAULT_ACTIVE_TAB,
+} from './constants';
 
 function App(): JSX.Element {
   // 读取初始 URL 参数
   const params = new URLSearchParams(window.location.search);
-  const [selectedLogId, setSelectedLogId] = useState<string | null>(params.get('log'));
+  const [selectedLogId, setSelectedLogId] = useState<string | null>(params.get(URL_PARAM_LOG_ID));
   const [activeTab, setActiveTab] = useState<TabType>(
-    (params.get('tab') as TabType) || 'request'
+    (params.get(URL_PARAM_TAB) as TabType) || DEFAULT_ACTIVE_TAB
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
-    const saved = localStorage.getItem('logListWidth');
-    return saved ? parseInt(saved, 10) : 300;
+    const saved = localStorage.getItem(STORAGE_KEY_SIDEBAR_WIDTH);
+    return saved ? parseInt(saved, 10) : SIDEBAR_DEFAULT_WIDTH;
   });
   const isDragging = useRef(false);
 
   // 同步状态到 URL
   const updateUrl = useCallback((logId: string | null, tab: TabType) => {
     const p = new URLSearchParams();
-    if (logId) p.set('log', logId);
-    if (tab !== 'request') p.set('tab', tab);
+    if (logId) p.set(URL_PARAM_LOG_ID, logId);
+    if (tab !== DEFAULT_ACTIVE_TAB) p.set(URL_PARAM_TAB, tab);
     const qs = p.toString();
     history.replaceState(null, '', qs ? `?${qs}` : window.location.pathname);
   }, []);
@@ -52,12 +61,6 @@ function App(): JSX.Element {
     addLog(log);
   }, [addLog]);
 
-  useWebSocket({
-    onLog: handleNewLog,
-    onConnect: useCallback(() => console.log('[App] WebSocket connected'), []),
-    onDisconnect: useCallback(() => console.log('[App] WebSocket disconnected'), []),
-  });
-
   useEventSource({
     onLog: handleNewLog,
     onConnect: useCallback(() => console.log('[App] SSE connected'), []),
@@ -68,9 +71,9 @@ function App(): JSX.Element {
 
   const settingsValue: import('./types').SettingsContextValue = {
     preferences: {
-      theme: 'light',
+      theme: DEFAULT_THEME,
       activeTab,
-      sidebarWidth: 300,
+      sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
       autoCollapse: true,
       showThinking: false,
       showFullTools: false,
@@ -103,7 +106,7 @@ function App(): JSX.Element {
 
   const handleMouseMove = useCallback((e: MouseEvent) => {
     if (!isDragging.current) return;
-    const newWidth = Math.max(200, Math.min(500, e.clientX));
+    const newWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, e.clientX));
     setSidebarWidth(newWidth);
   }, []);
 
@@ -112,7 +115,7 @@ function App(): JSX.Element {
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     // 保存宽度到 localStorage
-    localStorage.setItem('logListWidth', String(sidebarWidth));
+    localStorage.setItem(STORAGE_KEY_SIDEBAR_WIDTH, String(sidebarWidth));
   }, [sidebarWidth]);
 
   // 绑定全局鼠标事件

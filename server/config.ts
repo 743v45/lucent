@@ -2,25 +2,45 @@
  * AgentProxy 配置管理模块
  *
  * 配置文件: ~/.agentproxy/config.json
- * 支持多 profile 切换，运行时可修改，内存缓存 + 磁盘持久化
+ * 支持多 API 类型分组，每个 group 多 profile 切换，运行时可修改，内存缓存 + 磁盘持久化
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX } from './constants.js';
 
 // ==================== 类型定义 ====================
 
+/**
+ * API 提供商类型
+ */
+export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses' | 'gemini-generate';
+
+/**
+ * 代理配置 profile
+ */
 export interface ProxyProfile {
+  id: string;            // 简单递增 ID，如 '1', '2', '3'
   name: string;
   upstreamBaseUrl: string;
   apiKey: string;
 }
 
-export interface ProxyConfig {
-  proxyPort: number; // 全局代理端口
+/**
+ * 代理分组（按 API 类型分组）
+ */
+export interface ProxyGroup {
+  apiType: ApiProviderType;
   profiles: ProxyProfile[];
-  activeProfile: string; // UI 记忆上次选择的 profile
+  activeProfileId: string;
+}
+
+/**
+ * 全局代理配置
+ */
+export interface ProxyConfig {
+  proxyPort: number;     // 代理端口，默认 7048
+  webPort: number;       // Web UI 端口，默认 7049
+  groups: ProxyGroup[];
 }
 
 // 旧格式（用于数据迁移）
@@ -30,20 +50,48 @@ interface LegacyConfig {
   apiKey: string;
 }
 
+// 中间格式（当前版本的格式）
+interface MiddleFormatConfig {
+  proxyPort: number;
+  profiles: Array<{
+    name: string;
+    upstreamBaseUrl: string;
+    apiKey: string;
+    provider?: 'anthropic' | 'openai';
+  }>;
+  activeProfile: string;
+}
+
 // ==================== 常量 ====================
 
-const CONFIG_PATH = join(homedir(), '.agentproxy', 'config.json');
+
+const DEFAULT_GROUPS: ProxyGroup[] = [
+  {
+    apiType: 'anthropic-messages',
+    profiles: [{ id: '1', name: 'Claude 官方', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['anthropic-messages'], apiKey: '' }],
+    activeProfileId: '1',
+  },
+  {
+    apiType: 'openai-chat',
+    profiles: [{ id: '1', name: 'OpenAI Chat', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-chat'], apiKey: '' }],
+    activeProfileId: '1',
+  },
+  {
+    apiType: 'openai-responses',
+    profiles: [{ id: '1', name: 'OpenAI Responses', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-responses'], apiKey: '' }],
+    activeProfileId: '1',
+  },
+  {
+    apiType: 'gemini-generate',
+    profiles: [{ id: '1', name: 'Gemini', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['gemini-generate'], apiKey: '' }],
+    activeProfileId: '1',
+  },
+];
 
 const DEFAULT_CONFIG: ProxyConfig = {
-  proxyPort: 7048,
-  activeProfile: 'Claude 官方',
-  profiles: [
-    {
-      name: 'Claude 官方',
-      upstreamBaseUrl: 'https://api.anthropic.com',
-      apiKey: '',
-    },
-  ],
+  proxyPort: DEFAULT_PROXY_PORT,
+  webPort: DEFAULT_WEB_PORT,
+  groups: DEFAULT_GROUPS,
 };
 
 // ==================== 内存缓存 ====================
@@ -53,14 +101,13 @@ let cachedConfig: ProxyConfig | null = null;
 // ==================== 工具函数 ====================
 
 function ensureDir(): void {
-  const dir = join(homedir(), '.agentproxy');
-  if (!existsSync(dir)) {
-    mkdirSync(dir, { recursive: true });
+  if (!existsSync(CONFIG_DIR)) {
+    mkdirSync(CONFIG_DIR, { recursive: true });
   }
 }
 
 /**
- * 检测是否为旧格式配置
+ * 检测是否为旧格式配置（最早的格式）
  */
 function isLegacyConfig(data: unknown): data is LegacyConfig {
   return (
@@ -75,20 +122,34 @@ function isLegacyConfig(data: unknown): data is LegacyConfig {
  * 旧格式迁移到新格式
  */
 function migrateLegacyConfig(legacy: LegacyConfig): ProxyConfig {
+  // 旧格式默认当作 anthropic-messages 类型
   return {
-    proxyPort: legacy.proxyPort || 7048,
-    activeProfile: '默认',
-    profiles: [
+    proxyPort: legacy.proxyPort || DEFAULT_PROXY_PORT,
+    webPort: DEFAULT_WEB_PORT,
+    groups: [
       {
-        name: '默认',
-        upstreamBaseUrl: legacy.upstreamBaseUrl,
-        apiKey: legacy.apiKey ?? '',
+        apiType: 'anthropic-messages',
+        profiles: [{ id: '1', name: '默认', upstreamBaseUrl: legacy.upstreamBaseUrl, apiKey: legacy.apiKey ?? '' }],
+        activeProfileId: '1',
+      },
+      {
+        apiType: 'openai-chat',
+        profiles: [{ id: '1', name: 'OpenAI Chat', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-chat'], apiKey: '' }],
+        activeProfileId: '1',
+      },
+      {
+        apiType: 'openai-responses',
+        profiles: [{ id: '1', name: 'OpenAI Responses', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-responses'], apiKey: '' }],
+        activeProfileId: '1',
+      },
+      {
+        apiType: 'gemini-generate',
+        profiles: [{ id: '1', name: 'Gemini', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['gemini-generate'], apiKey: '' }],
+        activeProfileId: '1',
       },
     ],
   };
 }
-
-// ==================== 核心 API ====================
 
 /**
  * 检测是否为旧的新格式配置（profiles 中包含 proxyPort）
@@ -105,14 +166,19 @@ function isOldNewFormat(data: unknown): data is { profiles: Array<{ proxyPort?: 
 }
 
 /**
- * 迁移旧的新格式配置（profiles 中有 proxyPort）到新格式
+ * 迁移旧的新格式配置（profiles 中有 proxyPort）到中间格式
  */
-function migrateOldNewFormat(old: { profiles: Array<{ proxyPort?: number }>; activeProfile?: string }): ProxyConfig {
+function migrateOldNewFormat(old: { profiles: Array<{ proxyPort?: number; name?: string; upstreamBaseUrl?: string; apiKey?: string; provider?: 'anthropic' | 'openai' }>; activeProfile?: string }): MiddleFormatConfig {
   // 从第一个 profile 中提取端口，或使用默认值
-  const proxyPort = old.profiles[0]?.proxyPort || 7048;
+  const proxyPort = old.profiles[0]?.proxyPort || DEFAULT_PROXY_PORT;
 
   // 移除每个 profile 中的 proxyPort
-  const profiles = old.profiles.map(({ proxyPort: _, ...rest }) => rest);
+  const profiles: MiddleFormatConfig['profiles'] = old.profiles.map(({ proxyPort: _, ...rest }) => ({
+    name: rest.name || '默认',
+    upstreamBaseUrl: rest.upstreamBaseUrl || '',
+    apiKey: rest.apiKey || '',
+    provider: rest.provider,
+  }));
 
   return {
     proxyPort,
@@ -120,6 +186,97 @@ function migrateOldNewFormat(old: { profiles: Array<{ proxyPort?: number }>; act
     profiles,
   };
 }
+
+/**
+ * 检测是否为中间格式（当前的扁平 profiles 格式）
+ */
+function isMiddleFormat(data: unknown): data is MiddleFormatConfig {
+  return (
+    typeof data === 'object' &&
+    data !== null &&
+    'profiles' in data &&
+    'proxyPort' in data &&
+    !('groups' in data)
+  );
+}
+
+/**
+ * 中间格式迁移到新的分组格式
+ * 根据 provider 字段或 upstreamBaseUrl 判断 API 类型
+ */
+function migrateMiddleFormat(middle: MiddleFormatConfig): ProxyConfig {
+  const groupsMap = new Map<ApiProviderType, ProxyGroup>();
+
+  // 初始化默认 groups
+  DEFAULT_GROUPS.forEach(g => {
+    groupsMap.set(g.apiType, { ...g, profiles: [] });
+  });
+
+  // 遍历 profiles，根据 provider 或 upstreamBaseUrl 分类
+  middle.profiles.forEach((profile, index) => {
+    const id = String(index + 1);
+    const newProfile: ProxyProfile = {
+      id,
+      name: profile.name,
+      upstreamBaseUrl: profile.upstreamBaseUrl,
+      apiKey: profile.apiKey,
+    };
+
+    // 判断 API 类型
+    let apiType: ApiProviderType;
+    if (profile.provider === 'anthropic' || profile.upstreamBaseUrl.includes('anthropic.com')) {
+      apiType = 'anthropic-messages';
+    } else if (profile.provider === 'openai' || profile.upstreamBaseUrl.includes('openai.com')) {
+      // 默认归入 openai-chat
+      apiType = 'openai-chat';
+    } else if (profile.upstreamBaseUrl.includes('googleapis.com')) {
+      apiType = 'gemini-generate';
+    } else {
+      // 未知类型，默认归入 anthropic-messages
+      apiType = 'anthropic-messages';
+    }
+
+    const group = groupsMap.get(apiType);
+    if (group) {
+      group.profiles.push(newProfile);
+      // 如果这是激活的 profile，设置 activeProfileId
+      if (profile.name === middle.activeProfile && group.profiles.length === 1) {
+        group.activeProfileId = id;
+      }
+    }
+  });
+
+  // 确保每个 group 至少有一个默认 profile
+  groupsMap.forEach(group => {
+    if (group.profiles.length === 0) {
+      const defaultGroup = DEFAULT_GROUPS.find(g => g.apiType === group.apiType);
+      if (defaultGroup) {
+        group.profiles = [{ ...defaultGroup.profiles[0] }];
+      }
+    }
+    // 如果没有 activeProfileId 或对应的 profile 不存在，设置为第一个
+    if (!group.profiles.find(p => p.id === group.activeProfileId)) {
+      group.activeProfileId = group.profiles[0]?.id || '1';
+    }
+  });
+
+  return {
+    proxyPort: middle.proxyPort || DEFAULT_PROXY_PORT,
+    webPort: DEFAULT_WEB_PORT,
+    groups: Array.from(groupsMap.values()),
+  };
+}
+
+/**
+ * 生成下一个 profile ID
+ */
+function generateNextProfileId(profiles: ProxyProfile[]): string {
+  if (profiles.length === 0) return '1';
+  const maxId = Math.max(...profiles.map(p => parseInt(p.id, 10) || 0));
+  return String(maxId + 1);
+}
+
+// ==================== 核心 API ====================
 
 /**
  * 加载配置（从磁盘读取）
@@ -132,23 +289,30 @@ export function loadConfig(): ProxyConfig {
 
       if (isLegacyConfig(parsed)) {
         const migrated = migrateLegacyConfig(parsed);
-        // 自动保存迁移后的新格式
         saveConfig(migrated);
-        console.log('[Config] 旧配置已迁移到新格式');
+        console.log('[Config] 旧配置已迁移到新的分组格式');
         cachedConfig = migrated;
         return cachedConfig;
       }
 
       if (isOldNewFormat(parsed)) {
-        const migrated = migrateOldNewFormat(parsed);
-        // 自动保存迁移后的新格式
+        const middle = migrateOldNewFormat(parsed);
+        const migrated = migrateMiddleFormat(middle);
         saveConfig(migrated);
-        console.log('[Config] 旧的新格式配置已迁移（proxyPort 移到全局）');
+        console.log('[Config] 旧的新格式配置已迁移到新的分组格式');
         cachedConfig = migrated;
         return cachedConfig;
       }
 
-      if ('profiles' in parsed && 'proxyPort' in parsed) {
+      if (isMiddleFormat(parsed)) {
+        const migrated = migrateMiddleFormat(parsed);
+        saveConfig(migrated);
+        console.log('[Config] 中间格式配置已迁移到新的分组格式');
+        cachedConfig = migrated;
+        return cachedConfig;
+      }
+
+      if ('groups' in parsed && 'proxyPort' in parsed) {
         cachedConfig = parsed as ProxyConfig;
         return cachedConfig;
       }
@@ -178,96 +342,126 @@ export function saveConfig(config: ProxyConfig): ProxyConfig {
   ensureDir();
   cachedConfig = config;
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
-  console.log('[Config] 配置已保存, 当前 profile:', config.activeProfile);
+  console.log('[Config] 配置已保存');
   return config;
 }
 
 /**
- * 获取当前激活的 profile
+ * 根据 API 类型获取分组
  */
-export function getActiveProfile(): ProxyProfile | null {
+export function getGroupByApiType(apiType: ApiProviderType): ProxyGroup | null {
   const config = getConfig();
-  const profile = config.profiles.find(p => p.name === config.activeProfile);
+  return config.groups.find(g => g.apiType === apiType) || null;
+}
+
+/**
+ * 获取指定 API 类型的激活 profile
+ */
+export function getActiveProfileForApiType(apiType: ApiProviderType): ProxyProfile | null {
+  const group = getGroupByApiType(apiType);
+  if (!group) return null;
+
+  const profile = group.profiles.find(p => p.id === group.activeProfileId);
   if (profile) return profile;
 
-  // activeProfile 不存在但有 profiles，取第一个
-  if (config.profiles.length > 0) {
-    return config.profiles[0];
+  // activeProfileId 不存在但有 profiles，取第一个
+  if (group.profiles.length > 0) {
+    return group.profiles[0];
   }
 
   return null;
 }
 
 /**
- * 切换激活的 profile
+ * 切换指定 API 类型的激活 profile
  */
-export function setActiveProfile(name: string): ProxyConfig | null {
+export function setActiveProfile(apiType: ApiProviderType, profileId: string): ProxyConfig | null {
   const config = getConfig();
-  const exists = config.profiles.some(p => p.name === name);
+  const group = config.groups.find(g => g.apiType === apiType);
+  if (!group) return null;
+
+  const exists = group.profiles.some(p => p.id === profileId);
   if (!exists) return null;
 
-  config.activeProfile = name;
+  group.activeProfileId = profileId;
   return saveConfig(config);
 }
 
 /**
- * 创建新 profile
+ * 创建新 profile（指定 API 类型）
  */
-export function createProfile(profile: ProxyProfile): ProxyConfig | null {
+export function createProfile(apiType: ApiProviderType, profile: Omit<ProxyProfile, 'id'>): ProxyConfig | null {
   const config = getConfig();
-  const exists = config.profiles.some(p => p.name === profile.name);
+  const group = config.groups.find(g => g.apiType === apiType);
+  if (!group) return null;
+
+  // 检查名称是否重复
+  const exists = group.profiles.some(p => p.name === profile.name);
   if (exists) return null;
 
-  config.profiles.push(profile);
+  const newProfile: ProxyProfile = {
+    ...profile,
+    id: generateNextProfileId(group.profiles),
+  };
+
+  group.profiles.push(newProfile);
   return saveConfig(config);
 }
 
 /**
- * 更新 profile
+ * 更新 profile（指定 API 类型）
  */
-export function updateProfile(name: string, updates: Partial<ProxyProfile>): ProxyConfig | null {
+export function updateProfile(apiType: ApiProviderType, profileId: string, updates: Partial<Omit<ProxyProfile, 'id'>>): ProxyConfig | null {
   const config = getConfig();
-  const idx = config.profiles.findIndex(p => p.name === name);
+  const group = config.groups.find(g => g.apiType === apiType);
+  if (!group) return null;
+
+  const idx = group.profiles.findIndex(p => p.id === profileId);
   if (idx === -1) return null;
 
-  // 不允许改 name 本身
-  config.profiles[idx] = {
-    ...config.profiles[idx],
+  // 不允许改 name 本身（如需改名用 renameProfile）
+  group.profiles[idx] = {
+    ...group.profiles[idx],
     ...updates,
-    name, // 保持原 name 不变
+    id: profileId, // 保持原 id 不变
+    name: group.profiles[idx].name, // 保持原 name 不变
   };
   return saveConfig(config);
 }
 
 /**
- * 重命名 profile
+ * 重命名 profile（指定 API 类型）
  */
-export function renameProfile(oldName: string, newName: string): ProxyConfig | null {
+export function renameProfile(apiType: ApiProviderType, profileId: string, newName: string): ProxyConfig | null {
   const config = getConfig();
-  if (config.profiles.some(p => p.name === newName)) return null;
+  const group = config.groups.find(g => g.apiType === apiType);
+  if (!group) return null;
 
-  const idx = config.profiles.findIndex(p => p.name === oldName);
+  // 检查新名称是否重复
+  if (group.profiles.some(p => p.name === newName)) return null;
+
+  const idx = group.profiles.findIndex(p => p.id === profileId);
   if (idx === -1) return null;
 
-  config.profiles[idx].name = newName;
-  if (config.activeProfile === oldName) {
-    config.activeProfile = newName;
-  }
+  group.profiles[idx].name = newName;
   return saveConfig(config);
 }
 
 /**
- * 删除 profile（不能删除最后一个）
+ * 删除 profile（指定 API 类型，不能删除最后一个）
  */
-export function deleteProfile(name: string): ProxyConfig | null {
+export function deleteProfile(apiType: ApiProviderType, profileId: string): ProxyConfig | null {
   const config = getConfig();
-  if (config.profiles.length <= 1) return null;
+  const group = config.groups.find(g => g.apiType === apiType);
+  if (!group) return null;
 
-  const filtered = config.profiles.filter(p => p.name !== name);
-  if (filtered.length < config.profiles.length) {
-    config.profiles = filtered;
-    if (config.activeProfile === name) {
-      config.activeProfile = config.profiles[0].name;
+  if (group.profiles.length <= 1) return null;
+
+  const filtered = group.profiles.filter(p => p.id !== profileId);
+  if (filtered.length < group.profiles.length) {
+    group.profiles = filtered;
+    if (group.activeProfileId === profileId) {
+      group.activeProfileId = group.profiles[0].id;
     }
   }
   return saveConfig(config);
@@ -280,14 +474,19 @@ export function getSafeConfig() {
   const config = getConfig();
   return {
     proxyPort: config.proxyPort,
-    activeProfile: config.activeProfile,
-    profiles: config.profiles.map(p => ({
-      name: p.name,
-      upstreamBaseUrl: p.upstreamBaseUrl,
-      apiKeySet: p.apiKey.length > 0,
-      apiKeyPreview: p.apiKey
-        ? p.apiKey.slice(0, 8) + '****' + p.apiKey.slice(-4)
-        : '',
+    webPort: config.webPort,
+    groups: config.groups.map(group => ({
+      apiType: group.apiType,
+      activeProfileId: group.activeProfileId,
+      profiles: group.profiles.map(p => ({
+        id: p.id,
+        name: p.name,
+        upstreamBaseUrl: p.upstreamBaseUrl,
+        apiKeySet: p.apiKey.length > 0,
+        apiKeyPreview: p.apiKey
+          ? p.apiKey.slice(0, API_KEY_MASK_PREFIX) + '****' + p.apiKey.slice(-API_KEY_MASK_SUFFIX)
+          : '',
+      })),
     })),
   };
 }

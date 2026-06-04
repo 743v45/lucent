@@ -3,6 +3,13 @@
  * 从 Claude API 响应中解析缓存信息
  */
 
+import {
+  DEFAULT_CONTEXT_SIZE,
+  LARGE_CONTEXT_SIZE,
+  LARGE_CONTEXT_MODEL_PATTERN,
+  TOOL_INPUT_PREVIEW_LENGTH,
+} from './constants.js';
+
 interface CacheControlBlock {
   type: string;
   cache_control?: { type: string };
@@ -172,8 +179,8 @@ function extractCachedMessages(messages: Message[]): string[] {
             result.push(`[${msg.role}] ${block.text}`);
           } else if (block?.type === 'tool_use') {
             const inputStr = block.input ? JSON.stringify(block.input) : '';
-            const preview = inputStr.length > 200
-              ? inputStr.substring(0, 200) + '...'
+            const preview = inputStr.length > TOOL_INPUT_PREVIEW_LENGTH
+              ? inputStr.substring(0, TOOL_INPUT_PREVIEW_LENGTH) + '...'
               : inputStr;
             result.push(`[${msg.role}] ${block.name}(${preview})`);
           } else if (block?.type === 'tool_result' && block.tool_use_id) {
@@ -256,7 +263,7 @@ export function extractCachedContent(body: RequestBody, usage?: ResponseUsage): 
  */
 export function buildContextWindowEvent(
   usage?: ResponseUsage,
-  contextSize: number = 200000
+  contextSize: number = DEFAULT_CONTEXT_SIZE
 ): {
   total_input_tokens: number;
   total_output_tokens: number;
@@ -277,7 +284,7 @@ export function buildContextWindowEvent(
   const totalTokens = inputTokens + outputTokens;
 
   // 自适应纠偏：如果输入超过 200K，可能是 1M 上下文模型
-  const effectiveSize = contextSize === 200000 && inputTokens > 200000 ? 1000000 : contextSize;
+  const effectiveSize = contextSize === DEFAULT_CONTEXT_SIZE && inputTokens > DEFAULT_CONTEXT_SIZE ? LARGE_CONTEXT_SIZE : contextSize;
 
   const usedPct = Math.round((totalTokens / effectiveSize) * 100);
 
@@ -309,15 +316,15 @@ export function parseModelBaseName(model: string): string {
  * 根据模型名称获取上下文窗口大小
  */
 export function getContextSizeForModel(model: string): number {
-  if (!model) return 200000;
+  if (!model) return DEFAULT_CONTEXT_SIZE;
 
   const lower = model.toLowerCase();
 
   // Opus / Mythos 模型默认 1M 上下文
-  if (/opus|mythos|sonnet-4/.test(lower)) {
-    return 1000000;
+  if (LARGE_CONTEXT_MODEL_PATTERN.test(lower)) {
+    return LARGE_CONTEXT_SIZE;
   }
 
   // 其他模型默认 200K
-  return 200000;
+  return DEFAULT_CONTEXT_SIZE;
 }

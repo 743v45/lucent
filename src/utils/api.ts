@@ -2,9 +2,8 @@
  * API 工具函数
  */
 
-import type { ProxyConfig, CreateProfileData, UpdateProfileData, ProfileFull } from '../types';
-
-const API_BASE = '/api';
+import type { ProxyConfig, CreateProfileData, UpdateProfileData, ProfileFull, ApiProviderType } from '../types';
+import { API_BASE_PATH } from '../constants';
 
 /**
  * 通用请求函数
@@ -13,7 +12,7 @@ async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const url = `${API_BASE}${endpoint}`;
+  const url = `${API_BASE_PATH}${endpoint}`;
   const response = await fetch(url, {
     headers: {
       'Content-Type': 'application/json',
@@ -196,17 +195,21 @@ export async function getProxyConfig(): Promise<ProxyConfig> {
 }
 
 /**
- * 获取 profile 详情（含 apiKey）
+ * 获取指定 group 下 profile 完整信息（含 apiKey）
  */
-export async function getProfileFull(name: string): Promise<ProfileFull> {
-  return request(`/config/${encodeURIComponent(name)}/full`);
+export async function getProfileFull(apiType: ApiProviderType, profileId: string): Promise<ProfileFull> {
+  return request(`/config/${encodeURIComponent(apiType)}/${encodeURIComponent(profileId)}/full`);
 }
 
 /**
  * 更新 profile
  */
-export async function updateProfile(name: string, updates: UpdateProfileData): Promise<ProxyConfig> {
-  return request(`/config/profiles/${encodeURIComponent(name)}`, {
+export async function updateProfile(
+  apiType: ApiProviderType,
+  profileId: string,
+  updates: UpdateProfileData
+): Promise<ProxyConfig> {
+  return request(`/config/${encodeURIComponent(apiType)}/${encodeURIComponent(profileId)}`, {
     method: 'PUT',
     body: JSON.stringify(updates),
   });
@@ -215,28 +218,38 @@ export async function updateProfile(name: string, updates: UpdateProfileData): P
 /**
  * 创建 profile
  */
-export async function createProfile(profile: CreateProfileData): Promise<ProxyConfig> {
-  return request('/config/profiles', {
+export async function createProfile(
+  apiType: ApiProviderType,
+  profile: CreateProfileData
+): Promise<ProxyConfig> {
+  return request(`/config/${encodeURIComponent(apiType)}/profiles`, {
     method: 'POST',
     body: JSON.stringify(profile),
   });
 }
 
 /**
- * 切换激活 profile
+ * 设置活跃 profile
  */
-export async function setActiveProfile(name: string): Promise<ProxyConfig> {
-  return request('/config/active', {
+export async function setActiveProfile(
+  apiType: ApiProviderType,
+  profileId: string
+): Promise<ProxyConfig> {
+  return request(`/config/${encodeURIComponent(apiType)}/active`, {
     method: 'POST',
-    body: JSON.stringify({ name }),
+    body: JSON.stringify({ profileId }),
   });
 }
 
 /**
  * 重命名 profile
  */
-export async function renameProfile(oldName: string, newName: string): Promise<ProxyConfig> {
-  return request(`/config/profiles/${encodeURIComponent(oldName)}/rename`, {
+export async function renameProfile(
+  apiType: ApiProviderType,
+  profileId: string,
+  newName: string
+): Promise<ProxyConfig> {
+  return request(`/config/${encodeURIComponent(apiType)}/${encodeURIComponent(profileId)}/rename`, {
     method: 'PUT',
     body: JSON.stringify({ newName }),
   });
@@ -245,8 +258,11 @@ export async function renameProfile(oldName: string, newName: string): Promise<P
 /**
  * 删除 profile
  */
-export async function deleteProfile(name: string): Promise<ProxyConfig> {
-  return request(`/config/profiles/${encodeURIComponent(name)}`, {
+export async function deleteProfile(
+  apiType: ApiProviderType,
+  profileId: string
+): Promise<ProxyConfig> {
+  return request(`/config/${encodeURIComponent(apiType)}/profiles/${encodeURIComponent(profileId)}`, {
     method: 'DELETE',
   });
 }
@@ -254,7 +270,11 @@ export async function deleteProfile(name: string): Promise<ProxyConfig> {
 /**
  * 测试上游连接
  */
-export async function testConnection(url: string, apiKey?: string): Promise<{
+export async function testConnection(
+  apiType: ApiProviderType,
+  upstreamBaseUrl: string,
+  apiKey: string
+): Promise<{
   ok: boolean;
   status?: number;
   duration: number;
@@ -262,6 +282,6 @@ export async function testConnection(url: string, apiKey?: string): Promise<{
 }> {
   return request('/config/test', {
     method: 'POST',
-    body: JSON.stringify({ url, apiKey }),
+    body: JSON.stringify({ apiType, upstreamBaseUrl, apiKey }),
   });
 }

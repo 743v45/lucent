@@ -11,13 +11,13 @@
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
-import { getActiveProfile } from './config.js';
+import { getConfig } from './config.js';
+import { DEFAULT_PROXY_PORT, SERVER_HOST, PROXY_TRACE_HEADER, DEFAULT_UPSTREAM_URLS, CLAUDE_SETTINGS_DIR } from './constants.js';
 
 // ==================== 配置 ====================
 const PROXY_CONFIG = {
-  defaultPort: 7048,
-  host: '127.0.0.1',
+  defaultPort: DEFAULT_PROXY_PORT,
+  host: SERVER_HOST,
 } as const;
 
 // ==================== 工具函数 ====================
@@ -58,14 +58,18 @@ function stripContentLengthHeader(headers: Record<string, string>): Record<strin
  * 从 Claude 配置文件获取原始 Base URL（fallback 用）
  */
 function getOriginalBaseUrl(): string {
-  // 优先使用 AgentProxy 配置
-  const activeProfile = getActiveProfile();
-  if (activeProfile?.upstreamBaseUrl) {
-    return activeProfile.upstreamBaseUrl;
+  // 优先使用 AgentProxy 配置（取第一个 group 的 active profile）
+  const config = getConfig();
+  const firstGroup = config.groups[0];
+  if (firstGroup) {
+    const profile = firstGroup.profiles.find(p => p.id === firstGroup.activeProfileId);
+    if (profile?.upstreamBaseUrl) {
+      return profile.upstreamBaseUrl;
+    }
   }
 
   const cwd = process.cwd();
-  const claudeDir = join(homedir(), '.claude');
+  const claudeDir = CLAUDE_SETTINGS_DIR;
 
   // 优先级：当前项目配置 > 全局配置 > 环境变量 > 默认值
   const configPaths = [
@@ -93,7 +97,7 @@ function getOriginalBaseUrl(): string {
   }
 
   // 默认值
-  return 'https://api.anthropic.com';
+  return DEFAULT_UPSTREAM_URLS['anthropic-messages'];
 }
 
 /**
@@ -131,7 +135,7 @@ export async function startProxyServer(options?: { port?: number }): Promise<Pro
     const server = createServer(async (req, res) => {
       try {
         // 获取原始 Base URL
-        const originalBaseUrl = getBaseUrlFromRequest(req.url);
+        const originalBaseUrl = getBaseUrlFromRequest(req.url ?? '/');
 
         // 转换 incoming headers
         let headers: Record<string, string> = { ...req.headers } as Record<string, string>;
@@ -158,7 +162,7 @@ export async function startProxyServer(options?: { port?: number }): Promise<Pro
         // 拦截器识别到此 Header 会强制记录
         fetchOptions.headers = {
           ...fetchOptions.headers,
-          'x-agentproxy-trace': 'true',
+          [PROXY_TRACE_HEADER]: 'true',
         } as HeadersInit;
 
         if (body.length > 0) {
@@ -167,7 +171,8 @@ export async function startProxyServer(options?: { port?: number }): Promise<Pro
 
         // 拼接完整 URL
         const cleanBase = originalBaseUrl.endsWith('/') ? originalBaseUrl.slice(0, -1) : originalBaseUrl;
-        const cleanReq = req.url.startsWith('/') ? req.url.slice(1) : req.url;
+        const reqUrl = req.url ?? '/';
+        const cleanReq = reqUrl.startsWith('/') ? reqUrl.slice(1) : reqUrl;
         const fullUrl = `${cleanBase}/${cleanReq}`;
 
         // 发起请求

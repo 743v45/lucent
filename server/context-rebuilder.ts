@@ -3,6 +3,14 @@
  * 从多个 API 调用中重建完整对话上下文
  */
 
+import {
+  DEFAULT_CONTEXT_SIZE,
+  LARGE_CONTEXT_SIZE,
+  LARGE_CONTEXT_MODEL_PATTERN,
+  MAX_CONTEXT_CHECKPOINTS,
+  CHECKPOINT_KEY_CONTENT_LENGTH,
+} from './constants.js';
+
 interface ContextMessage {
   role: string;
   content: string | ContentBlock[];
@@ -69,7 +77,7 @@ interface ContextWindow {
 export class ContextRebuilder {
   private checkpoints: Map<string, ContextCheckpoint> = new Map();
   private currentCheckpointKey: string | null = null;
-  private readonly maxCheckpoints = 100;
+  private readonly maxCheckpoints = MAX_CONTEXT_CHECKPOINTS;
 
   /**
    * 从请求体中提取消息并转换为上下文消息
@@ -183,7 +191,7 @@ export class ContextRebuilder {
           ? firstUserMsg.content
           : this.extractTextFromBlocks(firstUserMsg.content);
         // 使用内容的哈希作为键（简化版）
-        return `cp_${content.substring(0, 50).replace(/\s/g, '_')}`;
+        return `cp_${content.substring(0, CHECKPOINT_KEY_CONTENT_LENGTH).replace(/\s/g, '_')}`;
       }
     }
 
@@ -381,17 +389,17 @@ export function calculateContextWindow(
  * 获取模型的上下文窗口大小
  */
 function getContextSizeForModel(model: string): number {
-  if (!model) return 200000;
+  if (!model) return DEFAULT_CONTEXT_SIZE;
 
   const lower = model.toLowerCase();
 
   // Opus / Mythos / Sonnet 4.x 模型默认 1M 上下文
-  if (/opus|mythos|sonnet-4|claude-4/.test(lower)) {
-    return 1000000;
+  if (LARGE_CONTEXT_MODEL_PATTERN.test(lower)) {
+    return LARGE_CONTEXT_SIZE;
   }
 
   // 其他模型默认 200K
-  return 200000;
+  return DEFAULT_CONTEXT_SIZE;
 }
 
 /**

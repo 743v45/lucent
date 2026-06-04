@@ -1,6 +1,11 @@
 import { useState, useCallback, useEffect } from 'react';
 import type { LogEntry, TabType } from '../../types';
+import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL } from '../../constants';
 import { JsonView, darkStyles } from 'react-json-view-lite';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import 'react-json-view-lite/dist/index.css';
 import './DetailPanel.css';
 
@@ -34,7 +39,7 @@ function CopyButton({ onCopy }: { onCopy: () => void }) {
 
   useEffect(() => {
     if (copied) {
-      const timer = setTimeout(() => setCopied(false), 1500);
+      const timer = setTimeout(() => setCopied(false), COPIED_FEEDBACK_DURATION_MS);
       return () => clearTimeout(timer);
     }
   }, [copied]);
@@ -63,6 +68,73 @@ function CollapseButton({ collapsed, onToggle }: { collapsed: boolean; onToggle:
     >
       {collapsed ? '展开' : '折叠'}
     </button>
+  );
+}
+
+// ==================== Format Helpers ====================
+
+function formatTokenValue(n: number | undefined): string {
+  if (n == null) return '0';
+  if (n >= TOKEN_FORMAT_THRESHOLD_MILLION) return `${(n / TOKEN_FORMAT_THRESHOLD_MILLION).toFixed(1)}M`;
+  if (n >= TOKEN_FORMAT_THRESHOLD_KILO) return `${(n / TOKEN_FORMAT_THRESHOLD_KILO).toFixed(1)}K`;
+  return String(n);
+}
+
+// ==================== Token Stats Card ====================
+
+function TokenStatsCard({ log }: { log: LogEntry }) {
+  const hasTokenData = log.tokenUsage != null;
+  const hasHitRate = log.kvCache?.hitRate != null && log.kvCache.hitRate > 0;
+
+  if (!hasTokenData && !hasHitRate) return null;
+
+  const inputTokens = log.tokenUsage?.input_tokens;
+  const outputTokens = log.tokenUsage?.output_tokens;
+  const cacheCreate = log.tokenUsage?.cache_creation_tokens;
+  const cacheRead = log.tokenUsage?.cache_read_tokens;
+  const hitRate = log.kvCache?.hitRate ?? 0;
+
+  return (
+    <div className="rounded-lg border border-border-subtle overflow-hidden shrink-0 font-mono">
+      <div className="flex h-full">
+        {/* 左栏：数据区 */}
+        <div className="flex flex-col">
+          {/* 第一行：Token */}
+          <div className="flex items-center px-3 py-1.5 gap-3 border-b border-border-subtle">
+            <span className="text-text-secondary font-[510]">Token</span>
+            <span className="text-text-quaternary">
+              input: <span className="text-text-primary">{formatTokenValue(inputTokens)}</span>
+            </span>
+            <span className="text-text-quaternary">
+              output: <span className="text-text-primary">{formatTokenValue(outputTokens)}</span>
+            </span>
+          </div>
+          {/* 第二行：Cache */}
+          <div className="flex items-center px-3 py-1.5 gap-3">
+            <span className="text-text-secondary font-[510]">Cache</span>
+            <span className="text-text-quaternary">
+              create: <span className="text-text-primary">{formatTokenValue(cacheCreate)}</span>
+            </span>
+            <span className="text-text-quaternary">
+              read: <span className="text-text-primary">{formatTokenValue(cacheRead)}</span>
+            </span>
+          </div>
+        </div>
+        {/* 竖分隔线 */}
+        <div className="border-l border-border-subtle" />
+        {/* 右栏：命中率（竖跨两行） */}
+        <div className="flex flex-col items-center justify-center px-4">
+          {hasHitRate ? (
+            <>
+              <span className="text-text-primary font-[510]">{hitRate.toFixed(1)}%</span>
+              <span className="text-text-quaternary text-xs">命中率</span>
+            </>
+          ) : (
+            <span className="text-text-quaternary text-xs">—</span>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -145,8 +217,10 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
 
   return (
     <div className="flex-1 min-w-0 h-full flex flex-col bg-bg-panel p-3 gap-3">
-      {/* 头部信息 - 独立卡片 */}
-      <div className="border border-border-subtle rounded-lg px-5 py-4">
+      {/* 头部信息区 */}
+      <div className="flex gap-3">
+      {/* 左侧：请求基本信息 */}
+      <div className="flex-1 min-w-0 border border-border-subtle rounded-lg px-5 py-4">
         <div className="flex items-center gap-2 mb-1">
           <span className="text-text-quaternary text-sm">
             {new Date(log.timestamp).toLocaleString('zh-CN')}
@@ -166,11 +240,9 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
                 className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
                   log.response.status >= 400 ? 'text-error' : 'text-success'
                 }`}
+                title={log.response.statusText}
               >
-                HTTP {log.response.status}
-              </span>
-              <span className="text-text-quaternary text-sm">
-                {log.response.statusText}
+                {log.response.status}
               </span>
             </>
           )}
@@ -178,6 +250,9 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         <div className="text-sm text-text-tertiary truncate" title={log.request.url}>
           {log.request.url}
         </div>
+      </div>
+      {/* 右侧：Token/Cache 统计 */}
+      <TokenStatsCard log={log} />
       </div>
 
       {/* Tab 卡片 - 包含导航栏 + 内容 */}
@@ -280,7 +355,7 @@ function JsonBlock({
     >
       <JsonView
         data={jsonData}
-        shouldExpandNode={(level) => collapsed ? level < 2 : true}
+        shouldExpandNode={(level) => collapsed ? level < JSON_COLLAPSED_EXPAND_LEVEL : true}
         {...darkStyles}
       />
     </div>
@@ -520,6 +595,20 @@ interface ContextTabProps {
   log: LogEntry;
 }
 
+// 选中项类型
+type SelectedItem =
+  | { type: 'systemPrompt' }
+  | { type: 'tool'; index: number }
+  | { type: 'message'; index: number }
+  | null;
+
+// 折叠分组状态
+interface CollapsedGroups {
+  systemPrompt: boolean;
+  tools: boolean;
+  messages: boolean;
+}
+
 function ContextTab({ log }: ContextTabProps): JSX.Element {
   const data = log.context;
   if (!data || (!data.messages?.length && !data.summary)) {
@@ -530,144 +619,360 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
     );
   }
 
+  // 折叠状态
+  const [collapsed, setCollapsed] = useState<CollapsedGroups>({
+    systemPrompt: false,
+    tools: false,
+    messages: false,
+  });
+
+  // 选中项
+  const [selected, setSelected] = useState<SelectedItem>(
+    data.systemPrompt ? { type: 'systemPrompt' } : null
+  );
+
+  const toggleGroup = (group: keyof CollapsedGroups) => {
+    setCollapsed(prev => ({ ...prev, [group]: !prev[group] }));
+  };
+
   const summary = data.summary;
 
+  // 获取选中项的内容
+  const getSelectedContent = (): { title: string; content: string; contentType?: 'json' } | null => {
+    if (!selected) return null;
+
+    switch (selected.type) {
+      case 'systemPrompt':
+        return {
+          title: '系统提示词',
+          content: data.systemPrompt || '',
+        };
+      case 'tool':
+        const tool = data.tools?.[selected.index];
+        if (!tool) return null;
+        return {
+          title: `工具: ${tool.name}`,
+          content: tool.description || '无描述',
+          contentType: 'text',
+        };
+      case 'message':
+        const msg = data.messages?.[selected.index];
+        if (!msg) return null;
+        const contentText =
+          typeof msg.content === 'string'
+            ? msg.content
+            : msg.content
+                .map((block) => {
+                  if (block.type === 'text' && block.text) {
+                    return block.text;
+                  } else if (block.type === 'tool_use') {
+                    const toolBlock = block as { name?: string; input?: unknown };
+                    return `[工具调用: ${toolBlock.name ?? 'unknown'}]\n${JSON.stringify(toolBlock.input, null, 2)}`;
+                  } else if (block.type === 'tool_result') {
+                    const resultBlock = block as { content?: string };
+                    return `[工具结果]\n${resultBlock.content || ''}`;
+                  }
+                  return '';
+                })
+                .join('\n\n');
+        return {
+          title: `${msg.role === 'user' ? '用户' : msg.role === 'assistant' ? '助手' : '工具'} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`,
+          content: contentText,
+        };
+    }
+  };
+
+  const selectedContent = getSelectedContent();
+
   return (
-    <div className="p-4">
-      {/* 统计信息 */}
-      {summary && (
-        <div className="mb-4 grid grid-cols-4 gap-2">
-          <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-3 text-center">
-            <div className="text-[20px] font-[510] text-text-primary">{summary.totalMessages}</div>
-            <div className="text-sm text-text-quaternary">总消息</div>
+    <div className="flex h-full">
+      {/* 左侧列表 */}
+      <div className="w-[280px] shrink-0 overflow-auto border-r border-border-subtle bg-bg-surface/30">
+        {/* 统计卡片 */}
+        {summary && (
+          <div className="p-3 grid grid-cols-2 gap-2">
+            <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-2 text-center">
+              <div className="text-[17px] font-[510] text-text-primary">{summary.totalMessages}</div>
+              <div className="text-sm text-text-quaternary">总消息</div>
+            </div>
+            <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-2 text-center">
+              <div className="text-[17px] font-[510] text-brand-accent">{summary.userMessages}</div>
+              <div className="text-sm text-text-quaternary">用户</div>
+            </div>
+            <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-2 text-center">
+              <div className="text-[17px] font-[510] text-success">{summary.assistantMessages}</div>
+              <div className="text-sm text-text-quaternary">助手</div>
+            </div>
+            <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-2 text-center">
+              <div className="text-[17px] font-[510] text-warning">{summary.toolMessages}</div>
+              <div className="text-sm text-text-quaternary">工具</div>
+            </div>
           </div>
-          <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-3 text-center">
-            <div className="text-[20px] font-[510] text-brand-accent">{summary.userMessages}</div>
-            <div className="text-sm text-text-quaternary">用户</div>
-          </div>
-          <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-3 text-center">
-            <div className="text-[20px] font-[510] text-success">{summary.assistantMessages}</div>
-            <div className="text-sm text-text-quaternary">助手</div>
-          </div>
-          <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-3 text-center">
-            <div className="text-[20px] font-[510] text-warning">{summary.toolMessages}</div>
-            <div className="text-sm text-text-quaternary">工具</div>
-          </div>
-        </div>
-      )}
+        )}
 
-      {/* 系统提示词 */}
-      {data.systemPrompt && (
-        <div className="mb-3 bg-bg-surface/50 rounded-lg border border-border-subtle p-3">
-          <div className="text-[17px] font-[510] text-text-secondary mb-2">系统提示词</div>
-          <ExpandableText text={data.systemPrompt} maxLines={3} />
-        </div>
-      )}
+        {/* 系统提示词分组 */}
+        {data.systemPrompt && (
+          <ContextCollapsibleGroup
+            title="系统提示词"
+            count={1}
+            collapsed={collapsed.systemPrompt}
+            onToggle={() => toggleGroup('systemPrompt')}
+          >
+            <ContextListItem
+              label="System"
+              isSelected={selected?.type === 'systemPrompt'}
+              onClick={() => setSelected({ type: 'systemPrompt' })}
+              color="text-warning"
+            />
+          </ContextCollapsibleGroup>
+        )}
 
-      {/* 可用工具 */}
-      {data.tools && data.tools.length > 0 && (
-        <div className="mb-3 bg-bg-surface/50 rounded-lg border border-border-subtle p-3">
-          <div className="text-[17px] font-[510] text-text-secondary mb-2">
-            可用工具 ({data.tools.length})
-          </div>
-          <div className="space-y-1">
+        {/* 工具分组 */}
+        {data.tools && data.tools.length > 0 && (
+          <ContextCollapsibleGroup
+            title="可用工具"
+            count={data.tools.length}
+            collapsed={collapsed.tools}
+            onToggle={() => toggleGroup('tools')}
+          >
             {data.tools.map((tool, i) => (
-              <div key={i} className="flex gap-2 items-center text-sm">
-                <span className="px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary text-brand-accent">
-                  {tool.name}
-                </span>
-                {tool.description && (
-                  <span className="text-text-quaternary text-sm">{tool.description}</span>
-                )}
-              </div>
+              <ContextListItem
+                key={i}
+                label={tool.name}
+                isSelected={selected?.type === 'tool' && selected?.index === i}
+                onClick={() => setSelected({ type: 'tool', index: i })}
+                color="text-brand-accent"
+              />
             ))}
-          </div>
-        </div>
-      )}
+          </ContextCollapsibleGroup>
+        )}
 
-      {/* 对话历史 */}
-      {data.messages && data.messages.length > 0 && (
-        <div className="mb-3 bg-bg-surface/50 rounded-lg border border-border-subtle p-3">
-          <div className="text-[17px] font-[510] text-text-secondary mb-2">
-            对话历史 ({data.messages.length})
-          </div>
-          <div className="space-y-3">
+        {/* 消息分组 */}
+        {data.messages && data.messages.length > 0 && (
+          <ContextCollapsibleGroup
+            title="对话历史"
+            count={data.messages.length}
+            collapsed={collapsed.messages}
+            onToggle={() => toggleGroup('messages')}
+          >
             {data.messages.map((msg, i) => {
-              const roleStyle =
+              const roleColor =
                 msg.role === 'user'
                   ? 'text-brand-accent'
                   : msg.tool_use_id
                     ? 'text-tool'
                     : 'text-success';
-
               const roleLabel =
                 msg.role === 'user'
                   ? 'user'
                   : msg.tool_use_id
                     ? 'tool'
                     : msg.role;
-
-              const contentText =
-                typeof msg.content === 'string'
-                  ? msg.content
-                  : msg.content
-                      .map((block) => {
-                        if (block.type === 'text' && block.text) {
-                          return block.text;
-                        } else if (block.type === 'tool_use') {
-                          return `[工具: ${(block as { name?: string }).name ?? 'unknown'}]`;
-                        }
-                        return '';
-                      })
-                      .join('\n');
-
               return (
-                <div key={i} className="text-sm">
-                  <div className="flex gap-2 items-center mb-1">
-                    <span className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${roleStyle}`}>
-                      {roleLabel}
-                    </span>
-                    <span className="text-text-quaternary text-sm">
-                      {new Date(msg.timestamp).toLocaleTimeString('zh-CN')}
-                    </span>
-                    {msg.name && (
-                      <span className="px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary text-brand-accent">
-                        {msg.name}
-                      </span>
-                    )}
-                  </div>
-                  <ExpandableText text={contentText} maxLines={2} />
-                </div>
+                <ContextListItem
+                  key={i}
+                  label={`${roleLabel} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`}
+                  isSelected={selected?.type === 'message' && selected?.index === i}
+                  onClick={() => setSelected({ type: 'message', index: i })}
+                  color={roleColor}
+                />
               );
             })}
+          </ContextCollapsibleGroup>
+        )}
+      </div>
+
+      {/* 右侧详情 */}
+      <div className="flex-1 min-w-0 overflow-auto bg-bg-deep">
+        {selectedContent ? (
+          <div className="p-4">
+            {/* 标题 */}
+            <div className="mb-3 pb-3 border-b border-border-subtle">
+              <h3 className="text-[17px] font-[510] text-text-primary">{selectedContent.title}</h3>
+            </div>
+            {/* 内容 */}
+            <MarkdownContent content={selectedContent.content} />
           </div>
-        </div>
-      )}
+        ) : (
+          <div className="flex items-center justify-center h-full">
+            <span className="text-text-quaternary text-base">选择左侧项查看详情</span>
+          </div>
+        )}
+      </div>
     </div>
   );
 }
 
-// ==================== Expandable Text ====================
+// ==================== Context Collapsible Group ====================
 
-function ExpandableText({ text, maxLines = 3 }: { text: string; maxLines?: number }) {
-  const [expanded, setExpanded] = useState(false);
+function ContextCollapsibleGroup({
+  title,
+  count,
+  collapsed,
+  onToggle,
+  children,
+}: {
+  title: string;
+  count: number;
+  collapsed: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
   return (
-    <div>
-      <pre
-        className={`text-sm leading-relaxed font-mono text-text-tertiary whitespace-pre-wrap break-words ${
-          !expanded ? `line-clamp-${maxLines}` : ''
-        }`}
+    <div className="border-b border-border-subtle">
+      <button
+        onClick={onToggle}
+        className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-bg-hover transition-colors"
       >
-        {text}
-      </pre>
-      {!expanded && text.length > 100 && (
-        <button
-          onClick={() => setExpanded(true)}
-          className="text-sm font-[510] text-brand-accent hover:text-brand-hover transition-colors mt-1"
-        >
-          展开
-        </button>
-      )}
+        <ChevronIcon expanded={!collapsed} />
+        <span className="text-[15px] font-[510] text-text-secondary">{title}</span>
+        <span className="text-sm text-text-quaternary">({count})</span>
+      </button>
+      {!collapsed && <div className="pb-1">{children}</div>}
+    </div>
+  );
+}
+
+// ==================== Context List Item ====================
+
+function ContextListItem({
+  label,
+  isSelected,
+  onClick,
+  color,
+}: {
+  label: string;
+  isSelected: boolean;
+  onClick: () => void;
+  color: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full px-3 py-1.5 pl-6 text-left text-sm transition-colors ${
+        isSelected
+          ? 'bg-bg-active text-text-primary'
+          : 'text-text-tertiary hover:bg-bg-hover hover:text-text-secondary'
+      }`}
+    >
+      <span className={`${isSelected ? '' : color} font-[510]`}>{label}</span>
+    </button>
+  );
+}
+
+// ==================== Markdown Content ====================
+
+function MarkdownContent({ content }: { content: string }) {
+  return (
+    <div className="markdown-content">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          code({ className, children, ...props }) {
+            const match = /language-(\w+)/.exec(className || '');
+            const codeString = String(children).replace(/\n$/, '');
+
+            // 有语言标记的是代码块
+            if (match) {
+              return (
+                <SyntaxHighlighter
+                  style={oneDark as Record<string, React.CSSProperties>}
+                  language={match[1]}
+                  PreTag="div"
+                  customStyle={{
+                    margin: 0,
+                    borderRadius: '8px',
+                    fontSize: '14px',
+                  }}
+                >
+                  {codeString}
+                </SyntaxHighlighter>
+              );
+            }
+
+            // 内联代码
+            return (
+              <code
+                className="px-1.5 py-0.5 rounded bg-bg-surface/50 text-brand-accent font-mono text-sm"
+                {...props}
+              >
+                {children}
+              </code>
+            );
+          },
+          // 表格样式
+          table({ children }) {
+            return (
+              <div className="overflow-auto my-2">
+                <table className="min-w-full border-collapse border border-border-subtle rounded-lg">
+                  {children}
+                </table>
+              </div>
+            );
+          },
+          th({ children }) {
+            return (
+              <th className="px-3 py-2 text-left text-sm font-[510] text-text-primary bg-bg-surface/50 border border-border-subtle">
+                {children}
+              </th>
+            );
+          },
+          td({ children }) {
+            return (
+              <td className="px-3 py-2 text-sm text-text-secondary border border-border-subtle">
+                {children}
+              </td>
+            );
+          },
+          // 链接
+          a({ href, children }) {
+            return (
+              <a
+                href={href}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-brand-accent hover:text-brand-hover underline"
+              >
+                {children}
+              </a>
+            );
+          },
+          // 标题
+          h1({ children }) {
+            return <h1 className="text-[20px] font-[510] text-text-primary mb-3 mt-4">{children}</h1>;
+          },
+          h2({ children }) {
+            return <h2 className="text-[17px] font-[510] text-text-primary mb-2 mt-3">{children}</h2>;
+          },
+          h3({ children }) {
+            return <h3 className="text-[15px] font-[510] text-text-primary mb-2 mt-2">{children}</h3>;
+          },
+          // 段落
+          p({ children }) {
+            return <p className="text-[15px] leading-relaxed text-text-secondary mb-2">{children}</p>;
+          },
+          // 列表
+          ul({ children }) {
+            return <ul className="list-disc list-inside mb-2 text-[15px] text-text-secondary">{children}</ul>;
+          },
+          ol({ children }) {
+            return <ol className="list-decimal list-inside mb-2 text-[15px] text-text-secondary">{children}</ol>;
+          },
+          li({ children }) {
+            return <li className="mb-1">{children}</li>;
+          },
+          // 引用
+          blockquote({ children }) {
+            return (
+              <blockquote className="pl-3 py-2 border-l-2 border-border-subtle bg-bg-surface/30 rounded-r my-2 text-text-tertiary">
+                {children}
+              </blockquote>
+            );
+          },
+        }}
+      >
+        {content}
+      </ReactMarkdown>
     </div>
   );
 }

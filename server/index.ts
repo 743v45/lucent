@@ -7,7 +7,6 @@
 import express from 'express';
 import compression from 'compression';
 import { createServer as createHttpServer } from 'node:http';
-import { WebSocketServer, WebSocket } from 'ws';
 import {
   mkdirSync,
   existsSync,
@@ -18,7 +17,6 @@ import {
   unlinkSync,
 } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
 import open from 'open';
@@ -29,26 +27,42 @@ import { extractCachedContent, buildContextWindowEvent, getContextSizeForModel }
 import { globalContextRebuilder, buildConversationSummary, calculateContextWindow } from './context-rebuilder.js';
 import { startProxyServer } from './proxy.js';
 import { setupInterceptor } from './interceptor.js';
+import { extractContext, detectApiType } from './context-extractors.js';
+import {
+  DEFAULT_WEB_PORT,
+  DEFAULT_PROXY_PORT,
+  LOG_DIR,
+  MAX_LOG_FILE_SIZE,
+  LOG_RETENTION_DAYS,
+  HEARTBEAT_INTERVAL_MS,
+  DEFAULT_LOG_QUERY_LIMIT,
+  MAX_LOG_FILES_TO_READ,
+  LOG_SPLIT_REGEX,
+  API_KEY_MASK_PREFIX,
+  API_KEY_MASK_SUFFIX,
+  TEST_MODELS,
+  ANTHROPIC_API_VERSION,
+  TEST_REQUEST_CONTENT,
+  TEST_MAX_TOKENS,
+  SERVER_HOST,
+} from './constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // ==================== 配置 ====================
 const CONFIG = {
-  webPort: 7049,
-  proxyPort: 7048,
-  logDir: join(homedir(), '.agentproxy', 'logs'),
-  maxLogFileSize: 100 * 1024 * 1024, // 100MB
-  heartbeatInterval: 30000, // 30秒心跳间隔
-  logRetentionDays: 30, // 日志保留30天
+  webPort: DEFAULT_WEB_PORT,
+  proxyPort: DEFAULT_PROXY_PORT,
+  logDir: LOG_DIR,
+  maxLogFileSize: MAX_LOG_FILE_SIZE,
+  logRetentionDays: LOG_RETENTION_DAYS,
 } as const;
 
 // ==================== 状态 ====================
 let proxyEnabled = false;
 let currentLogFile: string | null = null;
-let logClients = new Set<WebSocket>();
 let sseClients = new Set<any>(); // SSE 客户端（Express Response 对象）
-let heartbeatTimer: NodeJS.Timeout | null = null;
 let proxyServer: Awaited<ReturnType<typeof startProxyServer>> | null = null;
 
 // ==================== 类型定义 ====================
@@ -69,6 +83,7 @@ interface LogEntry {
   };
   agentType: 'main' | 'sub';
   subAgentType?: 'plan' | 'search' | 'bash' | 'workflow';
+  apiType?: Config.ApiProviderType;
   duration: number;
   tokenUsage?: {
     inputTokens: number;
@@ -127,7 +142,7 @@ interface ProxyStatus {
   webPort: number;
   proxyPort: number;
   logFile: string | null;
-  connectedClients: number;
+  groups?: any[];
 }
 
 interface LogsQuery {
@@ -139,6 +154,82 @@ interface LogsQuery {
   endDate?: string;
   search?: string;
 }
+
+// ==================== Context 构建 ====================
+
+/**
+ * 从 request.body 构建 context 数据
+ * 使用 context-extractors 统一提取多种 API 格式
+ */
+function buildContextFromRequest(log: LogEntry): void {
+  const body = log.request?.body as any;
+  const url = log.request?.url || '';
+
+  if (!body || typeof body !== 'object') return;
+
+  // 检测 API 类型
+  const apiType = detectApiType(url);
+  if (apiType) {
+    log.apiType = apiType;
+  }
+
+  // 使用统一的 context 提取器
+  const extracted = extractContext(body, url);
+  if (!extracted) return;
+
+  const { systemPrompt, messages, tools } = extracted;
+
+  // 只有有内容才构建
+  if (messages.length === 0 && !systemPrompt && !tools?.length) return;
+
+  // 统计
+  const userMsgs = messages.filter((m: any) => m.role === 'user').length;
+  const assistantMsgs = messages.filter((m: any) => m.role === 'assistant').length;
+  const toolMsgs = messages.filter((m: any) => m.role === 'tool' || m.role === 'function').length;
+
+  // 构建 context messages（加上 timestamp）
+  const ctxMsgs = messages.map((m: any) => ({
+    role: m.role,
+    content: m.content,
+    timestamp: log.timestamp,
+    ...(m.tool_use_id ? { tool_use_id: m.tool_use_id } : {}),
+    ...(m.name ? { name: m.name } : {}),
+    ...(m.id ? { id: m.id } : {}),
+  }));
+
+  log.context = {
+    messages: ctxMsgs,
+    summary: {
+      totalMessages: ctxMsgs.length,
+      userMessages: userMsgs,
+      assistantMessages: assistantMsgs,
+      toolMessages: toolMsgs,
+      systemPromptLength: systemPrompt?.length ?? 0,
+      toolsCount: tools?.length ?? 0,
+      duration: 0,
+    },
+    ...(systemPrompt ? { systemPrompt } : {}),
+    ...(tools?.length ? { tools } : {}),
+  };
+
+  // 计算上下文窗口
+  const usage = (log.response?.body as any)?.usage;
+  if (usage && log.metadata?.model) {
+    const inputTokens = usage.input_tokens ?? usage.cache_read_input_tokens ?? 0;
+    const outputTokens = usage.output_tokens ?? 0;
+    const contextSize = getContextSizeForModel(log.metadata.model);
+    const totalTokens = inputTokens + outputTokens;
+    const usedPercentage = Math.min(100, Math.round((totalTokens / contextSize) * 100));
+
+    log.context.contextWindow = {
+      totalTokens,
+      contextSize,
+      usedPercentage,
+      remainingPercentage: 100 - usedPercentage,
+    };
+  }
+}
+
 
 // ==================== 日志管理 ====================
 function initLogDir(): void {
@@ -213,15 +304,6 @@ function cleanupOldLogs(): void {
 // 使用 LogManager.writeLogEntry 代替
 
 function broadcastLogEntry(entry: LogEntry): void {
-  const message = JSON.stringify({ type: 'log', data: entry });
-
-  // WebSocket 广播
-  logClients.forEach(client => {
-    if (client.readyState === 1) {
-      client.send(message);
-    }
-  });
-
   // SSE 广播
   sseClients.forEach((res: any) => {
     try {
@@ -237,7 +319,7 @@ function broadcastLogEntry(entry: LogEntry): void {
  */
 function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: number } {
   const {
-    limit = 100,
+    limit = DEFAULT_LOG_QUERY_LIMIT,
     offset = 0,
     agentType = 'all',
     subAgentType,
@@ -257,14 +339,14 @@ function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: number } {
       .filter(f => f.endsWith('.jsonl') && !f.startsWith('export_'))
       .sort()
       .reverse()
-      .slice(0, 5); // 只读最近5个文件
+      .slice(0, MAX_LOG_FILES_TO_READ);
 
     for (const file of files) {
       const filePath = join(CONFIG.logDir, file);
       const content = readFileSync(filePath, 'utf-8');
 
       // 按分隔符切分：interceptor 写入格式是 JSON + '\n---\n'
-      const chunks = content.split(/\n---\n?/);
+      const chunks = content.split(LOG_SPLIT_REGEX);
       for (const chunk of chunks) {
         const line = chunk.trim();
         if (!line) continue;
@@ -344,6 +426,9 @@ function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: number } {
 
   const total = filteredLogs.length;
 
+  // 从 request.body 构建 context
+  filteredLogs.forEach(log => buildContextFromRequest(log));
+
   // 分页
   const paginatedLogs = filteredLogs.slice(offset, offset + limit);
 
@@ -366,13 +451,14 @@ function getLogById(id: string): LogEntry | null {
       const content = readFileSync(filePath, 'utf-8');
 
       // 按分隔符切分
-      const chunks = content.split(/\n---\n?/);
+      const chunks = content.split(LOG_SPLIT_REGEX);
       for (const chunk of chunks) {
         const line = chunk.trim();
         if (!line) continue;
         try {
           const log = JSON.parse(line) as LogEntry;
           if (log.id === id) {
+            buildContextFromRequest(log);
             return log;
           }
         } catch {
@@ -399,14 +485,17 @@ app.use(express.static(join(__dirname, '../public')));
 
 // API: 状态
 app.get('/api/status', (_req, res) => {
+  const config = Config.getConfig();
+  const safeConfig = Config.getSafeConfig();
+
   res.json({
     enabled: proxyEnabled,
     running: true,
-    webPort: CONFIG.webPort,
-    proxyPort: CONFIG.proxyPort,
+    webPort: config.webPort,
+    proxyPort: config.proxyPort,
     logFile: currentLogFile,
-    connectedClients: logClients.size,
-  } as ProxyStatus);
+    groups: safeConfig.groups,
+  });
 });
 
 // API: 启用代理
@@ -458,7 +547,7 @@ app.get('/api/logs/stream', (req, res) => {
   // 心跳：每 30 秒发一次注释行，防止连接超时
   const sseHeartbeat = setInterval(() => {
     res.write(': heartbeat\n\n');
-  }, 30000);
+  }, HEARTBEAT_INTERVAL_MS);
 
   // 注册到 SSE 广播列表
   sseClients.add(res as any);
@@ -488,39 +577,6 @@ app.get('/api/logs/:id', (req, res) => {
     res.json({ log });
   } else {
     res.status(404).json({ error: 'Log not found' });
-  }
-});
-
-// API: 删除所有日志
-app.delete('/api/logs', (_req, res) => {
-  try {
-    if (!existsSync(CONFIG.logDir)) {
-      res.json({ success: true, deleted: 0 });
-      return;
-    }
-
-    const files = readdirSync(CONFIG.logDir).filter(f =>
-      f.endsWith('.jsonl')
-    );
-    let deleted = 0;
-
-    for (const file of files) {
-      try {
-        const filePath = join(CONFIG.logDir, file);
-        unlinkSync(filePath);
-        deleted++;
-      } catch (error) {
-        console.error('[AgentProxy] 删除日志文件失败:', file, error);
-      }
-    }
-
-    // 重置当前日志文件
-    currentLogFile = getLogFilePath();
-
-    res.json({ success: true, deleted });
-  } catch (error) {
-    console.error('[AgentProxy] 删除日志失败:', error);
-    res.status(500).json({ error: 'Failed to delete logs' });
   }
 });
 
@@ -628,25 +684,53 @@ app.get('/api/health', (_req, res) => {
 // API: 获取配置（脱敏）
 app.get('/api/config', (_req, res) => {
   try {
-    res.json(Config.getSafeConfig());
+    const config = Config.getConfig();
+    res.json({
+      proxyPort: config.proxyPort,
+      webPort: config.webPort,
+      groups: config.groups.map(g => ({
+        apiType: g.apiType,
+        activeProfileId: g.activeProfileId,
+        profiles: g.profiles.map(p => ({
+          id: p.id,
+          name: p.name,
+          upstreamBaseUrl: p.upstreamBaseUrl,
+          apiKeySet: p.apiKey.length > 0,
+          apiKeyPreview: p.apiKey
+                            ? p.apiKey.slice(0, API_KEY_MASK_PREFIX) + '****' + p.apiKey.slice(-API_KEY_MASK_SUFFIX)
+                            : '',
+        })),
+      })),
+    });
   } catch (error) {
     console.error('[AgentProxy] 获取配置失败:', error);
     res.status(500).json({ error: 'Failed to get config' });
   }
 });
 
-// API: 获取配置（含 apiKey，用于编辑时回填）
-app.get('/api/config/:name/full', (req, res) => {
+// API: 获取指定 profile 完整信息（含 apiKey，用于编辑时回填）
+app.get('/api/config/:apiType/:id/full', (req, res) => {
   try {
-    const profile = Config.getConfig().profiles.find(p => p.name === req.params.name);
+    const { apiType, id } = req.params;
+    const group = Config.getGroupByApiType(apiType as Config.ApiProviderType);
+
+    if (!group) {
+      res.status(404).json({ error: 'Group not found' });
+      return;
+    }
+
+    const profile = group.profiles.find(p => p.id === id);
     if (!profile) {
       res.status(404).json({ error: 'Profile not found' });
       return;
     }
+
     res.json({
+      id: profile.id,
       name: profile.name,
       upstreamBaseUrl: profile.upstreamBaseUrl,
       apiKey: profile.apiKey,
+      apiType: group.apiType,
     });
   } catch (error) {
     console.error('[AgentProxy] 获取配置详情失败:', error);
@@ -654,75 +738,191 @@ app.get('/api/config/:name/full', (req, res) => {
   }
 });
 
-// API: 更新 profile
-app.put('/api/config/profiles/:name', (req, res) => {
+// API: 创建 profile（指定 API 类型）
+app.post('/api/config/:apiType/profiles', (req, res) => {
   try {
-    const result = Config.updateProfile(req.params.name, req.body);
-    if (!result) {
-      res.status(404).json({ error: 'Profile not found' });
-      return;
-    }
-    res.json(Config.getSafeConfig());
-  } catch (error) {
-    console.error('[AgentProxy] 更新配置失败:', error);
-    res.status(500).json({ error: 'Failed to update config' });
-  }
-});
+    const { apiType } = req.params;
+    const { name, upstreamBaseUrl, apiKey } = req.body;
 
-// API: 创建 profile
-app.post('/api/config/profiles', (req, res) => {
-  try {
-    const result = Config.createProfile(req.body);
-    if (!result) {
-      res.status(409).json({ error: 'Profile already exists' });
+    if (!name || !upstreamBaseUrl) {
+      res.status(400).json({ error: 'name and upstreamBaseUrl are required' });
       return;
     }
-    res.json(Config.getSafeConfig());
+
+    const result = Config.createProfile(
+      apiType as Config.ApiProviderType,
+      { name, upstreamBaseUrl, apiKey: apiKey || '' }
+    );
+
+    if (!result) {
+      res.status(409).json({ error: 'Profile already exists or invalid apiType' });
+      return;
+    }
+
+    const config = Config.getConfig();
+    const group = config.groups.find(g => g.apiType === apiType);
+    res.json({
+      apiType: group?.apiType,
+      activeProfileId: group?.activeProfileId,
+      profiles: group?.profiles.map(p => ({
+        id: p.id,
+        name: p.name,
+        upstreamBaseUrl: p.upstreamBaseUrl,
+        apiKeySet: p.apiKey.length > 0,
+        apiKeyPreview: p.apiKey
+                          ? p.apiKey.slice(0, API_KEY_MASK_PREFIX) + '****' + p.apiKey.slice(-API_KEY_MASK_SUFFIX)
+                          : '',
+      })) || [],
+    });
   } catch (error) {
     console.error('[AgentProxy] 创建配置失败:', error);
     res.status(500).json({ error: 'Failed to create config' });
   }
 });
 
-// API: 切换激活 profile
-app.post('/api/config/active', (req, res) => {
+// API: 更新 profile（指定 API 类型）
+app.put('/api/config/:apiType/profiles/:id', (req, res) => {
   try {
-    const result = Config.setActiveProfile(req.body.name);
+    const { apiType, id } = req.params;
+    const { upstreamBaseUrl, apiKey } = req.body;
+
+    const result = Config.updateProfile(
+      apiType as Config.ApiProviderType,
+      id,
+      { upstreamBaseUrl, apiKey }
+    );
+
     if (!result) {
-      res.status(404).json({ error: 'Profile not found' });
+      res.status(404).json({ error: 'Profile not found or invalid apiType' });
       return;
     }
-    res.json(Config.getSafeConfig());
+
+    const config = Config.getConfig();
+    const group = config.groups.find(g => g.apiType === apiType);
+    res.json({
+      apiType: group?.apiType,
+      activeProfileId: group?.activeProfileId,
+      profiles: group?.profiles.map(p => ({
+        id: p.id,
+        name: p.name,
+        upstreamBaseUrl: p.upstreamBaseUrl,
+        apiKeySet: p.apiKey.length > 0,
+        apiKeyPreview: p.apiKey
+                          ? p.apiKey.slice(0, API_KEY_MASK_PREFIX) + '****' + p.apiKey.slice(-API_KEY_MASK_SUFFIX)
+                          : '',
+      })) || [],
+    });
+  } catch (error) {
+    console.error('[AgentProxy] 更新配置失败:', error);
+    res.status(500).json({ error: 'Failed to update config' });
+  }
+});
+
+// API: 设置激活 profile（指定 API 类型）
+app.post('/api/config/:apiType/active', (req, res) => {
+  try {
+    const { apiType } = req.params;
+    const { profileId } = req.body;
+
+    if (!profileId) {
+      res.status(400).json({ error: 'profileId is required' });
+      return;
+    }
+
+    const result = Config.setActiveProfile(apiType as Config.ApiProviderType, profileId);
+
+    if (!result) {
+      res.status(404).json({ error: 'Profile not found or invalid apiType' });
+      return;
+    }
+
+    const config = Config.getConfig();
+    const group = config.groups.find(g => g.apiType === apiType);
+    res.json({
+      apiType: group?.apiType,
+      activeProfileId: group?.activeProfileId,
+      profiles: group?.profiles.map(p => ({
+        id: p.id,
+        name: p.name,
+        upstreamBaseUrl: p.upstreamBaseUrl,
+        apiKeySet: p.apiKey.length > 0,
+        apiKeyPreview: p.apiKey
+                          ? p.apiKey.slice(0, API_KEY_MASK_PREFIX) + '****' + p.apiKey.slice(-API_KEY_MASK_SUFFIX)
+                          : '',
+      })) || [],
+    });
   } catch (error) {
     console.error('[AgentProxy] 切换配置失败:', error);
     res.status(500).json({ error: 'Failed to switch config' });
   }
 });
 
-// API: 重命名 profile
-app.put('/api/config/profiles/:name/rename', (req, res) => {
+// API: 重命名 profile（指定 API 类型）
+app.put('/api/config/:apiType/profiles/:id/rename', (req, res) => {
   try {
-    const result = Config.renameProfile(req.params.name, req.body.newName);
-    if (!result) {
-      res.status(409).json({ error: 'Rename failed' });
+    const { apiType, id } = req.params;
+    const { newName } = req.body;
+
+    if (!newName) {
+      res.status(400).json({ error: 'newName is required' });
       return;
     }
-    res.json(Config.getSafeConfig());
+
+    const result = Config.renameProfile(apiType as Config.ApiProviderType, id, newName);
+
+    if (!result) {
+      res.status(409).json({ error: 'Rename failed (name conflict or profile not found)' });
+      return;
+    }
+
+    const config = Config.getConfig();
+    const group = config.groups.find(g => g.apiType === apiType);
+    res.json({
+      apiType: group?.apiType,
+      activeProfileId: group?.activeProfileId,
+      profiles: group?.profiles.map(p => ({
+        id: p.id,
+        name: p.name,
+        upstreamBaseUrl: p.upstreamBaseUrl,
+        apiKeySet: p.apiKey.length > 0,
+        apiKeyPreview: p.apiKey
+                          ? p.apiKey.slice(0, API_KEY_MASK_PREFIX) + '****' + p.apiKey.slice(-API_KEY_MASK_SUFFIX)
+                          : '',
+      })) || [],
+    });
   } catch (error) {
     console.error('[AgentProxy] 重命名配置失败:', error);
     res.status(500).json({ error: 'Failed to rename config' });
   }
 });
 
-// API: 删除 profile
-app.delete('/api/config/profiles/:name', (req, res) => {
+// API: 删除 profile（指定 API 类型）
+app.delete('/api/config/:apiType/profiles/:id', (req, res) => {
   try {
-    const result = Config.deleteProfile(req.params.name);
+    const { apiType, id } = req.params;
+
+    const result = Config.deleteProfile(apiType as Config.ApiProviderType, id);
+
     if (!result) {
-      res.status(400).json({ error: 'Cannot delete profile' });
+      res.status(400).json({ error: 'Cannot delete profile (last profile or not found)' });
       return;
     }
-    res.json(Config.getSafeConfig());
+
+    const config = Config.getConfig();
+    const group = config.groups.find(g => g.apiType === apiType);
+    res.json({
+      apiType: group?.apiType,
+      activeProfileId: group?.activeProfileId,
+      profiles: group?.profiles.map(p => ({
+        id: p.id,
+        name: p.name,
+        upstreamBaseUrl: p.upstreamBaseUrl,
+        apiKeySet: p.apiKey.length > 0,
+        apiKeyPreview: p.apiKey
+                          ? p.apiKey.slice(0, API_KEY_MASK_PREFIX) + '****' + p.apiKey.slice(-API_KEY_MASK_SUFFIX)
+                          : '',
+      })) || [],
+    });
   } catch (error) {
     console.error('[AgentProxy] 删除配置失败:', error);
     res.status(500).json({ error: 'Failed to delete config' });
@@ -732,17 +932,14 @@ app.delete('/api/config/profiles/:name', (req, res) => {
 // API: 测试上游连接
 app.post('/api/config/test', async (req, res) => {
   try {
-    const { url, apiKey } = req.body;
-    if (!url) {
-      res.status(400).json({ error: 'URL is required' });
+    const { apiType, upstreamBaseUrl, apiKey } = req.body;
+
+    if (!apiType || !upstreamBaseUrl) {
+      res.status(400).json({ error: 'apiType and upstreamBaseUrl are required' });
       return;
     }
 
     const startTime = Date.now();
-
-    // 检测 API 类型：OpenAI 格式还是 Anthropic 格式
-    const isOpenAI = url.includes('/v1/chat/completions') || url.includes('openai');
-    const baseUrl = url.replace(/\/v1\/(chat\/completions|completions|messages).*$/, '');
 
     let testUrl: string;
     let testBody: any;
@@ -750,25 +947,48 @@ app.post('/api/config/test', async (req, res) => {
       'Content-Type': 'application/json',
     };
 
-    if (isOpenAI) {
-      // OpenAI 格式
-      testUrl = `${baseUrl}/v1/chat/completions`;
-      headers['authorization'] = `Bearer ${apiKey || ''}`;
-      testBody = {
-        model: 'gpt-4o-mini',
-        max_tokens: 1,
-        messages: [{ role: 'user', content: 'hi' }],
-      };
-    } else {
-      // Anthropic 格式
-      testUrl = `${baseUrl}/v1/messages`;
-      headers['anthropic-version'] = '2023-06-01';
-      headers['x-api-key'] = apiKey || '';
-      testBody = {
-        model: 'claude-sonnet-4-6',
-        max_tokens: 1,
-        messages: [{ role: 'user', content: 'hi' }],
-      };
+    switch (apiType as Config.ApiProviderType) {
+      case 'anthropic-messages':
+        testUrl = `${upstreamBaseUrl}/v1/messages`;
+        headers['anthropic-version'] = ANTHROPIC_API_VERSION;
+        headers['x-api-key'] = apiKey || '';
+        testBody = {
+          model: TEST_MODELS['anthropic-messages'],
+          max_tokens: TEST_MAX_TOKENS,
+          messages: [{ role: 'user', content: TEST_REQUEST_CONTENT }],
+        };
+        break;
+
+      case 'openai-chat':
+        testUrl = `${upstreamBaseUrl}/v1/chat/completions`;
+        headers['authorization'] = `Bearer ${apiKey || ''}`;
+        testBody = {
+          model: TEST_MODELS['openai-chat'],
+          max_tokens: TEST_MAX_TOKENS,
+          messages: [{ role: 'user', content: TEST_REQUEST_CONTENT }],
+        };
+        break;
+
+      case 'openai-responses':
+        testUrl = `${upstreamBaseUrl}/v1/responses`;
+        headers['authorization'] = `Bearer ${apiKey || ''}`;
+        testBody = {
+          model: TEST_MODELS['openai-responses'],
+          input: TEST_REQUEST_CONTENT,
+        };
+        break;
+
+      case 'gemini-generate':
+        // Gemini API key 通过 URL 参数传递
+        testUrl = `${upstreamBaseUrl}/v1beta/models/${TEST_MODELS['gemini-generate']}:generateContent?key=${apiKey || ''}`;
+        testBody = {
+          contents: [{ parts: [{ text: TEST_REQUEST_CONTENT }] }],
+        };
+        break;
+
+      default:
+        res.status(400).json({ error: 'Invalid apiType' });
+        return;
     }
 
     const response = await fetch(testUrl, {
@@ -798,95 +1018,6 @@ app.post('/api/config/test', async (req, res) => {
 // ==================== HTTP 服务器 ====================
 const server = createHttpServer(app);
 
-// WebSocket 升级
-const wss = new WebSocketServer({ server });
-
-/**
- * 启动心跳机制
- */
-function startHeartbeat(): void {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-  }
-
-  heartbeatTimer = setInterval(() => {
-    const message = JSON.stringify({ type: 'ping', timestamp: Date.now() });
-    logClients.forEach(client => {
-      if (client.readyState === 1) {
-        // OPEN
-        try {
-          client.send(message);
-        } catch (error) {
-          console.error('[AgentProxy] 发送心跳失败:', error);
-          logClients.delete(client);
-        }
-      } else {
-        // 移除非活动连接
-        logClients.delete(client);
-      }
-    });
-  }, CONFIG.heartbeatInterval);
-
-  console.log('[AgentProxy] 心跳机制已启动');
-}
-
-/**
- * 停止心跳机制
- */
-function stopHeartbeat(): void {
-  if (heartbeatTimer) {
-    clearInterval(heartbeatTimer);
-    heartbeatTimer = null;
-  }
-}
-
-wss.on('connection', (ws: WebSocket) => {
-  logClients.add(ws);
-  console.log('[AgentProxy] WebSocket 客户端连接，当前连接数:', logClients.size);
-
-  // 发送欢迎消息
-  try {
-    ws.send(
-      JSON.stringify({
-        type: 'connected',
-        timestamp: Date.now(),
-        clients: logClients.size,
-      })
-    );
-  } catch (error) {
-    console.error('[AgentProxy] 发送欢迎消息失败:', error);
-  }
-
-  ws.on('close', () => {
-    logClients.delete(ws);
-    console.log(
-      '[AgentProxy] WebSocket 客户端断开，当前连接数:',
-      logClients.size
-    );
-  });
-
-  ws.on('message', (data: Buffer) => {
-    try {
-      const msg = JSON.parse(data.toString());
-
-      if (msg.type === 'pong') {
-        // 收到 pong，连接正常
-        // 可以更新该客户端的最后活跃时间
-      } else if (msg.type === 'ping') {
-        // 响应客户端的 ping
-        ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
-      }
-    } catch (error) {
-      console.error('[AgentProxy] WebSocket 消息解析失败:', error);
-    }
-  });
-
-  ws.on('error', error => {
-    console.error('[AgentProxy] WebSocket 错误:', error);
-    logClients.delete(ws);
-  });
-});
-
 // ==================== 启动函数 ====================
 export async function startServer(): Promise<void> {
   initLogDir();
@@ -900,8 +1031,8 @@ export async function startServer(): Promise<void> {
   // 清理过期日志
   cleanupOldLogs();
 
-  // 启动代理服务器（从全局配置读取端口）
-  const proxyPort = config.proxyPort ?? CONFIG.proxyPort;
+  // 启动代理服务器（从配置读取端口）
+  const proxyPort = config.proxyPort;
   try {
     proxyServer = await startProxyServer({ port: proxyPort });
     console.log(`[AgentProxy] 代理服务器已启动，端口: ${proxyPort}`);
@@ -918,19 +1049,16 @@ export async function startServer(): Promise<void> {
     console.error('[AgentProxy] 拦截器启动失败:', error);
   }
 
-  // 启动心跳
-  startHeartbeat();
-
+  const webPort = config.webPort;
   return new Promise<void>((resolve, reject) => {
-    server.listen(CONFIG.webPort, '127.0.0.1', () => {
-      const config = Config.getConfig();
-      console.log(`[AgentProxy] Web UI: http://127.0.0.1:${CONFIG.webPort}`);
-      console.log(`[AgentProxy] 代理端口: ${config.proxyPort ?? CONFIG.proxyPort}`);
+    server.listen(webPort, SERVER_HOST, () => {
+      console.log(`[AgentProxy] Web UI: http://${SERVER_HOST}:${webPort}`);
+      console.log(`[AgentProxy] 代理端口: ${proxyPort}`);
       console.log(`[AgentProxy] 日志文件: ${currentLogFile}`);
       console.log(`[AgentProxy] 日志目录: ${CONFIG.logDir}`);
 
       // 自动打开浏览器
-      open(`http://127.0.0.1:${CONFIG.webPort}`).catch(err => {
+      open(`http://${SERVER_HOST}:${webPort}`).catch(err => {
         console.warn('[AgentProxy] 无法自动打开浏览器:', err.message);
       });
 
@@ -949,18 +1077,14 @@ export function getServerStatus(): ProxyStatus {
   return {
     enabled: proxyEnabled,
     running: true,
-    webPort: CONFIG.webPort,
-    proxyPort: config.proxyPort ?? CONFIG.proxyPort,
+    webPort: config.webPort,
+    proxyPort: config.proxyPort,
     logFile: currentLogFile,
-    connectedClients: logClients.size,
   };
 }
 
 export function shutdownServer(): void {
   console.log('[AgentProxy] 关闭服务器...');
-
-  // 停止心跳
-  stopHeartbeat();
 
   // 关闭代理服务器
   if (proxyServer) {
@@ -968,16 +1092,6 @@ export function shutdownServer(): void {
       console.error('[AgentProxy] 关闭代理服务器失败:', err);
     });
   }
-
-  // 关闭所有 WebSocket 连接
-  logClients.forEach(client => {
-    try {
-      client.close();
-    } catch (error) {
-      console.error('[AgentProxy] 关闭 WebSocket 连接失败:', error);
-    }
-  });
-  logClients.clear();
 
   // 关闭所有 SSE 连接
   sseClients.forEach((res: any) => {

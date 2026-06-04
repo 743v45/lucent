@@ -6,8 +6,8 @@
 
 import { mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
 import { LogEntry } from '../src/types.js';
+import { LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES } from './constants.js';
 
 export interface LogExportOptions {
   format: 'jsonl' | 'markdown';
@@ -20,9 +20,7 @@ export interface LogImportOptions {
   validate?: boolean; // 是否验证日志格式
 }
 
-const LOG_DIR = join(homedir(), '.agentproxy', 'logs');
-const MAX_LOG_FILE_SIZE = 100 * 1024 * 1024; // 100MB
-const MAX_LOG_FILES = 50; // 最多保留50个日志文件
+// 常量从 constants.ts 导入
 
 /**
  * 初始化日志目录
@@ -377,13 +375,13 @@ function convertToMarkdown(logs: LogEntry[], includeMeta?: boolean): string {
 
     if (log.tokenUsage) {
       lines.push(`**Token 使用**:\n`);
-      lines.push(`  - Input: ${log.tokenUsage.inputTokens}\n`);
-      lines.push(`  - Output: ${log.tokenUsage.outputTokens}\n`);
-      if (log.tokenUsage.cacheReadTokens) {
-        lines.push(`  - Cache Read: ${log.tokenUsage.cacheReadTokens}\n`);
+      lines.push(`  - Input: ${log.tokenUsage.input_tokens}\n`);
+      lines.push(`  - Output: ${log.tokenUsage.output_tokens}\n`);
+      if (log.tokenUsage.cache_read_tokens) {
+        lines.push(`  - Cache Read: ${log.tokenUsage.cache_read_tokens}\n`);
       }
-      if (log.tokenUsage.cacheCreationTokens) {
-        lines.push(`  - Cache Write: ${log.tokenUsage.cacheCreationTokens}\n`);
+      if (log.tokenUsage.cache_creation_tokens) {
+        lines.push(`  - Cache Write: ${log.tokenUsage.cache_creation_tokens}\n`);
       }
     }
 

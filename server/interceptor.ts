@@ -9,16 +9,32 @@
  * - 支持流式响应捕获
  */
 
-import { appendFileSync, mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
 
+import {
+  LOG_DIR,
+  MAX_LOG_FILE_SIZE,
+  DELTA_CHECKPOINT_INTERVAL,
+  API_PATH_REGEX,
+  API_KEY_MASK_THRESHOLD,
+  API_KEY_MASK_PREFIX,
+  API_KEY_MASK_SUFFIX,
+  LOG_ENTRY_SEPARATOR,
+  INTERNAL_HEADERS,
+  PROXY_TRACE_HEADER,
+  MAX_BODY_PARSE_FAILURE_LENGTH,
+  MAX_STREAM_ERROR_BODY_LENGTH,
+  MAX_RESPONSE_BODY_LENGTH,
+} from './constants.js';
+
 // ==================== 配置 ====================
 const INTERCEPTOR_CONFIG = {
-  logDir: join(homedir(), '.agentproxy', 'logs'),
-  maxLogFileSize: 100 * 1024 * 1024, // 100MB
+  logDir: LOG_DIR,
+  maxLogFileSize: MAX_LOG_FILE_SIZE,
   deltaStorageEnabled: true, // 增量存储开关
-  checkpointInterval: 10, // 每 N 条 mainAgent 请求写一个完整 checkpoint
+  checkpointInterval: DELTA_CHECKPOINT_INTERVAL,
 } as const;
 
 // ==================== 状态 ====================
@@ -29,6 +45,8 @@ let _lastTailFp = ''; // 截至最近一次请求的末位 message 指纹
 let _mainAgentDeltaCount = 0; // mainAgent 请求计数器
 
 // ==================== 类型定义 ====================
+export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses' | 'gemini-generate';
+
 export interface LogEntry {
   id: string;
   timestamp: string;
@@ -37,17 +55,25 @@ export interface LogEntry {
   method: string;
   headers: Record<string, string>;
   body: any;
+  request?: {
+    method: string;
+    url: string;
+    headers: Record<string, string>;
+    body: any;
+  };
   response: {
     status: number;
     statusText: string;
     headers: Record<string, string>;
     body: any;
-  };
+  } | null;
   duration: number;
   isStream: boolean;
   mainAgent: boolean;
+  inProgress?: boolean;
   agentType?: 'main' | 'sub';
   subAgentType?: 'plan' | 'search' | 'bash' | 'workflow' | 'unknown';
+  apiType?: ApiProviderType;
   // Delta 存储字段
   _deltaFormat?: number;
   _totalMessageCount?: number;
@@ -106,14 +132,25 @@ function initLogFile(): void {
  * 检查是否为 Anthropic API 路径
  */
 function isAnthropicApiPath(url: string): boolean {
-  return /\/v1\/messages|\/api\/v1\/messages/.test(url);
+  return API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url);
 }
 
 /**
  * 检查是否为 OpenAI API 路径
  */
 function isOpenAIApiPath(url: string): boolean {
-  return /\/v1\/(chat\/completions|completions)/.test(url);
+  return API_PATH_REGEX.OPENAI_CHAT.test(url);
+}
+
+/**
+ * 检测 API 类型
+ */
+function detectApiType(url: string): ApiProviderType | null {
+  if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) return 'openai-responses';
+  if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) return 'anthropic-messages';
+  if (API_PATH_REGEX.OPENAI_CHAT.test(url)) return 'openai-chat';
+  if (API_PATH_REGEX.GEMINI_GENERATE.test(url)) return 'gemini-generate';
+  return null;
 }
 
 /**
@@ -145,7 +182,7 @@ function isMainAgentRequest(body: any): boolean {
 /**
  * 解析 Agent 类型
  */
-function parseAgentType(body: any, isMain: boolean): { agentType: 'main' | 'sub'; subAgentType?: string } {
+function parseAgentType(body: any, isMain: boolean): { agentType: 'main' | 'sub'; subAgentType?: 'plan' | 'search' | 'bash' | 'workflow' | 'unknown' } {
   if (isMain) {
     return { agentType: 'main' };
   }
@@ -203,7 +240,13 @@ function sanitizeHeaders(headers: Record<string, string>): Record<string, string
   // 脱敏 x-api-key
   if (safe['x-api-key']) {
     const k = safe['x-api-key'];
-    safe['x-api-key'] = k.length > 12 ? `${k.slice(0, 8)}****${k.slice(-4)}` : '****';
+    safe['x-api-key'] = k.length > API_KEY_MASK_THRESHOLD ? `${k.slice(0, API_KEY_MASK_PREFIX)}****${k.slice(-API_KEY_MASK_SUFFIX)}` : '****';
+  }
+
+  // 脱敏 x-goog-api-key
+  if (safe['x-goog-api-key']) {
+    const k = safe['x-goog-api-key'];
+    safe['x-goog-api-key'] = k.length > API_KEY_MASK_THRESHOLD ? `${k.slice(0, API_KEY_MASK_PREFIX)}****${k.slice(-API_KEY_MASK_SUFFIX)}` : '****';
   }
 
   // 脱敏 authorization
@@ -213,7 +256,7 @@ function sanitizeHeaders(headers: Record<string, string>): Record<string, string
     if (spaceIdx > 0) {
       const scheme = v.slice(0, spaceIdx);
       const token = v.slice(spaceIdx + 1);
-      safe['authorization'] = scheme + ' ' + (token.length > 12 ? `${token.slice(0, 8)}****${token.slice(-4)}` : '****');
+      safe['authorization'] = scheme + ' ' + (token.length > API_KEY_MASK_THRESHOLD ? `${token.slice(0, API_KEY_MASK_PREFIX)}****${token.slice(-API_KEY_MASK_SUFFIX)}` : '****');
     } else {
       safe['authorization'] = '****';
     }
@@ -231,7 +274,7 @@ function writeLogEntry(entry: LogEntry): void {
   }
 
   try {
-    const line = JSON.stringify(entry) + '\n---\n';
+    const line = JSON.stringify(entry) + LOG_ENTRY_SEPARATOR;
     appendFileSync(currentLogFile!, line);
   } catch (error) {
     console.error('[AgentProxy Interceptor] 写入日志失败:', error);
@@ -245,7 +288,6 @@ function checkAndRotateLogFile(): void {
   if (!currentLogFile) return;
 
   try {
-    const { statSync } = require('node:fs');
     if (!existsSync(currentLogFile) || statSync(currentLogFile).size < INTERCEPTOR_CONFIG.maxLogFileSize) {
       return;
     }
@@ -396,6 +438,114 @@ function assembleStreamMessage(events: any[]): any {
     };
   }
 
+  // ---- Gemini 格式 ----
+  const geminiEvents = events.filter((e: any) => e.candidates);
+  if (geminiEvents.length > 0) {
+    let text = '';
+    const functionCalls: any[] = [];
+    let usage: any = {};
+
+    for (const event of geminiEvents) {
+      // 拼接文本内容
+      if (event.candidates?.[0]?.content?.parts) {
+        for (const part of event.candidates[0].content.parts) {
+          if (part.text) text += part.text;
+          // 累积 functionCall
+          if (part.functionCall) {
+            functionCalls.push(part.functionCall);
+          }
+        }
+      }
+      // 从最后一个事件取 usageMetadata
+      if (event.usageMetadata) {
+        usage = {
+          input_tokens: event.usageMetadata.promptTokenCount || 0,
+          output_tokens: event.usageMetadata.candidatesTokenCount || 0,
+          total_tokens: event.usageMetadata.totalTokenCount || 0,
+        };
+      }
+    }
+
+    const content: any[] = text ? [{ type: 'text', text }] : [];
+    // 转换 functionCalls 格式
+    for (const fc of functionCalls) {
+      content.push({
+        type: 'tool_use',
+        id: `call_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
+        name: fc.name,
+        input: fc.args || {},
+      });
+    }
+
+    return {
+      type: 'gemini',
+      role: 'assistant',
+      content,
+      usage,
+    };
+  }
+
+  // ---- OpenAI Responses API 格式 ----
+  const responseEvents = events.filter((e: any) => typeof e.type === 'string' && e.type.startsWith('response.'));
+  if (responseEvents.length > 0) {
+    let text = '';
+    let toolCalls: any[] = [];
+    let usage: any = {};
+
+    for (const event of responseEvents) {
+      // 从 response.output_text.delta 拼接文本
+      if (event.type === 'response.output_text.delta' && event.delta) {
+        text += event.delta;
+      }
+      // 从 response.function_call_arguments.delta 拼接工具调用
+      if (event.type === 'response.function_call_arguments.delta' && event.delta) {
+        const callId = event.call_id;
+        const args = event.delta;
+        if (!toolCalls[callId]) {
+          toolCalls[callId] = { id: callId, name: '', arguments: '' };
+        }
+        toolCalls[callId].arguments += args;
+      }
+      if (event.type === 'response.function_call_name.delta' && event.delta && event.call_id) {
+        const callId = event.call_id;
+        if (!toolCalls[callId]) {
+          toolCalls[callId] = { id: callId, name: '', arguments: '' };
+        }
+        toolCalls[callId].name += event.delta;
+      }
+      // 从 response.completed 取 usage
+      if (event.type === 'response.completed' && event.response?.usage) {
+        usage = event.response.usage;
+      }
+    }
+
+    const content: any[] = text ? [{ type: 'text', text }] : [];
+    for (const tc of toolCalls) {
+      if (tc) {
+        // 尝试解析 JSON arguments
+        let parsedArgs = tc.arguments;
+        try {
+          parsedArgs = JSON.parse(tc.arguments);
+        } catch {
+          // 保持字符串
+        }
+        content.push({
+          type: 'tool_use',
+          id: tc.id,
+          name: tc.name,
+          input: parsedArgs,
+        });
+      }
+    }
+
+    return {
+      type: 'responses',
+      role: 'assistant',
+      content,
+      usage,
+    };
+  }
+
   // 未知格式，返回原始事件
   return { events };
 }
@@ -454,12 +604,12 @@ export function setupInterceptor(): void {
 
       // 检查是否为需要拦截的请求
       const isInternalRequest = options?.headers && (
-        (options.headers as any)['x-agentproxy-internal'] ||
-        (options.headers as any)['x-cc-viewer-internal']
+        (options.headers as any)[INTERNAL_HEADERS[0]] ||
+        (options.headers as any)[INTERNAL_HEADERS[1]]
       );
 
       const headers = options?.headers || {};
-      const isProxyTrace = headers['x-agentproxy-trace'] === 'true' || headers['x-agentproxy-trace'] === true;
+      const isProxyTrace = (headers as any)[PROXY_TRACE_HEADER] === 'true' || (headers as any)[PROXY_TRACE_HEADER] === true;
 
       const shouldIntercept = !isInternalRequest && (
         isProxyTrace ||
@@ -467,13 +617,15 @@ export function setupInterceptor(): void {
         urlStr.includes('claude') ||
         urlStr.includes('openai') ||
         isAnthropicApiPath(urlStr) ||
-        isOpenAIApiPath(urlStr)
+        isOpenAIApiPath(urlStr) ||
+        detectApiType(urlStr) !== null ||
+        urlStr.includes('generativelanguage')
       );
 
       if (shouldIntercept) {
         // 清理代理标记 header
         if (isProxyTrace && options?.headers) {
-          delete (options.headers as any)['x-agentproxy-trace'];
+          delete (options.headers as any)[PROXY_TRACE_HEADER];
         }
 
         // 解析请求体
@@ -482,7 +634,7 @@ export function setupInterceptor(): void {
           try {
             body = JSON.parse(options.body as string);
           } catch {
-            body = String(options.body).slice(0, 500);
+            body = String(options.body).slice(0, MAX_BODY_PARSE_FAILURE_LENGTH);
           }
         }
 
@@ -512,28 +664,35 @@ export function setupInterceptor(): void {
 
         // 从 body 中提取模型和提供商信息
         const model = body?.model || 'unknown';
-        const provider = urlStr.includes('anthropic') || urlStr.includes('claude') ? 'claude' :
-                       urlStr.includes('openai') ? 'openai' : 'unknown';
+        const detectedApiType = detectApiType(urlStr);
+        const provider = detectedApiType ? detectedApiType.split('-')[0] :
+                       urlStr.includes('anthropic') || urlStr.includes('claude') ? 'claude' :
+                       urlStr.includes('openai') ? 'openai' :
+                       urlStr.includes('generativelanguage') ? 'gemini' : 'unknown';
 
         requestEntry = {
           id: requestId,
           timestamp: new Date().toISOString(),
           project: basename(getCurrentProjectDir()),
-          request: {
-            method: options?.method || 'GET',
-            url: urlStr,
-            headers: safeHeaders,
-            body,
-          },
+          url: urlStr,
+          method: options?.method || 'GET',
+          headers: safeHeaders,
+          body,
           response: null as any,
+          duration: 0,
+          isStream,
+          mainAgent: isMain,
           agentType,
           subAgentType,
-          duration: 0,
-          metadata: {
-            model,
-            provider,
-            stream: isStream,
-          },
+          apiType: detectedApiType || undefined,
+          _deltaFormat: undefined,
+          _totalMessageCount: undefined,
+          _conversationId: undefined,
+          _isCheckpoint: undefined,
+          _inPlaceReplaceDetected: undefined,
+          proxyProfile: undefined,
+          proxyUrl: undefined,
+          error: undefined,
         };
 
         // Delta 存储处理
@@ -596,6 +755,7 @@ export function setupInterceptor(): void {
         }
 
         // 写入在途请求标记
+        if (!requestEntry) return originalFetch.call(this, url, options);
         requestEntry.inProgress = true;
         writeLogEntry({ ...requestEntry } as LogEntry);
       }
@@ -604,24 +764,25 @@ export function setupInterceptor(): void {
       const response = await originalFetch.call(this, url, options);
 
       if (requestEntry) {
+        const entry = requestEntry; // const alias for closures
         const duration = Date.now() - startTime;
-        requestEntry.duration = duration;
-        delete (requestEntry as any).inProgress;
+        entry.duration = duration;
+        delete (entry as any).inProgress;
 
         // 检查是否为流式响应
-        const isStreamResponse = requestEntry.request.body?.stream === true;
+        const isStreamResponse = entry.request?.body?.stream === true;
 
         // 处理流式响应
         if (isStreamResponse) {
           try {
-            requestEntry.response = {
+            entry.response = {
               status: response.status,
               statusText: response.statusText,
               headers: Object.fromEntries(response.headers.entries()),
               body: { events: [] },
             };
 
-            const originalBody = response.body;
+            const originalBody = response.body!;
             const reader = originalBody.getReader();
             const decoder = new TextDecoder();
             let streamedChunks: string[] = [];
@@ -666,21 +827,21 @@ export function setupInterceptor(): void {
 
                         // 组装完整消息
                         const assembledMessage = assembleStreamMessage(events);
-                        requestEntry.response.body = assembledMessage || fullContent;
+                        entry.response!.body = assembledMessage || fullContent;
 
-                        writeLogEntry(requestEntry);
+                        writeLogEntry(entry);
                         commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
 
                         // 释放内存
                         streamedChunks = [];
                         streamedContentLen = 0;
-                        requestEntry.response = null;
+                        entry.response = null;
                       } catch (err) {
-                        requestEntry.response.body = fullContent.slice(0, 1000);
-                        writeLogEntry(requestEntry);
+                        entry.response!.body = fullContent.slice(0, MAX_STREAM_ERROR_BODY_LENGTH);
+                        writeLogEntry(entry);
                         commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
                         streamedChunks = [];
-                        requestEntry.response = null;
+                        entry.response = null;
                       }
 
                       controller.close();
@@ -704,7 +865,7 @@ export function setupInterceptor(): void {
               headers: response.headers,
             });
           } catch (err) {
-            requestEntry.response = {
+            entry.response = {
               status: response.status,
               statusText: response.statusText,
               headers: Object.fromEntries(response.headers.entries()),
@@ -723,10 +884,10 @@ export function setupInterceptor(): void {
             try {
               responseData = JSON.parse(responseText);
             } catch {
-              responseData = responseText.slice(0, 1000);
+              responseData = responseText.slice(0, MAX_RESPONSE_BODY_LENGTH);
             }
 
-            requestEntry.response = {
+            entry.response = {
               status: response.status,
               statusText: response.statusText,
               headers: Object.fromEntries(response.headers.entries()),
