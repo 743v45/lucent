@@ -187,28 +187,63 @@ export interface ContextWindowInfo {
 
 // ==================== 代理配置 ====================
 
+/**
+ * API 提供商类型
+ */
+export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses' | 'gemini-generate';
+
+/**
+ * API 类型标签映射
+ */
+export const API_TYPE_LABELS: Record<ApiProviderType, string> = {
+  'anthropic-messages': 'Anthropic Messages',
+  'openai-chat': 'OpenAI Chat',
+  'openai-responses': 'OpenAI Responses',
+  'gemini-generate': 'Gemini',
+};
+
+/**
+ * 代理配置 profile（完整信息，含 apiKey）
+ */
 export interface ProxyProfile {
+  id: string;            // 简单递增 ID，如 '1', '2', '3'
   name: string;
   upstreamBaseUrl: string;
   apiKey: string;
 }
 
-// API 返回的脱敏 profile
+/**
+ * API 返回的脱敏 profile
+ */
 export interface SafeProxyProfile {
+  id: string;
   name: string;
   upstreamBaseUrl: string;
   apiKeySet: boolean;
   apiKeyPreview: string;
 }
 
-export interface ProxyConfig {
-  proxyPort: number; // 全局代理端口
-  activeProfile?: string; // UI 记忆上次选择的 profile
+/**
+ * 代理分组（按 API 类型分组）
+ */
+export interface ProxyGroup {
+  apiType: ApiProviderType;
   profiles: SafeProxyProfile[];
+  activeProfileId: string;
+}
+
+/**
+ * 全局代理配置（脱敏）
+ */
+export interface ProxyConfig {
+  proxyPort: number;     // 代理端口，默认 7048
+  webPort: number;       // Web UI 端口，默认 7049
+  groups: ProxyGroup[];
 }
 
 // 编辑时返回的完整 profile
 export interface ProfileFull {
+  id: string;
   name: string;
   upstreamBaseUrl: string;
   apiKey: string;

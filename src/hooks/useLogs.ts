@@ -17,7 +17,7 @@ export function useLogs() {
       setError(null);
       const data = await getLogs();
       // 转换 API 返回的数据格式为 LogEntry 格式
-      const formattedLogs = (data.logs || []).map((log): LogEntry => ({
+      const formattedLogs = (data.logs || []).map((log: any): LogEntry => ({
         id: log.id,
         timestamp: log.timestamp,
         request: {
@@ -35,6 +35,9 @@ export function useLogs() {
         subAgentType: log.subAgentType as LogEntry['subAgentType'],
         duration: log.duration,
         metadata: log.metadata as LogEntry['metadata'],
+        tokenUsage: log.tokenUsage as LogEntry['tokenUsage'],
+        kvCache: log.kvCache as LogEntry['kvCache'],
+        context: log.context as LogEntry['context'],
         error: log.error,
       }));
       setLogs(formattedLogs);

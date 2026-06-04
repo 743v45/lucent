@@ -315,6 +315,52 @@ function broadcastLogEntry(entry: LogEntry): void {
 }
 
 /**
+ * 将拦截器写入的扁平格式归一化为前端期望的嵌套格式
+ *
+ * 拦截器写入: { url, method, headers, body, response, ... }
+ * 前端期望:   { request: { url, method, headers, body }, response, metadata, ... }
+ */
+function normalizeLogEntry(raw: any): LogEntry {
+  // 已经是嵌套格式（有 request 属性）则跳过
+  if (raw.request && typeof raw.request === 'object') {
+    return raw as LogEntry;
+  }
+
+  const body = raw.body || {};
+  const provider = raw.apiType === 'openai-chat' || raw.apiType === 'openai-responses'
+    ? 'openai'
+    : raw.apiType === 'anthropic-messages' || raw.url?.includes('anthropic')
+      ? 'claude'
+      : 'unknown';
+
+  return {
+    id: raw.id,
+    timestamp: raw.timestamp,
+    request: {
+      method: raw.method || 'GET',
+      url: raw.url || '',
+      headers: raw.headers || {},
+      body,
+    },
+    response: raw.response ?? null,
+    agentType: raw.agentType || (raw.mainAgent ? 'main' : 'sub'),
+    subAgentType: raw.subAgentType,
+    apiType: raw.apiType,
+    duration: raw.duration || 0,
+    metadata: {
+      model: body.model || 'unknown',
+      provider,
+      stream: raw.isStream ?? !!body.stream,
+      error: raw.error,
+    },
+    tokenUsage: raw.tokenUsage,
+    kvCache: raw.kvCache,
+    context: raw.context,
+    error: raw.error,
+  };
+}
+
+/**
  * 读取并过滤日志
  */
 function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: number } {
@@ -351,7 +397,8 @@ function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: number } {
         const line = chunk.trim();
         if (!line) continue;
         try {
-          allLogs.push(JSON.parse(line));
+          const raw = JSON.parse(line);
+          allLogs.push(normalizeLogEntry(raw));
         } catch {
           // 忽略解析失败的行
         }

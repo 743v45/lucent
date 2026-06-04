@@ -92,6 +92,8 @@ body {
 .ant-modal .ant-modal-header {
   background: transparent;
   border-bottom: 1px solid var(--color-border-subtle);
+  display: flex;
+  align-items: center;
 }
 
 .ant-modal .ant-modal-title {
@@ -100,6 +102,8 @@ body {
 
 .ant-modal .ant-modal-close {
   color: var(--color-text-tertiary);
+  top: auto;
+  right: 16px;
 }
 
 .ant-modal .ant-modal-close:hover {
@@ -159,6 +163,45 @@ body {
 .ant-input-focused {
   border-color: var(--color-brand-accent) !important;
   box-shadow: 0 0 0 2px rgba(113, 112, 255, 0.15) !important;
+}
+
+/* Select */
+.ant-select:not(.ant-select-customize-input) .ant-select-selector {
+  background: var(--color-bg-input) !important;
+  border: 1px solid var(--color-border-standard) !important;
+  border-radius: 6px;
+}
+
+.ant-select-selection-item {
+  color: var(--color-text-primary) !important;
+}
+
+.ant-select-selection-placeholder {
+  color: var(--color-text-quaternary) !important;
+}
+
+.ant-select-arrow {
+  color: var(--color-text-tertiary) !important;
+}
+
+/* Select Dropdown (portal-rendered) */
+.ant-select-dropdown {
+  background: var(--color-bg-elevated) !important;
+  border: 1px solid var(--color-border-standard);
+  border-radius: 8px;
+}
+
+.ant-select-item {
+  color: var(--color-text-secondary) !important;
+}
+
+.ant-select-item-option-active:not(.ant-select-item-option-selected) {
+  background: var(--color-bg-active) !important;
+}
+
+.ant-select-item-option-selected {
+  background: var(--color-brand) !important;
+  color: #fff !important;
 }
 
 /* Tabs */
