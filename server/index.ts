@@ -127,10 +127,25 @@ export function shutdownServer(): void {
 
   if (proxyServer) {
     proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));
+    proxyServer = null;
   }
 
   server.close();
 }
+
+// ==================== 服务联动关闭 ====================
+
+/**
+ * 当 Web server 关闭时，同步关闭 proxy server
+ * 确保两个服务生命周期一致
+ */
+server.on('close', () => {
+  dbg('Web server 已关闭，同步关闭 proxy server');
+  if (proxyServer) {
+    proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));
+    proxyServer = null;
+  }
+});
 
 // ==================== 直接运行 ====================
 
@@ -140,6 +155,7 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     process.exit(1);
   });
 
+  // 正常信号处理
   process.on('SIGINT', () => {
     console.log('[AgentProxy] 收到 SIGINT 信号，正在关闭...');
     shutdownServer();
@@ -150,5 +166,20 @@ if (import.meta.url === `file://${process.argv[1]}`) {
     console.log('[AgentProxy] 收到 SIGTERM 信号，正在关闭...');
     shutdownServer();
     process.exit(0);
+  });
+
+  // 异常退出处理
+  process.on('uncaughtException', (error) => {
+    console.error('[AgentProxy] 未捕获异常，正在关闭...');
+    dbg('uncaughtException: %O', error);
+    shutdownServer();
+    process.exit(1);
+  });
+
+  process.on('unhandledRejection', (reason, promise) => {
+    console.error('[AgentProxy] 未处理的 Promise rejection，正在关闭...');
+    dbg('unhandledRejection at %O: %O', promise, reason);
+    shutdownServer();
+    process.exit(1);
   });
 }
