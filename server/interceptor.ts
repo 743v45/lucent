@@ -94,7 +94,196 @@ function isOpenAIApiPath(url: string): boolean {
   return API_PATH_REGEX.OPENAI_CHAT.test(url);
 }
 
-// ==================== 拦截器设置 ====================
+// ==================== 响应处理 ====================
+
+interface DeltaState {
+  originalMessagesLength: number;
+  originalTailFp: string;
+}
+
+/**
+ * 构建响应基础信息（status, statusText, headers）
+ */
+function buildResponseBase(response: Response): {
+  status: number;
+  statusText: string;
+  headers: Record<string, string>;
+} {
+  return {
+    status: response.status,
+    statusText: response.statusText,
+    headers: Object.fromEntries((response.headers as any).entries()),
+  };
+}
+
+/**
+ * 处理流式响应：tee body，后台提取 SSE，返回客户端响应
+ */
+function handleStreamingResponse(
+  response: Response,
+  entry: RawLogEntry,
+  deltaState: DeltaState,
+): Response {
+  entry.response = {
+    ...buildResponseBase(response),
+    body: null,
+  };
+
+  const [clientBody, logBody] = response.body!.tee();
+  extractInBackground(logBody, entry,
+    (e) => LogWriter.writeLogEntry(e),
+    () => commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp),
+  );
+  dbgSse('SSE 流开始提取: id=%s', entry.id);
+
+  return new Response(clientBody, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
+  });
+}
+
+/**
+ * 处理流式响应失败：记录错误，提交 delta
+ */
+function handleStreamingFailure(
+  response: Response,
+  entry: RawLogEntry,
+  deltaState: DeltaState,
+): void {
+  entry.response = {
+    ...buildResponseBase(response),
+    body: '[Streaming Response - Capture failed]',
+  };
+  LogWriter.writeLogEntry(entry);
+  commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);
+}
+
+/**
+ * 处理非流式响应：克隆、解析、记录日志
+ */
+async function handleNormalResponse(
+  response: Response,
+  entry: RawLogEntry,
+  deltaState: DeltaState,
+): Promise<void> {
+  const cloned = response.clone();
+  const text = await cloned.text();
+
+  let body: unknown;
+  try {
+    body = JSON.parse(text);
+  } catch {
+    body = text.slice(0, MAX_RESPONSE_BODY_LENGTH);
+  }
+
+  entry.response = {
+    ...buildResponseBase(response),
+    body,
+  };
+
+  LogWriter.writeLogEntry(entry);
+  commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);
+}
+
+// ==================== 请求处理 ====================
+
+/**
+ * 判断是否需要拦截此请求
+ */
+function shouldInterceptRequest(urlStr: string, headers: Record<string, unknown>): boolean {
+  const isInternal = headers[INTERNAL_HEADERS[0]] || headers[INTERNAL_HEADERS[1]];
+  const isProxyTrace = headers[PROXY_TRACE_HEADER] === 'true' || headers[PROXY_TRACE_HEADER] === true;
+
+  if (isInternal) return false;
+
+  return isProxyTrace ||
+    urlStr.includes('anthropic') ||
+    urlStr.includes('claude') ||
+    urlStr.includes('openai') ||
+    isAnthropicApiPath(urlStr) ||
+    isOpenAIApiPath(urlStr) ||
+    detectApiType(urlStr) !== null;
+}
+
+/**
+ * 解析请求 body
+ */
+function parseRequestBody(bodyRaw: string | undefined): unknown {
+  if (!bodyRaw) return null;
+  try {
+    return JSON.parse(bodyRaw);
+  } catch {
+    const truncated = String(bodyRaw).slice(0, MAX_BODY_PARSE_FAILURE_LENGTH);
+    dbg('body 解析失败, 存储为截断字符串 len=%d', truncated.length);
+    return truncated;
+  }
+}
+
+/**
+ * 转换 headers 为普通对象
+ */
+function normalizeHeaders(rawHeaders: HeadersInit | undefined): Record<string, string> {
+  if (!rawHeaders) return {};
+  if (rawHeaders instanceof Headers) {
+    return Object.fromEntries(rawHeaders as any);
+  }
+  return { ...rawHeaders } as Record<string, string>;
+}
+
+/**
+ * 构建请求日志条目
+ */
+function buildRequestEntry(
+  urlStr: string,
+  options: RequestInit | undefined,
+  body: unknown,
+  startTime: number,
+): RawLogEntry {
+  const headers = normalizeHeaders(options?.headers);
+  const safeHeaders = sanitizeHeaders(headers);
+  const isMain = isMainAgentRequest(body);
+  const { agentType, subAgentType } = parseAgentType(body, isMain);
+  const model = (body as any)?.model || 'unknown';
+  const detectedApiType = detectApiType(urlStr);
+
+  const requestId = `${startTime}_${Math.random().toString(36).substring(2, 11)}`;
+
+  dbg('拦截 %s %s apiType=%s agentType=%s subAgentType=%s model=%s stream=%s',
+    options?.method || 'GET', urlStr, detectedApiType ?? '-', agentType, subAgentType ?? '-',
+    model, (body as any)?.stream === true);
+
+  return {
+    id: requestId,
+    timestamp: new Date().toISOString(),
+    project: '',
+    url: urlStr,
+    method: options?.method || 'GET',
+    headers: safeHeaders,
+    body,
+    response: null,
+    duration: 0,
+    isStream: (body as any)?.stream === true,
+    mainAgent: isMain,
+    agentType,
+    subAgentType,
+    apiType: detectedApiType || undefined,
+  };
+}
+
+/**
+ * 处理 Delta 存储（仅对主 Agent）
+ */
+function processDeltaForMainAgent(entry: RawLogEntry, body: unknown): DeltaState {
+  const defaultState: DeltaState = { originalMessagesLength: 0, originalTailFp: '' };
+  if (!entry.mainAgent || !Array.isArray((body as any)?.messages)) {
+    return defaultState;
+  }
+  const { deltaOriginalMessagesLength, deltaOriginalTailFp } = processDelta(entry, body as any);
+  return { originalMessagesLength: deltaOriginalMessagesLength, originalTailFp: deltaOriginalTailFp };
+}
+
+// ==================== 拦截器安装 ====================
 
 export function setupInterceptor(): void {
   if (interceptorInstalled) return;
@@ -107,177 +296,54 @@ export function setupInterceptor(): void {
 
   globalThis.fetch = async function (url: URL | RequestInfo, options?: RequestInit): Promise<Response> {
     const startTime = Date.now();
-    let requestEntry: RawLogEntry | null = null;
+    const urlStr = typeof url === 'string' ? url : (url instanceof URL ? url.href : String(url));
+    const headers = normalizeHeaders(options?.headers);
 
-    // Delta 存储变量（需要在整个请求-响应周期中保持）
-    let deltaOriginalMessagesLength = 0;
-    let deltaOriginalTailFp = '';
+    // 不拦截内部请求
+    if (!shouldInterceptRequest(urlStr, headers)) {
+      return originalFetch.call(this, url, options);
+    }
+
+    // 清理代理标记 header
+    if (headers[PROXY_TRACE_HEADER] && options?.headers) {
+      delete (options.headers as Record<string, unknown>)[PROXY_TRACE_HEADER];
+    }
+
+    // 构建请求日志
+    const body = parseRequestBody(options?.body as string | undefined);
+    const entry = buildRequestEntry(urlStr, options, body, startTime);
+    const deltaState = processDeltaForMainAgent(entry, body);
+
+    // 主 Agent 检查日志轮转
+    if (entry.mainAgent) {
+      LogWriter.checkAndRotateLogFile();
+    }
 
     try {
-      const urlStr = typeof url === 'string' ? url : (url instanceof URL ? url.href : String(url));
-
-      // 检查是否为需要拦截的请求
-      const headers = options?.headers || {};
-      const isInternalRequest = (headers as any)[INTERNAL_HEADERS[0]] || (headers as any)[INTERNAL_HEADERS[1]];
-      const isProxyTrace = (headers as any)[PROXY_TRACE_HEADER] === 'true' || (headers as any)[PROXY_TRACE_HEADER] === true;
-
-      const shouldIntercept = !isInternalRequest && (
-        isProxyTrace ||
-        urlStr.includes('anthropic') ||
-        urlStr.includes('claude') ||
-        urlStr.includes('openai') ||
-        isAnthropicApiPath(urlStr) ||
-        isOpenAIApiPath(urlStr) ||
-        detectApiType(urlStr) !== null
-      );
-
-      if (shouldIntercept) {
-        // 清理代理标记 header
-        if (isProxyTrace && options?.headers) {
-          delete (options.headers as any)[PROXY_TRACE_HEADER];
-        }
-
-        // 解析请求体
-        let body: any = null;
-        if (options?.body) {
-          try {
-            body = JSON.parse(options.body as string);
-          } catch {
-            body = String(options.body).slice(0, MAX_BODY_PARSE_FAILURE_LENGTH);
-            dbg('body 解析失败, 存储为截断字符串 len=%d', body.length);
-          }
-        }
-
-        // 转换 headers
-        let reqHeaders: Record<string, string> = {};
-        const rawHeaders = options?.headers;
-        if (rawHeaders) {
-          if (rawHeaders instanceof Headers) {
-            reqHeaders = Object.fromEntries(rawHeaders as any);
-          } else if (typeof rawHeaders === 'object') {
-            reqHeaders = { ...rawHeaders } as Record<string, string>;
-          }
-        }
-
-        const safeHeaders = sanitizeHeaders(reqHeaders);
-        const isMain = isMainAgentRequest(body);
-        const { agentType, subAgentType } = parseAgentType(body, isMain);
-        const isStream = body?.stream === true;
-        const requestId = `${Date.now()}_${Math.random().toString(36).substring(2, 11)}`;
-        const model = body?.model || 'unknown';
-        const detectedApiType = detectApiType(urlStr);
-
-        requestEntry = {
-          id: requestId,
-          timestamp: new Date().toISOString(),
-          project: '',
-          url: urlStr,
-          method: options?.method || 'GET',
-          headers: safeHeaders,
-          body,
-          response: null,
-          duration: 0,
-          isStream,
-          mainAgent: isMain,
-          agentType,
-          subAgentType,
-          apiType: detectedApiType || undefined,
-        };
-
-        dbg('拦截 %s %s apiType=%s agentType=%s subAgentType=%s model=%s stream=%s',
-          options?.method || 'GET', urlStr, detectedApiType ?? '-', agentType, subAgentType ?? '-',
-          model, isStream);
-
-        // Delta 存储处理
-        if (isMain && Array.isArray(body?.messages)) {
-          const { deltaOriginalMessagesLength: dLen, deltaOriginalTailFp: dFp } = processDelta(requestEntry, body);
-          deltaOriginalMessagesLength = dLen;
-          deltaOriginalTailFp = dFp;
-        }
-
-        // 检查日志文件大小并轮转
-        if (isMain) {
-          LogWriter.checkAndRotateLogFile();
-        }
-      }
-
-      // 发起请求
       const response = await originalFetch.call(this, url, options);
+      entry.duration = Date.now() - startTime;
 
-      if (requestEntry) {
-        const entry = requestEntry;
-        entry.duration = Date.now() - startTime;
-
-        if (entry.isStream) {
-          // 流式响应
-          try {
-            entry.response = {
-              status: response.status,
-              statusText: response.statusText,
-              headers: Object.fromEntries(response.headers.entries()),
-              body: null,
-            };
-
-            const [clientBody, logBody] = response.body!.tee();
-            extractInBackground(logBody, entry,
-              (e) => {
-                LogWriter.writeLogEntry(e);
-              },
-              () => commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp),
-            );
-            dbgSse('SSE 流开始提取: id=%s', entry.id);
-
-            return new Response(clientBody, {
-              status: response.status,
-              statusText: response.statusText,
-              headers: response.headers,
-            });
-          } catch (err) {
-            entry.response = {
-              status: response.status,
-              statusText: response.statusText,
-              headers: Object.fromEntries(response.headers.entries()),
-              body: '[Streaming Response - Capture failed]',
-            };
-            LogWriter.writeLogEntry(requestEntry);
-            commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
-          }
-        } else {
-          // 非流式响应
-          try {
-            const clonedResponse = response.clone();
-            const responseText = await clonedResponse.text();
-            let responseData: any = null;
-
-            try {
-              responseData = JSON.parse(responseText);
-            } catch {
-              responseData = responseText.slice(0, MAX_RESPONSE_BODY_LENGTH);
-            }
-
-            entry.response = {
-              status: response.status,
-              statusText: response.statusText,
-              headers: Object.fromEntries(response.headers.entries()),
-              body: responseData,
-            };
-
-            LogWriter.writeLogEntry(requestEntry);
-            commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
-          } catch (err) {
-            LogWriter.writeLogEntry(requestEntry);
-            commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
-          }
+      if (entry.isStream) {
+        try {
+          return handleStreamingResponse(response, entry, deltaState);
+        } catch {
+          handleStreamingFailure(response, entry, deltaState);
+          return response;
         }
+      } else {
+        try {
+          await handleNormalResponse(response, entry, deltaState);
+        } catch {
+          // 非流式失败也要记录
+          LogWriter.writeLogEntry(entry);
+          commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);
+        }
+        return response;
       }
-
-      return response;
     } catch (err) {
-      if (requestEntry) {
-        requestEntry.duration = Date.now() - startTime;
-        requestEntry.error = err instanceof Error ? err.message : String(err);
-        LogWriter.writeLogEntry(requestEntry);
-      }
+      entry.duration = Date.now() - startTime;
+      entry.error = err instanceof Error ? err.message : String(err);
+      LogWriter.writeLogEntry(entry);
       throw err;
     }
   };
