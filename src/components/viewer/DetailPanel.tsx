@@ -1,5 +1,5 @@
-import { useState, useCallback, useEffect } from 'react';
-import type { LogEntry, TabType, ApiProviderType } from '../../types';
+import { useState, useCallback, useEffect, useMemo } from 'react';
+import type { LogEntry, TabType, ApiProviderType, SSERawBody } from '../../types';
 import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, API_PATH_REGEX } from '../../constants';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import ReactMarkdown from 'react-markdown';
@@ -7,6 +7,7 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ProviderIcon } from '../common/ProviderIcon';
+import { extractFromSSELines, extractedToResponseBody } from '../../utils/sse-extractor';
 import 'react-json-view-lite/dist/index.css';
 import './DetailPanel.css';
 
@@ -359,7 +360,8 @@ function JsonBlock({
   data: unknown;
   collapsed?: boolean;
 }) {
-  const jsonData = typeof data === 'string' ? data : data;
+  // JsonView 需要 object 或 array 类型，字符串需要包装
+  const jsonData = typeof data === 'string' ? { text: data } : data as object;
 
   return (
     <div
@@ -422,6 +424,22 @@ interface ResponseTabProps {
 function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: ResponseTabProps): JSX.Element {
   const response = log.response;
 
+  // 判断是否为 SSE 原始数据，如果是则提取结构化信息展示
+  const displayBody = useMemo(() => {
+    const body = response.body;
+    // SSE 原始数据：提取结构化信息展示
+    if (body && typeof body === 'object' && (body as SSERawBody).type === 'sse_raw') {
+      const sseBody = body as SSERawBody;
+      if (sseBody.error) {
+        return { type: 'sse_raw', error: sseBody.error, linesCount: sseBody.lines?.length || 0 };
+      }
+      const extracted = extractFromSSELines(sseBody.lines);
+      return extractedToResponseBody(extracted);
+    }
+    // 其他格式：直接展示
+    return body;
+  }, [response.body]);
+
   return (
     <div className="flex flex-col h-full bg-bg-deep">
       <div className="p-4">
@@ -436,11 +454,11 @@ function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: Response
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
             <CollapseButton collapsed={bodyCollapsed} onToggle={onToggleCollapsed} />
-            <CopyButton onCopy={() => onCopy(response.body)} />
+            <CopyButton onCopy={() => onCopy(displayBody)} />
           </div>
         </div>
         <div className="flex-1 min-h-0">
-          <JsonBlock data={response.body} collapsed={bodyCollapsed} />
+          <JsonBlock data={displayBody} collapsed={bodyCollapsed} />
         </div>
       </div>
     </div>

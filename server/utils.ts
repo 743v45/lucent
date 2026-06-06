@@ -29,11 +29,6 @@ export function sanitizeHeaders(headers: Record<string, string>): Record<string,
     safe['x-api-key'] = maskApiKey(safe['x-api-key']);
   }
 
-  // 脱敏 x-goog-api-key
-  if (safe['x-goog-api-key']) {
-    safe['x-goog-api-key'] = maskApiKey(safe['x-goog-api-key']);
-  }
-
   // 脱敏 authorization
   if (safe['authorization']) {
     const v = safe['authorization'];

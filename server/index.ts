@@ -17,7 +17,7 @@ import * as LogWriter from './services/log-writer.js';
 import * as LogReader from './services/log-reader.js';
 import { mountRoutes } from './routes/index.js';
 import { startProxyServer } from './proxy.js';
-import { setupInterceptor } from './interceptor.js';
+import { setupInterceptor, drainPendingSSETasks } from './interceptor.js';
 import type { ProxyStatus } from './types.js';
 import type { ResolvedConfig } from './config.js';
 import createDebug from 'debug';
@@ -122,11 +122,14 @@ export function getServerStatus(): ProxyStatus {
   };
 }
 
-export function shutdownServer(): void {
+export async function shutdownServer(): Promise<void> {
   console.log('[AgentProxy] 关闭服务器...');
 
+  // 等待后台 SSE 任务完成，确保数据不丢失
+  await drainPendingSSETasks();
+
   if (proxyServer) {
-    proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));
+    await proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));
     proxyServer = null;
   }
 
@@ -156,30 +159,30 @@ if (import.meta.url === `file://${process.argv[1]}`) {
   });
 
   // 正常信号处理
-  process.on('SIGINT', () => {
+  process.on('SIGINT', async () => {
     console.log('[AgentProxy] 收到 SIGINT 信号，正在关闭...');
-    shutdownServer();
+    await shutdownServer();
     process.exit(0);
   });
 
-  process.on('SIGTERM', () => {
+  process.on('SIGTERM', async () => {
     console.log('[AgentProxy] 收到 SIGTERM 信号，正在关闭...');
-    shutdownServer();
+    await shutdownServer();
     process.exit(0);
   });
 
   // 异常退出处理
-  process.on('uncaughtException', (error) => {
+  process.on('uncaughtException', async (error) => {
     console.error('[AgentProxy] 未捕获异常，正在关闭...');
     dbg('uncaughtException: %O', error);
-    shutdownServer();
+    await shutdownServer();
     process.exit(1);
   });
 
-  process.on('unhandledRejection', (reason, promise) => {
+  process.on('unhandledRejection', async (reason, promise) => {
     console.error('[AgentProxy] 未处理的 Promise rejection，正在关闭...');
     dbg('unhandledRejection at %O: %O', promise, reason);
-    shutdownServer();
+    await shutdownServer();
     process.exit(1);
   });
 }

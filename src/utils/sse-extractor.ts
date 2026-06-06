@@ -1,23 +1,16 @@
 /**
- * SSE 流提取器
+ * SSE 提取函数（前端）
  *
- * 从 Anthropic / OpenAI SSE 流中：
- * - 收集原始 SSE 行数据（存储）
- * - 导出提取函数（展示时调用）
- *
- * 从 interceptor.ts 提取而来
+ * 从原始 SSE 行数据中提取结构化信息
+ * 支持 Anthropic、OpenAI Chat、OpenAI Responses 三种格式
  */
 
-import { EventSourceParserStream } from 'eventsource-parser/stream';
-import type { ExtractedInfo, RawLogEntry, SSERawLine } from './types.js';
-import createDebug from 'debug';
-const dbgSse = createDebug('agentproxy:interceptor:sse');
+import type { SSERawLine, ExtractedInfo, ContentBlock } from '../types';
 
-// ==================== SSE 事件提取（内部函数） ====================
+// ==================== SSE 事件提取 ====================
 
 /**
  * 从单个 SSE 事件中提取关键信息
- * 支持 Anthropic、OpenAI Chat、OpenAI Responses 三种格式
  */
 function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): void {
   // Anthropic 格式
@@ -99,11 +92,10 @@ function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): voi
   }
 }
 
-// ==================== SSE 提取函数（导出供前端调用） ====================
+// ==================== SSE 提取函数 ====================
 
 /**
  * 从 SSE 原始行数据中提取结构化信息
- * 此函数导出供前端在展示时调用
  */
 export function extractFromSSELines(lines: SSERawLine[]): ExtractedInfo {
   const acc: ExtractedInfo = {
@@ -138,65 +130,27 @@ export function extractFromSSELines(lines: SSERawLine[]): ExtractedInfo {
   return acc;
 }
 
-// ==================== 后台收集原始 SSE 行 ====================
-
 /**
- * 后台收集 SSE 原始行数据（不阻塞客户端响应）
- * 存储原始数据，展示时再调用 extractFromSSELines 提取
+ * 将提取的信息转换为 ResponseBody 格式（用于展示）
  */
-export async function collectSSELinesInBackground(
-  body: ReadableStream<Uint8Array>,
-  entry: RawLogEntry,
-  onLogEntry: (entry: RawLogEntry) => void,
-  onDeltaCommit: () => void,
-): Promise<void> {
-  const lines: SSERawLine[] = [];
-
-  try {
-    const eventStream = body
-      .pipeThrough(new TextDecoderStream() as any)
-      .pipeThrough(new EventSourceParserStream()) as ReadableStream<any>;
-
-    const reader = eventStream.getReader();
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-
-      // 收集原始 SSE 行数据
-      lines.push({
-        event: value.event || '',
-        data: value.data || '',
-      });
-    }
-
-    // 写入日志：存储原始 SSE 数据
-    entry.response = {
-      status: entry.response?.status || 200,
-      statusText: entry.response?.statusText || 'OK',
-      headers: entry.response?.headers || {},
-      body: {
-        type: 'sse_raw',
-        lines,
-      },
-    };
-
-    onLogEntry(entry);
-    onDeltaCommit();
-
-    dbgSse('SSE 收集完成: lines=%d', lines.length);
-  } catch (err) {
-    dbgSse('SSE 收集失败: %O', err);
-    entry.response = {
-      status: entry.response?.status || 200,
-      statusText: entry.response?.statusText || 'OK',
-      headers: entry.response?.headers || {},
-      body: { type: 'sse_raw', error: String(err) },
-    };
-    onLogEntry(entry);
-    onDeltaCommit();
-  }
+export function extractedToResponseBody(extracted: ExtractedInfo): {
+  type: 'message';
+  role: 'assistant';
+  model: string;
+  content: ContentBlock[];
+  stop_reason: string;
+  usage: ExtractedInfo['usage'];
+} {
+  return {
+    type: 'message',
+    role: 'assistant',
+    model: extracted.model,
+    content: [
+      ...(extracted.text ? [{ type: 'text', text: extracted.text }] : []),
+      ...(extracted.thinking ? [{ type: 'thinking', thinking: extracted.thinking }] : []),
+      ...extracted.toolCalls.map(tc => ({ type: 'tool_use', ...tc })),
+    ],
+    stop_reason: extracted.stopReason,
+    usage: extracted.usage,
+  };
 }
-
-// 兼容旧名称的别名
-export const extractInBackground = collectSSELinesInBackground;

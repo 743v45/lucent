@@ -62,7 +62,7 @@ export interface ResponseData {
   status: number;
   statusText: string;
   headers: Record<string, string>;
-  body: ResponseBody;
+  body: ResponseBody | SSERawBody;
 }
 
 export interface ResponseBody {
@@ -75,11 +75,40 @@ export interface ResponseBody {
   [key: string]: unknown;
 }
 
+/**
+ * SSE 原始响应体（存储格式）
+ */
+export interface SSERawBody {
+  type: 'sse_raw';
+  lines: SSERawLine[];
+  error?: string;
+}
+
+/**
+ * SSE 原始行数据
+ */
+export interface SSERawLine {
+  event: string;
+  data: string;
+}
+
 export interface TokenUsage {
   input_tokens: number;
   output_tokens: number;
   cache_creation_tokens?: number;
   cache_read_tokens?: number;
+}
+
+/**
+ * SSE 提取后的结构化信息
+ */
+export interface ExtractedInfo {
+  text: string;
+  thinking: string;
+  toolCalls: Array<{ id?: string; name: string; input: unknown }>;
+  usage: { input: number; output: number; cache_read: number; cache_create: number };
+  stopReason: string;
+  model: string;
 }
 
 export interface Metadata {

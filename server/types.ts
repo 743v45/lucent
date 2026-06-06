@@ -128,6 +128,23 @@ export interface RawLogEntry {
 
 // ==================== SSE 流提取 ====================
 
+/**
+ * SSE 原始行数据（存储格式）
+ */
+export interface SSERawLine {
+  event: string;
+  data: string;
+}
+
+/**
+ * SSE 原始响应体（存储格式）
+ */
+export interface SSERawBody {
+  type: 'sse_raw';
+  lines: SSERawLine[];
+  error?: string;
+}
+
 export interface ExtractedInfo {
   text: string;
   thinking: string;
