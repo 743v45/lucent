@@ -25,7 +25,7 @@ if (!rootElement) {
         <ConfigProvider
           locale={zhCN}
           theme={{
-            algorithm: theme.defaultAlgorithm,
+            algorithm: theme.darkAlgorithm,
             token: {
               colorPrimary: THEME_PRIMARY_COLOR,
             },

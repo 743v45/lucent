@@ -321,7 +321,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       onCancel={onClose}
       width={SETTINGS_MODAL_WIDTH}
       footer={null}
-      destroyOnClose
+      destroyOnHidden
     >
       {/* 左右结构 */}
       <div className="flex h-[420px]">
@@ -352,7 +352,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               className: '!bg-bg-surface !border-border-subtle',
             }}
             placement="topLeft"
-            overlayClassName="[&_.ant-dropdown-menu]:!bg-bg-surface [&_.ant-dropdown-menu-item]:!text-text-primary [&_.ant-dropdown-menu-item:hover]:!bg-bg-elevated"
+            rootClassName="[&_.ant-dropdown-menu]:!bg-bg-surface [&_.ant-dropdown-menu-item]:!text-text-primary [&_.ant-dropdown-menu-item:hover]:!bg-bg-elevated"
           >
             <Button
               type="dashed"
