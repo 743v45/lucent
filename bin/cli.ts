@@ -9,7 +9,7 @@ import { open } from 'open';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { DEFAULT_WEB_PORT, SERVER_HOST } from '../server/constants.js';
+import { DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST } from '../server/constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -25,6 +25,7 @@ program
   .command('start')
   .description('启动代理服务器和 Web UI')
   .option('-p, --port <number>', 'Web UI 端口', String(DEFAULT_WEB_PORT))
+  .option('--host <host>', '服务器监听地址', DEFAULT_SERVER_HOST)
   .option('--no-open', '不自动打开浏览器')
   .action((options) => {
     const serverPath = join(__dirname, '../server/index.js');
@@ -33,7 +34,7 @@ program
 
     const child = spawn('node', [serverPath], {
       stdio: 'inherit',
-      env: { ...process.env },
+      env: { ...process.env, AGENTPROXY_HOST: options.host },
     });
 
     child.on('error', (err) => {
@@ -44,7 +45,7 @@ program
     // 等待服务器启动
     setTimeout(() => {
       if (options.open !== false) {
-        open(`http://${SERVER_HOST}:${options.port}`).catch(err => {
+        open(`http://${options.host}:${options.port}`).catch(err => {
           console.warn('[AgentProxy] 无法自动打开浏览器:', err.message);
         });
       }
@@ -70,13 +71,13 @@ program
   .description('查看代理状态')
   .action(async () => {
     try {
-      const response = await fetch(`http://${SERVER_HOST}:${DEFAULT_WEB_PORT}/api/status`);
+      const response = await fetch(`http://${DEFAULT_SERVER_HOST}:${DEFAULT_WEB_PORT}/api/status`);
       const status = await response.json();
 
       console.log('[AgentProxy] 状态:');
       console.log(`  - 运行中: ${status.running ? '是' : '否'}`);
       console.log(`  - 代理启用: ${status.enabled ? '是' : '否'}`);
-      console.log(`  - Web UI: http://${SERVER_HOST}:${status.webPort}`);
+      console.log(`  - Web UI: http://${DEFAULT_SERVER_HOST}:${status.webPort}`);
       console.log(`  - 代理端口: ${status.proxyPort}`);
       if (status.logFile) {
         console.log(`  - 日志文件: ${status.logFile}`);
@@ -92,7 +93,7 @@ program
   .option('-n, --number <num>', '显示条数', '10')
   .action(async (options) => {
     try {
-      const response = await fetch(`http://${SERVER_HOST}:${DEFAULT_WEB_PORT}/api/logs?limit=${options.number}`);
+      const response = await fetch(`http://${DEFAULT_SERVER_HOST}:${DEFAULT_WEB_PORT}/api/logs?limit=${options.number}`);
       const data = await response.json();
 
       console.log(`[AgentProxy] 最近 ${data.logs.length} 条记录:\n`);

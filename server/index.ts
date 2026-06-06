@@ -44,7 +44,7 @@ import {
   ANTHROPIC_API_VERSION,
   TEST_REQUEST_CONTENT,
   TEST_MAX_TOKENS,
-  SERVER_HOST,
+  DEFAULT_SERVER_HOST,
 } from './constants.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -139,6 +139,7 @@ interface LogEntry {
 interface ProxyStatus {
   enabled: boolean;
   running: boolean;
+  host: string;
   webPort: number;
   proxyPort: number;
   logFile: string | null;
@@ -538,6 +539,7 @@ app.get('/api/status', (_req, res) => {
   res.json({
     enabled: proxyEnabled,
     running: true,
+    host: config.host,
     webPort: config.webPort,
     proxyPort: config.proxyPort,
     logFile: currentLogFile,
@@ -1025,14 +1027,6 @@ app.post('/api/config/test', async (req, res) => {
         };
         break;
 
-      case 'gemini-generate':
-        // Gemini API key 通过 URL 参数传递
-        testUrl = `${upstreamBaseUrl}/v1beta/models/${TEST_MODELS['gemini-generate']}:generateContent?key=${apiKey || ''}`;
-        testBody = {
-          contents: [{ parts: [{ text: TEST_REQUEST_CONTENT }] }],
-        };
-        break;
-
       default:
         res.status(400).json({ error: 'Invalid apiType' });
         return;
@@ -1097,15 +1091,22 @@ export async function startServer(): Promise<void> {
   }
 
   const webPort = config.webPort;
+  const host = config.host || DEFAULT_SERVER_HOST;
   return new Promise<void>((resolve, reject) => {
-    server.listen(webPort, SERVER_HOST, () => {
-      console.log(`[AgentProxy] Web UI: http://${SERVER_HOST}:${webPort}`);
+    server.listen(webPort, host, () => {
+      console.log(`[AgentProxy] Web UI: http://${host}:${webPort}`);
       console.log(`[AgentProxy] 代理端口: ${proxyPort}`);
       console.log(`[AgentProxy] 日志文件: ${currentLogFile}`);
       console.log(`[AgentProxy] 日志目录: ${CONFIG.logDir}`);
 
+      console.log('[AgentProxy] ============================');
+      console.log('[AgentProxy] 接入方式 (设置环境变量):');
+      console.log(`[AgentProxy]   Anthropic:  export ANTHROPIC_BASE_URL=http://${host}:${proxyPort}`);
+      console.log(`[AgentProxy]   OpenAI:     export OPENAI_BASE_URL=http://${host}:${proxyPort}`);
+      console.log('[AgentProxy] ============================');
+
       // 自动打开浏览器
-      open(`http://${SERVER_HOST}:${webPort}`).catch(err => {
+      open(`http://${host}:${webPort}`).catch(err => {
         console.warn('[AgentProxy] 无法自动打开浏览器:', err.message);
       });
 
@@ -1124,6 +1125,7 @@ export function getServerStatus(): ProxyStatus {
   return {
     enabled: proxyEnabled,
     running: true,
+    host: config.host,
     webPort: config.webPort,
     proxyPort: config.proxyPort,
     logFile: currentLogFile,

@@ -12,6 +12,7 @@
 import { appendFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname, basename } from 'node:path';
+import { EventSourceParserStream } from 'eventsource-parser/stream';
 
 import {
   LOG_DIR,
@@ -45,7 +46,7 @@ let _lastTailFp = ''; // 截至最近一次请求的末位 message 指纹
 let _mainAgentDeltaCount = 0; // mainAgent 请求计数器
 
 // ==================== 类型定义 ====================
-export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses' | 'gemini-generate';
+export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses';
 
 export interface LogEntry {
   id: string;
@@ -84,6 +85,183 @@ export interface LogEntry {
   proxyProfile?: string;
   proxyUrl?: string;
   error?: string;
+}
+
+// ==================== SSE 流提取类型 ====================
+export interface ExtractedInfo {
+  text: string;
+  thinking: string;
+  toolCalls: Array<{ id?: string; name: string; input: any }>;
+  usage: { input: number; output: number; cache_read: number; cache_create: number };
+  stopReason: string;
+  model: string;
+}
+
+/**
+ * 从 SSE 事件中提取关键信息
+ * 支持 Anthropic、OpenAI 格式
+ */
+export function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): void {
+  // Anthropic 格式
+  if (eventType === 'message_start') {
+    acc.model = data.message?.model || acc.model;
+    acc.usage.input = data.message?.usage?.input_tokens || acc.usage.input;
+    acc.usage.cache_create = data.message?.usage?.cache_creation_input_tokens || acc.usage.cache_create;
+    acc.usage.cache_read = data.message?.usage?.cache_read_input_tokens || acc.usage.cache_read;
+  } else if (eventType === 'content_block_start') {
+    const block = data.content_block;
+    if (block?.type === 'tool_use') {
+      acc.toolCalls.push({ id: block.id, name: block.name, input: {} });
+    }
+  } else if (eventType === 'content_block_delta') {
+    const delta = data.delta;
+    const idx = data.index;
+    if (delta?.type === 'text_delta') {
+      acc.text += delta.text || '';
+    } else if (delta?.type === 'thinking_delta') {
+      acc.thinking += delta.thinking || '';
+    } else if (delta?.type === 'input_json_delta' && idx !== undefined) {
+      // 拼接工具调用参数
+      const toolCall = acc.toolCalls[idx];
+      if (toolCall && typeof toolCall.input === 'string') {
+        toolCall.input += delta.partial_json || '';
+      } else if (toolCall) {
+        toolCall.input = delta.partial_json || '';
+      }
+    }
+  } else if (eventType === 'message_delta') {
+    acc.stopReason = data.delta?.stop_reason || acc.stopReason;
+    acc.usage.output = data.usage?.output_tokens || acc.usage.output;
+  }
+
+  // OpenAI Chat 格式（无 event，直接看 data.choices）
+  else if (data.choices && Array.isArray(data.choices)) {
+    const delta = data.choices[0]?.delta;
+    if (delta?.content) {
+      acc.text += delta.content;
+    }
+    if (delta?.tool_calls) {
+      for (const tc of delta.tool_calls) {
+        if (tc.index !== undefined) {
+          if (!acc.toolCalls[tc.index]) {
+            acc.toolCalls[tc.index] = { id: tc.id, name: '', input: '' };
+          }
+          if (tc.function?.name) acc.toolCalls[tc.index].name += tc.function.name;
+          if (tc.function?.arguments) {
+            acc.toolCalls[tc.index].input += tc.function.arguments;
+          }
+        }
+      }
+    }
+    if (data.choices[0]?.finish_reason) {
+      acc.stopReason = data.choices[0].finish_reason;
+    }
+    if (data.usage) {
+      acc.usage.input = data.usage.prompt_tokens || acc.usage.input;
+      acc.usage.output = data.usage.completion_tokens || acc.usage.output;
+      acc.usage.cache_read = data.usage.prompt_tokens_details?.cached_tokens || acc.usage.cache_read;
+    }
+  }
+
+  // OpenAI Responses API 格式
+  else if (data.type && typeof data.type === 'string' && data.type.startsWith('response.')) {
+    if (data.type === 'response.output_text.delta') {
+      acc.text += data.delta || '';
+    }
+    if (data.type === 'response.function_call_arguments.delta') {
+      const callId = data.call_id;
+      const toolCall = acc.toolCalls.find(tc => tc.id === callId);
+      if (toolCall && typeof toolCall.input === 'string') {
+        toolCall.input += data.delta || '';
+      }
+    }
+    if (data.type === 'response.completed' && data.response?.usage) {
+      acc.usage.input = data.response.usage.input_tokens || acc.usage.input;
+      acc.usage.output = data.response.usage.output_tokens || acc.usage.output;
+    }
+  }
+}
+
+/**
+ * 后台提取 SSE 流数据（不阻塞客户端响应）
+ */
+export async function extractInBackground(
+  body: ReadableStream<Uint8Array>,
+  entry: LogEntry,
+  deltaOriginalMessagesLength: number,
+  deltaOriginalTailFp: string
+): Promise<void> {
+  const extracted: ExtractedInfo = {
+    text: '',
+    thinking: '',
+    toolCalls: [],
+    usage: { input: 0, output: 0, cache_read: 0, cache_create: 0 },
+    stopReason: '',
+    model: '',
+  };
+
+  try {
+    const eventStream = body
+      .pipeThrough(new TextDecoderStream() as any)
+      .pipeThrough(new EventSourceParserStream()) as ReadableStream<any>;
+
+    const reader = eventStream.getReader();
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      try {
+        const data = JSON.parse(value.data);
+        extractFromEvent(value.event || '', data, extracted);
+      } catch {
+        // JSON 解析失败，跳过
+      }
+    }
+
+    // 解析工具调用参数（从字符串转为对象）
+    for (const tc of extracted.toolCalls) {
+      if (typeof tc.input === 'string' && tc.input) {
+        try {
+          tc.input = JSON.parse(tc.input);
+        } catch {
+          // 保持字符串
+        }
+      }
+    }
+
+    // 写入日志
+    entry.response = {
+      status: entry.response?.status || 200,
+      statusText: entry.response?.statusText || 'OK',
+      headers: entry.response?.headers || {},
+      body: {
+        type: 'message',
+        role: 'assistant',
+        model: extracted.model,
+        content: [
+          ...(extracted.text ? [{ type: 'text', text: extracted.text }] : []),
+          ...(extracted.thinking ? [{ type: 'thinking', thinking: extracted.thinking }] : []),
+          ...extracted.toolCalls.map(tc => ({ type: 'tool_use', ...tc })),
+        ],
+        stop_reason: extracted.stopReason,
+        usage: extracted.usage,
+      },
+    };
+
+    writeLogEntry(entry);
+    commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
+  } catch (err) {
+    console.error('[AgentProxy] SSE extract error:', err);
+    entry.response = {
+      status: entry.response?.status || 200,
+      statusText: entry.response?.statusText || 'OK',
+      headers: entry.response?.headers || {},
+      body: '[Streaming Response - Extract failed]',
+    };
+    writeLogEntry(entry);
+    commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
+  }
 }
 
 // ==================== 工具函数 ====================
@@ -149,7 +327,6 @@ function detectApiType(url: string): ApiProviderType | null {
   if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) return 'openai-responses';
   if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) return 'anthropic-messages';
   if (API_PATH_REGEX.OPENAI_CHAT.test(url)) return 'openai-chat';
-  if (API_PATH_REGEX.GEMINI_GENERATE.test(url)) return 'gemini-generate';
   return null;
 }
 
@@ -315,266 +492,6 @@ function commitDeltaState(originalLength: number, originalTailFp: string): void 
   }
 }
 
-// ==================== 流式响应处理 ====================
-
-/**
- * 从 Anthropic/OpenAI SSE 事件流组装完整消息
- *
- * 支持 Anthropic 事件类型：
- * - message_start: 初始消息对象
- * - content_block_start: 新内容块（text / tool_use）
- * - content_block_delta: 增量内容（text_delta / input_json_delta / thinking_delta）
- * - content_block_stop: 内容块结束
- * - message_delta: stop_reason 和 usage
- * - message_stop: 消息结束
- *
- * 同时兼容 OpenAI 格式：
- * - 含 choices[0].delta 的 chunk
- */
-function assembleStreamMessage(events: any[]): any {
-  if (!events || events.length === 0) {
-    return null;
-  }
-
-  const messageStart = events.find((e: any) => e.type === 'message_start');
-  const messageDeltaEvent = events.find((e: any) => e.type === 'message_delta');
-
-  // ---- Anthropic 格式 ----
-  if (messageStart) {
-    const msg: any = {
-      id: messageStart.message?.id,
-      type: messageStart.message?.type || 'message',
-      role: 'assistant',
-      model: messageStart.message?.model,
-      content: [],
-      stop_reason: messageDeltaEvent?.delta?.stop_reason ?? null,
-      usage: {
-        input_tokens: messageStart.message?.usage?.input_tokens ?? 0,
-        output_tokens: messageDeltaEvent?.usage?.output_tokens ?? 0,
-        cache_creation_input_tokens: messageStart.message?.usage?.cache_creation_input_tokens ?? 0,
-        cache_read_input_tokens: messageStart.message?.usage?.cache_read_input_tokens ?? 0,
-      },
-    };
-
-    // 按 index 追踪每个 content block
-    const blocks = new Map<number, any>();
-
-    for (const event of events) {
-      const idx = event.index;
-
-      if (event.type === 'content_block_start' && idx !== undefined) {
-        // 初始化内容块
-        const block = event.content_block;
-        if (block?.type === 'tool_use') {
-          blocks.set(idx, { type: 'tool_use', id: block.id, name: block.name, input: '' });
-        } else if (block?.type === 'thinking') {
-          blocks.set(idx, { type: 'thinking', thinking: '' });
-        } else {
-          blocks.set(idx, { type: 'text', text: block?.text ?? '' });
-        }
-      } else if (event.type === 'content_block_delta' && idx !== undefined) {
-        const block = blocks.get(idx);
-        if (!block) continue;
-
-        const delta = event.delta;
-        if (delta?.type === 'text_delta' && delta.text) {
-          block.text = (block.text || '') + delta.text;
-        } else if (delta?.type === 'input_json_delta' && delta.partial_json) {
-          block.input = (block.input || '') + delta.partial_json;
-        } else if (delta?.type === 'thinking_delta' && delta.thinking) {
-          block.thinking = (block.thinking || '') + delta.thinking;
-        }
-      }
-    }
-
-    // 按 index 排序输出
-    for (const [_, block] of [...blocks.entries()].sort(([a], [b]) => a - b)) {
-      // tool_use: 尝试解析 JSON input
-      if (block.type === 'tool_use' && typeof block.input === 'string') {
-        try { block.input = JSON.parse(block.input); } catch { /* 保持字符串 */ }
-      }
-      msg.content.push(block);
-    }
-
-    return msg;
-  }
-
-  // ---- OpenAI 格式 ----
-  const openaiChunks = events.filter((e: any) => e.choices);
-  if (openaiChunks.length > 0) {
-    const first = openaiChunks[0];
-    let text = '';
-    let toolCalls: any[] = [];
-
-    for (const chunk of openaiChunks) {
-      const delta = chunk.choices?.[0]?.delta;
-      if (delta?.content) text += delta.content;
-      if (delta?.tool_calls) {
-        for (const tc of delta.tool_calls) {
-          if (tc.index !== undefined) {
-            if (!toolCalls[tc.index]) {
-              toolCalls[tc.index] = { id: tc.id, type: 'function', function: { name: '', arguments: '' } };
-            }
-            if (tc.function?.name) toolCalls[tc.index].function.name += tc.function.name;
-            if (tc.function?.arguments) toolCalls[tc.index].function.arguments += tc.function.arguments;
-          }
-        }
-      }
-    }
-
-    const content: any[] = text ? [{ type: 'text', text }] : [];
-    for (const tc of toolCalls) {
-      if (tc) content.push(tc);
-    }
-
-    return {
-      id: first.id,
-      type: 'message',
-      role: 'assistant',
-      model: first.model,
-      content,
-      stop_reason: openaiChunks[openaiChunks.length - 1]?.choices?.[0]?.finish_reason ?? null,
-      usage: first.usage || {},
-    };
-  }
-
-  // ---- Gemini 格式 ----
-  const geminiEvents = events.filter((e: any) => e.candidates);
-  if (geminiEvents.length > 0) {
-    let text = '';
-    const functionCalls: any[] = [];
-    let usage: any = {};
-
-    for (const event of geminiEvents) {
-      // 拼接文本内容
-      if (event.candidates?.[0]?.content?.parts) {
-        for (const part of event.candidates[0].content.parts) {
-          if (part.text) text += part.text;
-          // 累积 functionCall
-          if (part.functionCall) {
-            functionCalls.push(part.functionCall);
-          }
-        }
-      }
-      // 从最后一个事件取 usageMetadata
-      if (event.usageMetadata) {
-        usage = {
-          input_tokens: event.usageMetadata.promptTokenCount || 0,
-          output_tokens: event.usageMetadata.candidatesTokenCount || 0,
-          total_tokens: event.usageMetadata.totalTokenCount || 0,
-        };
-      }
-    }
-
-    const content: any[] = text ? [{ type: 'text', text }] : [];
-    // 转换 functionCalls 格式
-    for (const fc of functionCalls) {
-      content.push({
-        type: 'tool_use',
-        id: `call_${Date.now()}_${Math.random().toString(36).substring(2, 11)}`,
-        name: fc.name,
-        input: fc.args || {},
-      });
-    }
-
-    return {
-      type: 'gemini',
-      role: 'assistant',
-      content,
-      usage,
-    };
-  }
-
-  // ---- OpenAI Responses API 格式 ----
-  const responseEvents = events.filter((e: any) => typeof e.type === 'string' && e.type.startsWith('response.'));
-  if (responseEvents.length > 0) {
-    let text = '';
-    let toolCalls: any[] = [];
-    let usage: any = {};
-
-    for (const event of responseEvents) {
-      // 从 response.output_text.delta 拼接文本
-      if (event.type === 'response.output_text.delta' && event.delta) {
-        text += event.delta;
-      }
-      // 从 response.function_call_arguments.delta 拼接工具调用
-      if (event.type === 'response.function_call_arguments.delta' && event.delta) {
-        const callId = event.call_id;
-        const args = event.delta;
-        if (!toolCalls[callId]) {
-          toolCalls[callId] = { id: callId, name: '', arguments: '' };
-        }
-        toolCalls[callId].arguments += args;
-      }
-      if (event.type === 'response.function_call_name.delta' && event.delta && event.call_id) {
-        const callId = event.call_id;
-        if (!toolCalls[callId]) {
-          toolCalls[callId] = { id: callId, name: '', arguments: '' };
-        }
-        toolCalls[callId].name += event.delta;
-      }
-      // 从 response.completed 取 usage
-      if (event.type === 'response.completed' && event.response?.usage) {
-        usage = event.response.usage;
-      }
-    }
-
-    const content: any[] = text ? [{ type: 'text', text }] : [];
-    for (const tc of toolCalls) {
-      if (tc) {
-        // 尝试解析 JSON arguments
-        let parsedArgs = tc.arguments;
-        try {
-          parsedArgs = JSON.parse(tc.arguments);
-        } catch {
-          // 保持字符串
-        }
-        content.push({
-          type: 'tool_use',
-          id: tc.id,
-          name: tc.name,
-          input: parsedArgs,
-        });
-      }
-    }
-
-    return {
-      type: 'responses',
-      role: 'assistant',
-      content,
-      usage,
-    };
-  }
-
-  // 未知格式，返回原始事件
-  return { events };
-}
-
-/**
- * 创建流式组装器（用于实时推送）
- */
-function createStreamAssembler() {
-  let events: any[] = [];
-  let assembledMessage: any = null;
-
-  return {
-    feed(event: any) {
-      events.push(event);
-      assembledMessage = assembleStreamMessage(events);
-    },
-    hasMessage(): boolean {
-      return assembledMessage !== null;
-    },
-    snapshot(): any {
-      return assembledMessage || { events };
-    },
-    reset() {
-      events = [];
-      assembledMessage = null;
-    },
-  };
-}
-
 // ==================== 拦截器设置 ====================
 
 let interceptorInstalled = false;
@@ -618,8 +535,7 @@ export function setupInterceptor(): void {
         urlStr.includes('openai') ||
         isAnthropicApiPath(urlStr) ||
         isOpenAIApiPath(urlStr) ||
-        detectApiType(urlStr) !== null ||
-        urlStr.includes('generativelanguage')
+        detectApiType(urlStr) !== null
       );
 
       if (shouldIntercept) {
@@ -643,7 +559,7 @@ export function setupInterceptor(): void {
         const rawHeaders = options?.headers;
         if (rawHeaders) {
           if (rawHeaders instanceof Headers) {
-            reqHeaders = Object.fromEntries(rawHeaders.entries());
+            reqHeaders = Object.fromEntries(rawHeaders as any);
           } else if (typeof rawHeaders === 'object') {
             reqHeaders = { ...rawHeaders } as Record<string, string>;
           }
@@ -667,8 +583,7 @@ export function setupInterceptor(): void {
         const detectedApiType = detectApiType(urlStr);
         const provider = detectedApiType ? detectedApiType.split('-')[0] :
                        urlStr.includes('anthropic') || urlStr.includes('claude') ? 'claude' :
-                       urlStr.includes('openai') ? 'openai' :
-                       urlStr.includes('generativelanguage') ? 'gemini' : 'unknown';
+                       urlStr.includes('openai') ? 'openai' : 'unknown';
 
         requestEntry = {
           id: requestId,
@@ -754,10 +669,8 @@ export function setupInterceptor(): void {
           checkAndRotateLogFile();
         }
 
-        // 写入在途请求标记
+        // 不写入在途请求标记，等响应完成后再写入，避免 ID 重复
         if (!requestEntry) return originalFetch.call(this, url, options);
-        requestEntry.inProgress = true;
-        writeLogEntry({ ...requestEntry } as LogEntry);
       }
 
       // 发起请求
@@ -779,87 +692,17 @@ export function setupInterceptor(): void {
               status: response.status,
               statusText: response.statusText,
               headers: Object.fromEntries(response.headers.entries()),
-              body: { events: [] },
+              body: null,
             };
 
-            const originalBody = response.body!;
-            const reader = originalBody.getReader();
-            const decoder = new TextDecoder();
-            let streamedChunks: string[] = [];
-            let streamedContentLen = 0;
+            // 使用 tee() 分流：一个给客户端，一个用于后台提取
+            const [clientBody, logBody] = response.body!.tee();
 
-            const stream = new ReadableStream({
-              async start(controller) {
-                try {
-                  while (true) {
-                    const { done, value } = await reader.read();
-                    if (done) {
-                      // 流结束，组装完整消息
-                      const tail = decoder.decode();
-                      if (tail) {
-                        streamedChunks.push(tail);
-                        streamedContentLen += tail.length;
-                      }
+            // 后台提取（不阻塞客户端）
+            extractInBackground(logBody, entry, deltaOriginalMessagesLength, deltaOriginalTailFp);
 
-                      const fullContent = streamedChunks.join('');
-
-                      try {
-                        // 解析 SSE 事件
-                        const events = fullContent
-                          .split(/\r?\n\r?\n/)
-                          .filter((block) => block.trim())
-                          .map((block) => {
-                            const lines = block.split(/\r?\n/);
-                            const dataLine = lines.find((l) => l.startsWith('data:'));
-                            if (dataLine) {
-                              const jsonStr = dataLine.startsWith('data: ')
-                                ? dataLine.substring(6)
-                                : dataLine.substring(5);
-                              try {
-                                return JSON.parse(jsonStr);
-                              } catch {
-                                return jsonStr;
-                              }
-                            }
-                            return null;
-                          })
-                          .filter(Boolean);
-
-                        // 组装完整消息
-                        const assembledMessage = assembleStreamMessage(events);
-                        entry.response!.body = assembledMessage || fullContent;
-
-                        writeLogEntry(entry);
-                        commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
-
-                        // 释放内存
-                        streamedChunks = [];
-                        streamedContentLen = 0;
-                        entry.response = null;
-                      } catch (err) {
-                        entry.response!.body = fullContent.slice(0, MAX_STREAM_ERROR_BODY_LENGTH);
-                        writeLogEntry(entry);
-                        commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
-                        streamedChunks = [];
-                        entry.response = null;
-                      }
-
-                      controller.close();
-                      break;
-                    }
-
-                    const chunk = decoder.decode(value, { stream: true });
-                    streamedChunks.push(chunk);
-                    streamedContentLen += chunk.length;
-                    controller.enqueue(value);
-                  }
-                } catch (err) {
-                  controller.error(err);
-                }
-              },
-            });
-
-            return new Response(stream, {
+            // 直接返回原始流给客户端
+            return new Response(clientBody, {
               status: response.status,
               statusText: response.statusText,
               headers: response.headers,

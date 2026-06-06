@@ -6,14 +6,14 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX } from './constants.js';
+import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX, DEFAULT_SERVER_HOST } from './constants.js';
 
 // ==================== 类型定义 ====================
 
 /**
  * API 提供商类型
  */
-export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses' | 'gemini-generate';
+export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses';
 
 /**
  * 代理配置 profile
@@ -38,6 +38,7 @@ export interface ProxyGroup {
  * 全局代理配置
  */
 export interface ProxyConfig {
+  host: string;          // 服务器监听地址，默认 127.0.0.1
   proxyPort: number;     // 代理端口，默认 7048
   webPort: number;       // Web UI 端口，默认 7049
   groups: ProxyGroup[];
@@ -81,14 +82,10 @@ const DEFAULT_GROUPS: ProxyGroup[] = [
     profiles: [{ id: '1', name: 'OpenAI Responses', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-responses'], apiKey: '' }],
     activeProfileId: '1',
   },
-  {
-    apiType: 'gemini-generate',
-    profiles: [{ id: '1', name: 'Gemini', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['gemini-generate'], apiKey: '' }],
-    activeProfileId: '1',
-  },
 ];
 
 const DEFAULT_CONFIG: ProxyConfig = {
+  host: DEFAULT_SERVER_HOST,
   proxyPort: DEFAULT_PROXY_PORT,
   webPort: DEFAULT_WEB_PORT,
   groups: DEFAULT_GROUPS,
@@ -124,6 +121,7 @@ function isLegacyConfig(data: unknown): data is LegacyConfig {
 function migrateLegacyConfig(legacy: LegacyConfig): ProxyConfig {
   // 旧格式默认当作 anthropic-messages 类型
   return {
+    host: DEFAULT_SERVER_HOST,
     proxyPort: legacy.proxyPort || DEFAULT_PROXY_PORT,
     webPort: DEFAULT_WEB_PORT,
     groups: [
@@ -140,11 +138,6 @@ function migrateLegacyConfig(legacy: LegacyConfig): ProxyConfig {
       {
         apiType: 'openai-responses',
         profiles: [{ id: '1', name: 'OpenAI Responses', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-responses'], apiKey: '' }],
-        activeProfileId: '1',
-      },
-      {
-        apiType: 'gemini-generate',
-        profiles: [{ id: '1', name: 'Gemini', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['gemini-generate'], apiKey: '' }],
         activeProfileId: '1',
       },
     ],
@@ -229,8 +222,6 @@ function migrateMiddleFormat(middle: MiddleFormatConfig): ProxyConfig {
     } else if (profile.provider === 'openai' || profile.upstreamBaseUrl.includes('openai.com')) {
       // 默认归入 openai-chat
       apiType = 'openai-chat';
-    } else if (profile.upstreamBaseUrl.includes('googleapis.com')) {
-      apiType = 'gemini-generate';
     } else {
       // 未知类型，默认归入 anthropic-messages
       apiType = 'anthropic-messages';
@@ -261,6 +252,7 @@ function migrateMiddleFormat(middle: MiddleFormatConfig): ProxyConfig {
   });
 
   return {
+    host: DEFAULT_SERVER_HOST,
     proxyPort: middle.proxyPort || DEFAULT_PROXY_PORT,
     webPort: DEFAULT_WEB_PORT,
     groups: Array.from(groupsMap.values()),
@@ -279,6 +271,18 @@ function generateNextProfileId(profiles: ProxyProfile[]): string {
 // ==================== 核心 API ====================
 
 /**
+ * 环境变量覆盖 host（CLI --host 选项通过 AGENTPROXY_HOST 传递）
+ */
+function applyHostOverride(config: ProxyConfig): void {
+  if (!config.host) {
+    config.host = DEFAULT_SERVER_HOST;
+  }
+  if (process.env.AGENTPROXY_HOST) {
+    config.host = process.env.AGENTPROXY_HOST;
+  }
+}
+
+/**
  * 加载配置（从磁盘读取）
  */
 export function loadConfig(): ProxyConfig {
@@ -292,6 +296,7 @@ export function loadConfig(): ProxyConfig {
         saveConfig(migrated);
         console.log('[Config] 旧配置已迁移到新的分组格式');
         cachedConfig = migrated;
+        applyHostOverride(cachedConfig);
         return cachedConfig;
       }
 
@@ -301,6 +306,7 @@ export function loadConfig(): ProxyConfig {
         saveConfig(migrated);
         console.log('[Config] 旧的新格式配置已迁移到新的分组格式');
         cachedConfig = migrated;
+        applyHostOverride(cachedConfig);
         return cachedConfig;
       }
 
@@ -309,11 +315,13 @@ export function loadConfig(): ProxyConfig {
         saveConfig(migrated);
         console.log('[Config] 中间格式配置已迁移到新的分组格式');
         cachedConfig = migrated;
+        applyHostOverride(cachedConfig);
         return cachedConfig;
       }
 
       if ('groups' in parsed && 'proxyPort' in parsed) {
         cachedConfig = parsed as ProxyConfig;
+        applyHostOverride(cachedConfig);
         return cachedConfig;
       }
     }
@@ -322,6 +330,7 @@ export function loadConfig(): ProxyConfig {
   }
 
   cachedConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as ProxyConfig;
+  applyHostOverride(cachedConfig);
   return cachedConfig;
 }
 
@@ -473,6 +482,7 @@ export function deleteProfile(apiType: ApiProviderType, profileId: string): Prox
 export function getSafeConfig() {
   const config = getConfig();
   return {
+    host: config.host,
     proxyPort: config.proxyPort,
     webPort: config.webPort,
     groups: config.groups.map(group => ({

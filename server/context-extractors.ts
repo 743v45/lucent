@@ -8,7 +8,7 @@ import { API_PATH_REGEX } from './constants.js';
 
 // ==================== 类型定义 ====================
 
-export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses' | 'gemini-generate';
+export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses';
 
 export interface ContentBlock {
   type: string;
@@ -47,7 +47,6 @@ export function detectApiType(url: string): ApiProviderType | null {
   if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) return 'openai-responses';
   if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) return 'anthropic-messages';
   if (API_PATH_REGEX.OPENAI_CHAT.test(url)) return 'openai-chat';
-  if (API_PATH_REGEX.GEMINI_GENERATE.test(url)) return 'gemini-generate';
 
   return null;
 }
@@ -181,100 +180,6 @@ export function extractOpenAIResponses(body: any): ExtractedContext | null {
   return { systemPrompt, messages, tools };
 }
 
-// ==================== Gemini Generate Content API ====================
-
-/**
- * 从 Gemini Generate Content API 请求体中提取 context
- * URL: /v{version}/models/{model}:generateContent
- * Body: { systemInstruction?: { parts: Array<{text?: string}> }, contents: Content[], tools?: Tool[] }
- */
-export function extractGeminiGenerateContent(body: any): ExtractedContext | null {
-  if (!body || typeof body !== 'object') {
-    return null;
-  }
-
-  // 提取 system prompt（从 systemInstruction.parts）
-  let systemPrompt: string | undefined;
-  if (body.systemInstruction?.parts && Array.isArray(body.systemInstruction.parts)) {
-    const textParts = body.systemInstruction.parts
-      .filter((p: any) => p.text && typeof p.text === 'string');
-    if (textParts.length > 0) {
-      systemPrompt = textParts.map((p: any) => p.text).join('\n');
-    }
-  }
-
-  // 提取 messages（从 contents）
-  const messages: NormalizedMessage[] = [];
-  if (Array.isArray(body.contents)) {
-    for (const content of body.contents) {
-      // role "user" 保留，role "model" 映射为 "assistant"
-      const role = content.role === 'model' ? 'assistant' : content.role || 'user';
-
-      // 从 parts 提取 content
-      const extractedContent = extractGeminiParts(content.parts);
-      if (extractedContent) {
-        messages.push({ role, content: extractedContent });
-      }
-    }
-  }
-
-  // 提取 tools（从 tools[].functionDeclarations）
-  const tools: NormalizedTool[] = [];
-  if (Array.isArray(body.tools)) {
-    for (const tool of body.tools) {
-      if (Array.isArray(tool.functionDeclarations)) {
-        for (const func of tool.functionDeclarations) {
-          tools.push({
-            name: func.name,
-            description: func.description,
-          });
-        }
-      }
-    }
-  }
-
-  return { systemPrompt, messages, tools };
-}
-
-/**
- * 从 Gemini parts 中提取 content
- * 支持文本、functionCall、functionResponse
- */
-function extractGeminiParts(parts: any[] | undefined): string | ContentBlock[] | null {
-  if (!Array.isArray(parts) || parts.length === 0) {
-    return null;
-  }
-
-  // 如果只有文本部分，直接返回字符串
-  const textParts = parts.filter(p => p.text && typeof p.text === 'string');
-  if (textParts.length === parts.length) {
-    return textParts.map(p => p.text).join('');
-  }
-
-  // 否则返回 ContentBlock[]
-  const blocks: ContentBlock[] = [];
-  for (const part of parts) {
-    if (part.text) {
-      blocks.push({ type: 'text', text: part.text });
-    } else if (part.functionCall) {
-      blocks.push({
-        type: 'tool_use',
-        id: part.functionCall.id || '',
-        name: part.functionCall.name,
-        input: part.functionCall.args,
-      });
-    } else if (part.functionResponse) {
-      blocks.push({
-        type: 'tool_result',
-        tool_use_id: part.functionResponse.id || '',
-        content: part.functionResponse.response,
-      });
-    }
-  }
-
-  return blocks.length > 0 ? blocks : null;
-}
-
 // ==================== 主提取函数 ====================
 
 /**
@@ -293,7 +198,6 @@ export function extractContext(body: any, url: string): ExtractedContext | null 
     'anthropic-messages': extractAnthropicMessages,
     'openai-chat': extractOpenAIChat,
     'openai-responses': extractOpenAIResponses,
-    'gemini-generate': extractGeminiGenerateContent,
   };
 
   if (apiType && extractors[apiType]) {
@@ -314,11 +218,6 @@ export function extractContext(body: any, url: string): ExtractedContext | null 
   // 如果 body.instructions 存在 → OpenAI Responses
   if (body.instructions !== undefined) {
     return extractOpenAIResponses(body);
-  }
-
-  // 如果 body.contents 存在 → Gemini
-  if (body.contents !== undefined) {
-    return extractGeminiGenerateContent(body);
   }
 
   // 无法识别，返回 null

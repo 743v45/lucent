@@ -12,7 +12,9 @@ export const DEFAULT_PROXY_PORT = 7048;
 export const DEFAULT_WEB_PORT = 7049;
 
 // ==================== 服务器地址 ====================
-export const SERVER_HOST = '127.0.0.1';
+export const DEFAULT_SERVER_HOST = '127.0.0.1';
+/** @deprecated 使用 DEFAULT_SERVER_HOST */
+export const SERVER_HOST = DEFAULT_SERVER_HOST;
 
 // ==================== 应用数据目录 ====================
 export const APP_DATA_DIR_NAME = '.agentproxy';
@@ -53,7 +55,6 @@ export const DEFAULT_UPSTREAM_URLS = {
   'anthropic-messages': 'https://api.anthropic.com',
   'openai-chat': 'https://api.openai.com',
   'openai-responses': 'https://api.openai.com',
-  'gemini-generate': 'https://generativelanguage.googleapis.com',
 } as const;
 
 // ==================== 测试连接模型 ====================
@@ -61,7 +62,6 @@ export const TEST_MODELS = {
   'anthropic-messages': 'claude-sonnet-4-20250514',
   'openai-chat': 'gpt-4o-mini',
   'openai-responses': 'gpt-4o-mini',
-  'gemini-generate': 'gemini-2.0-flash',
 } as const;
 
 export const TEST_REQUEST_CONTENT = 'hi';
@@ -92,5 +92,4 @@ export const API_PATH_REGEX = {
   ANTHROPIC_MESSAGES: /\/v1\/messages|\/api\/v1\/messages/,
   OPENAI_CHAT: /\/v1\/(chat\/completions|completions)/,
   OPENAI_RESPONSES: /\/v1\/responses/,
-  GEMINI_GENERATE: /\/v\d+\/models\/[^/]+:generateContent/,
 } as const;
