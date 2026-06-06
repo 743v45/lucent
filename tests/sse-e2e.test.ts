@@ -6,7 +6,11 @@
 
 import { describe, it, expect } from 'vitest';
 import { ReadableStream } from 'node:stream/web';
-import { extractInBackground, ExtractedInfo, LogEntry } from '../server/interceptor.js';
+import { extractInBackground } from '../server/sse-extractor.js';
+import type { ExtractedInfo, RawLogEntry } from '../server/types.js';
+
+// 测试中用 RawLogEntry 替代原 LogEntry
+type LogEntry = RawLogEntry;
 
 // SSE 格式编码函数
 function encodeSSE(events: Array<{ event?: string; data: any }>): Uint8Array {
@@ -92,7 +96,10 @@ describe('extractInBackground 端到端测试', () => {
       mainAgent: true,
     };
 
-    await extractInBackground(body, entry, 0, '');
+    await extractInBackground(body, entry,
+      (_e) => { /* no-op */ },
+      () => { /* no-op */ },
+    );
 
     expect(entry.response?.body.type).toBe('message');
     expect(entry.response?.body.model).toBe('claude-3-opus-20240229');
@@ -153,7 +160,10 @@ describe('extractInBackground 端到端测试', () => {
       mainAgent: true,
     };
 
-    await extractInBackground(body, entry, 0, '');
+    await extractInBackground(body, entry,
+      (_e) => { /* no-op */ },
+      () => { /* no-op */ },
+    );
 
     expect(entry.response?.body.content[0].text).toBe('Hello world');
     expect(entry.response?.body.stop_reason).toBe('stop');
@@ -232,7 +242,10 @@ describe('extractInBackground 端到端测试', () => {
       mainAgent: true,
     };
 
-    await extractInBackground(body, entry, 0, '');
+    await extractInBackground(body, entry,
+      (_e) => { /* no-op */ },
+      () => { /* no-op */ },
+    );
 
     expect(entry.response?.body.content[0].type).toBe('tool_use');
     expect(entry.response?.body.content[0].name).toBe('bash');

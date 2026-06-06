@@ -4,7 +4,7 @@
  * 用于识别请求中的 Agent 类型和子类型
  */
 
-import { AgentType, SubAgentType } from '../src/types.js';
+import { AgentType, SubAgentType } from './types.js';
 import createDebug from 'debug';
 const log = createDebug('agentproxy:agent-id');
 

@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractFromEvent, ExtractedInfo } from '../server/interceptor.js';
+import { extractFromEvent, ExtractedInfo } from '../server/sse-extractor.js';
 
 // 创建空的 ExtractedInfo 初始值
 function createEmptyExtractedInfo(): ExtractedInfo {

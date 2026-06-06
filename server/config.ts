@@ -7,15 +7,14 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS, HEARTBEAT_INTERVAL_MS } from './constants.js';
+import type { ApiProviderType } from './types.js';
 import createDebug from 'debug';
 const log = createDebug('agentproxy:config');
 
 // ==================== 类型定义 ====================
 
-/**
- * API 提供商类型
- */
-export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses';
+// ApiProviderType 已移至 types.ts，此处重新导出以保持向后兼容
+export type { ApiProviderType };
 
 /**
  * 代理配置 profile

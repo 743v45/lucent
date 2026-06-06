@@ -5,12 +5,13 @@
  */
 
 import { API_PATH_REGEX } from './constants.js';
+import type { ApiProviderType } from './types.js';
 import createDebug from 'debug';
 const log = createDebug('agentproxy:context');
 
 // ==================== 类型定义 ====================
 
-export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses';
+// ApiProviderType 已移至 types.ts
 
 export interface ContentBlock {
   type: string;

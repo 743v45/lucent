@@ -4,12 +4,10 @@
  */
 
 import {
-  DEFAULT_CONTEXT_SIZE,
-  LARGE_CONTEXT_SIZE,
-  LARGE_CONTEXT_MODEL_PATTERN,
   MAX_CONTEXT_CHECKPOINTS,
   CHECKPOINT_KEY_CONTENT_LENGTH,
 } from './constants.js';
+import { getContextSizeForModel } from './kvcache.js';
 import createDebug from 'debug';
 const log = createDebug('agentproxy:context:rebuild');
 
@@ -133,8 +131,8 @@ export class ContextRebuilder {
           content: [block],
           timestamp,
           id: body.id,
-          tool_use_id: block.id,
-          name: block.name,
+          tool_use_id: block.id as string | undefined,
+          name: block.name as string | undefined,
         });
       }
     }
@@ -391,23 +389,6 @@ export function calculateContextWindow(
     usedPercentage,
     remainingPercentage,
   };
-}
-
-/**
- * 获取模型的上下文窗口大小
- */
-function getContextSizeForModel(model: string): number {
-  if (!model) return DEFAULT_CONTEXT_SIZE;
-
-  const lower = model.toLowerCase();
-
-  // Opus / Mythos / Sonnet 4.x 模型默认 1M 上下文
-  if (LARGE_CONTEXT_MODEL_PATTERN.test(lower)) {
-    return LARGE_CONTEXT_SIZE;
-  }
-
-  // 其他模型默认 200K
-  return DEFAULT_CONTEXT_SIZE;
 }
 
 /**

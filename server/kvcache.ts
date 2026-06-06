@@ -89,7 +89,7 @@ function escapeXml(text: string): string {
 /**
  * 从 tool_result 内容块中提取文本
  */
-function extractToolResultText(toolResult: { content?: unknown }): string {
+function extractToolResultText(toolResult: { content?: unknown; [key: string]: unknown }): string {
   if (!toolResult.content) return '';
 
   if (typeof toolResult.content === 'string') {

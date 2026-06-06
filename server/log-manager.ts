@@ -6,7 +6,7 @@
 
 import { mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { LogEntry } from '../src/types.js';
+import { LogEntry } from './types.js';
 import { resolveEffectiveConfig } from './config.js';
 import createDebug from 'debug';
 const log = createDebug('agentproxy:log-manager');
@@ -404,13 +404,13 @@ function convertToMarkdown(logs: LogEntry[], includeMeta?: boolean): string {
 
     if (log.tokenUsage) {
       lines.push(`**Token 使用**:\n`);
-      lines.push(`  - Input: ${log.tokenUsage.input_tokens}\n`);
-      lines.push(`  - Output: ${log.tokenUsage.output_tokens}\n`);
-      if (log.tokenUsage.cache_read_tokens) {
-        lines.push(`  - Cache Read: ${log.tokenUsage.cache_read_tokens}\n`);
+      lines.push(`  - Input: ${log.tokenUsage.inputTokens}\n`);
+      lines.push(`  - Output: ${log.tokenUsage.outputTokens}\n`);
+      if (log.tokenUsage.cacheReadTokens) {
+        lines.push(`  - Cache Read: ${log.tokenUsage.cacheReadTokens}\n`);
       }
-      if (log.tokenUsage.cache_creation_tokens) {
-        lines.push(`  - Cache Write: ${log.tokenUsage.cache_creation_tokens}\n`);
+      if (log.tokenUsage.cacheWriteTokens) {
+        lines.push(`  - Cache Write: ${log.tokenUsage.cacheWriteTokens}\n`);
       }
     }
 

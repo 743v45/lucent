@@ -258,28 +258,3 @@ export async function startProxyServer(options?: { port?: number; host?: string 
     });
   });
 }
-
-/**
- * 创建代理服务器（不自动启动）
- */
-export function createProxyServer(options?: { port?: number }): ProxyServer {
-  let serverInstance: any = null;
-  const port = options?.port || DEFAULT_PROXY_PORT;
-
-  return {
-    port,
-    stop: async () => {
-      if (serverInstance) {
-        return new Promise<void>((resolve, reject) => {
-          serverInstance.close((err: Error) => {
-            if (err) {
-              reject(err);
-            } else {
-              resolve();
-            }
-          });
-        });
-      }
-    },
-  };
-}
