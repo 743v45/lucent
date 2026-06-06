@@ -14,6 +14,7 @@ import { dirname } from 'node:path';
 import open from 'open';
 import * as Config from './config.js';
 import * as LogWriter from './services/log-writer.js';
+import * as LogReader from './services/log-reader.js';
 import * as SseBroadcaster from './services/sse-broadcaster.js';
 import { mountRoutes } from './routes/index.js';
 import { startProxyServer } from './proxy.js';
@@ -62,6 +63,7 @@ export async function startServer(): Promise<void> {
 
   // 初始化日志服务
   LogWriter.init(resolvedConfig);
+  LogReader.init(resolvedConfig);
   LogWriter.cleanupOldLogs();
 
   // 启动代理服务器
