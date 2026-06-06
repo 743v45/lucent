@@ -9,6 +9,8 @@ import {
   LARGE_CONTEXT_MODEL_PATTERN,
   TOOL_INPUT_PREVIEW_LENGTH,
 } from './constants.js';
+import createDebug from 'debug';
+const log = createDebug('agentproxy:kvcache');
 
 interface CacheControlBlock {
   type: string;
@@ -254,6 +256,10 @@ export function extractCachedContent(body: RequestBody, usage?: ResponseUsage): 
   // 提取工具缓存
   const cachedTools = extractCachedTools(body.tools || [], cachedSystem.length > 0);
   result.tools = cachedTools;
+
+  log('KV 缓存: create=%d read=%d hitRate=%d%% systemBlocks=%d messageBlocks=%d toolBlocks=%d',
+    result.cacheCreateTokens, result.cacheReadTokens, result.hitRate,
+    result.system.length, result.messages.length, result.tools.length);
 
   return result;
 }

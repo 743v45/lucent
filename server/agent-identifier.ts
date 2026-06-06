@@ -5,6 +5,8 @@
  */
 
 import { AgentType, SubAgentType } from '../src/types.js';
+import createDebug from 'debug';
+const log = createDebug('agentproxy:agent-id');
 
 export interface AgentIdentification {
   agentType: AgentType;
@@ -38,11 +40,11 @@ export function identifyAgent(body: unknown): AgentIdentification {
 
   // 主 Agent 识别：完整的 messages 数组且包含多轮对话
   if (Array.isArray(request.messages) && request.messages.length > 2) {
-    // 检查是否有完整的对话历史（至少有 user 和 assistant 轮次）
     const hasUserMessage = request.messages.some(m => m.role === 'user');
     const hasAssistantMessage = request.messages.some(m => m.role === 'assistant');
 
     if (hasUserMessage && hasAssistantMessage) {
+      log('识别为主 Agent: messages=%d', request.messages.length);
       return { agentType: 'main' };
     }
   }
@@ -217,12 +219,14 @@ export function extractTokenUsage(responseBody: unknown): TokenUsage | undefined
     return undefined;
   }
 
-  return {
+  const result = {
     inputTokens: typeof usage.input_tokens === 'number' ? usage.input_tokens : 0,
     outputTokens: typeof usage.output_tokens === 'number' ? usage.output_tokens : 0,
     cacheReadTokens: typeof usage.cache_read_tokens === 'number' ? usage.cache_read_tokens : undefined,
     cacheWriteTokens: typeof usage.cache_creation_tokens === 'number' ? usage.cache_creation_tokens : undefined,
   };
+  log('Token 使用: input=%d output=%d cacheRead=%d cacheWrite=%d', result.inputTokens, result.outputTokens, result.cacheReadTokens ?? 0, result.cacheWriteTokens ?? 0);
+  return result;
 }
 
 /**
@@ -257,10 +261,12 @@ export function identifyProvider(url: string): 'openai' | 'claude' | 'unknown' {
   const lower = url.toLowerCase();
 
   if (lower.includes('openai') || lower.includes('api.openai.com')) {
+    log('识别提供商: openai, url=%s', url);
     return 'openai';
   }
 
   if (lower.includes('anthropic') || lower.includes('claude')) {
+    log('识别提供商: claude, url=%s', url);
     return 'claude';
   }
 

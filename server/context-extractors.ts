@@ -5,6 +5,8 @@
  */
 
 import { API_PATH_REGEX } from './constants.js';
+import createDebug from 'debug';
+const log = createDebug('agentproxy:context');
 
 // ==================== 类型定义 ====================
 
@@ -44,9 +46,9 @@ export function detectApiType(url: string): ApiProviderType | null {
   }
 
   // OpenAI Responses API 要在 Anthropic Messages 之前检查
-  if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) return 'openai-responses';
-  if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) return 'anthropic-messages';
-  if (API_PATH_REGEX.OPENAI_CHAT.test(url)) return 'openai-chat';
+  if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) { log('检测 API 类型: openai-responses, url=%s', url); return 'openai-responses'; }
+  if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) { log('检测 API 类型: anthropic-messages, url=%s', url); return 'anthropic-messages'; }
+  if (API_PATH_REGEX.OPENAI_CHAT.test(url)) { log('检测 API 类型: openai-chat, url=%s', url); return 'openai-chat'; }
 
   return null;
 }
@@ -201,10 +203,15 @@ export function extractContext(body: any, url: string): ExtractedContext | null 
   };
 
   if (apiType && extractors[apiType]) {
-    return extractors[apiType](body);
+    const result = extractors[apiType](body);
+    if (result) {
+      log('提取上下文: apiType=%s messages=%d tools=%d systemPromptLen=%d', apiType, result.messages.length, result.tools.length, result.systemPrompt?.length ?? 0);
+    }
+    return result;
   }
 
   // Fallback：尝试通过 body 字段判断
+  log('URL 检测失败，尝试 body fallback: url=%s', url);
   // 如果 body.system 存在 → Anthropic
   if (body.system !== undefined) {
     return extractAnthropicMessages(body);

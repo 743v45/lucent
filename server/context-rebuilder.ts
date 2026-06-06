@@ -10,6 +10,8 @@ import {
   MAX_CONTEXT_CHECKPOINTS,
   CHECKPOINT_KEY_CONTENT_LENGTH,
 } from './constants.js';
+import createDebug from 'debug';
+const log = createDebug('agentproxy:context:rebuild');
 
 interface ContextMessage {
   role: string;
@@ -224,6 +226,7 @@ export class ContextRebuilder {
 
     this.checkpoints.set(key, checkpoint);
     this.currentCheckpointKey = key;
+    log('创建 checkpoint: key=%s messages=%d', key, checkpoint.messages.length);
 
     // 清理旧检查点
     this.cleanupOldCheckpoints();
@@ -305,6 +308,9 @@ export class ContextRebuilder {
     for (const [key] of toDelete) {
       this.checkpoints.delete(key);
     }
+    if (toDelete.length > 0) {
+      log('清理旧 checkpoints: 删除=%d 剩余=%d', toDelete.length, this.checkpoints.size);
+    }
   }
 
   /**
@@ -376,6 +382,8 @@ export function calculateContextWindow(
   const totalTokens = inputTokens + outputTokens;
   const usedPercentage = Math.min(100, Math.round((totalTokens / contextSize) * 100));
   const remainingPercentage = 100 - usedPercentage;
+
+  log('上下文窗口: %d/%d tokens (%d%% used)', totalTokens, contextSize, usedPercentage);
 
   return {
     totalTokens,
