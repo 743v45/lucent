@@ -35,6 +35,7 @@ async function request<T>(
 export async function getProxyStatus(): Promise<{
   enabled: boolean;
   running: boolean;
+  host: string;
   webPort: number;
   proxyPort: number;
   logFile: string | null;

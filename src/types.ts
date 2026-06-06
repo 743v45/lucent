@@ -10,6 +10,7 @@ export interface LogEntry {
   response: ResponseData;
   agentType: AgentType;
   subAgentType?: SubAgentType;
+  apiType?: ApiProviderType;
   duration: number;
   tokenUsage?: TokenUsage;
   metadata: Metadata;
@@ -106,6 +107,7 @@ export interface KVCacheInfo {
 export interface ProxyStatus {
   enabled: boolean;
   running: boolean;
+  host: string;
   webPort: number;
   proxyPort: number;
   logFile: string | null;
@@ -190,7 +192,7 @@ export interface ContextWindowInfo {
 /**
  * API 提供商类型
  */
-export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses' | 'gemini-generate';
+export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses';
 
 /**
  * API 类型标签映射
@@ -199,7 +201,6 @@ export const API_TYPE_LABELS: Record<ApiProviderType, string> = {
   'anthropic-messages': 'Anthropic Messages',
   'openai-chat': 'OpenAI Chat',
   'openai-responses': 'OpenAI Responses',
-  'gemini-generate': 'Gemini',
 };
 
 /**
@@ -236,6 +237,7 @@ export interface ProxyGroup {
  * 全局代理配置（脱敏）
  */
 export interface ProxyConfig {
+  host: string;          // 服务器监听地址，默认 127.0.0.1
   proxyPort: number;     // 代理端口，默认 7048
   webPort: number;       // Web UI 端口，默认 7049
   groups: ProxyGroup[];

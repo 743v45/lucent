@@ -212,15 +212,6 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         </div>
       ),
     },
-    {
-      key: 'gemini-generate',
-      label: (
-        <div className="flex items-center gap-2 text-text-primary">
-          <ProviderIcon type="gemini-generate" size={16} />
-          <span>Gemini</span>
-        </div>
-      ),
-    },
   ];
 
   const handleRename = async () => {

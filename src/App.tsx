@@ -3,11 +3,10 @@ import { LogListPanel } from './components/dashboard/LogListPanel';
 import { DetailPanel } from './components/viewer/DetailPanel';
 import { SettingsContext } from './contexts/SettingsContext';
 import { SettingsModal } from './components/settings/SettingsModal';
-import { useProxyStatus } from './hooks/useProxyStatus';
+import { UsageGuide } from './components/common/UsageGuide';
 import { useLogs } from './hooks/useLogs';
 import { useEventSource } from './hooks/useEventSource';
-import { exportLogs } from './utils/api';
-import { ArrowPathIcon, ArrowUpTrayIcon, Cog6ToothIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, Cog6ToothIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
 import type { LogEntry, TabType } from './types';
 import {
   URL_PARAM_LOG_ID,
@@ -28,6 +27,7 @@ function App(): JSX.Element {
     (params.get(URL_PARAM_TAB) as TabType) || DEFAULT_ACTIVE_TAB
   );
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [usageGuideOpen, setUsageGuideOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY_SIDEBAR_WIDTH);
     return saved ? parseInt(saved, 10) : SIDEBAR_DEFAULT_WIDTH;
@@ -54,7 +54,6 @@ function App(): JSX.Element {
     updateUrl(selectedLogId, tab);
   }, [selectedLogId, updateUrl]);
 
-  const { status: proxyStatus, refresh: refreshStatus } = useProxyStatus();
   const { logs, loading: logsLoading, loadLogs, addLog } = useLogs();
 
   const handleNewLog = useCallback((log: LogEntry) => {
@@ -84,17 +83,6 @@ function App(): JSX.Element {
         updateUrl(selectedLogId, updates.activeTab);
       }
     },
-  };
-
-  const handleExportLogs = async () => {
-    try {
-      const result = await exportLogs('jsonl', false);
-      if (result.success) {
-        alert(`成功导出 ${result.count} 条日志`);
-      }
-    } catch (err) {
-      console.error('Failed to export logs:', err);
-    }
   };
 
   // 拖拽分割栏处理
@@ -141,16 +129,8 @@ function App(): JSX.Element {
             <span className="text-[15px] text-text-quaternary">AI Agent 代理</span>
           </div>
 
-          {/* 中：状态 */}
-          <div className="flex-1 flex items-center justify-center gap-3">
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-bg-hover border border-border-subtle">
-              <span className="text-[15px] text-success font-[510]">● 运行中</span>
-              <span className="text-[14px] text-text-quaternary">:{proxyStatus.proxyPort}</span>
-            </div>
-          </div>
-
           {/* 右：操作 */}
-          <div className="flex items-center gap-2">
+          <div className="ml-auto flex items-center gap-2">
             <button
               className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
               onClick={loadLogs}
@@ -161,10 +141,10 @@ function App(): JSX.Element {
             </button>
             <button
               className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
-              onClick={handleExportLogs}
-              title="导出"
+              onClick={() => setUsageGuideOpen(true)}
+              title="使用说明"
             >
-              <ArrowUpTrayIcon className="w-[18px] h-[18px]" />
+              <InformationCircleIcon className="w-[18px] h-[18px]" />
             </button>
             <button
               className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
@@ -198,6 +178,7 @@ function App(): JSX.Element {
         </div>
 
         <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        <UsageGuide open={usageGuideOpen} onClose={() => setUsageGuideOpen(false)} />
       </div>
     </SettingsContext.Provider>
   );

@@ -1,7 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
 import { Empty, Spin, Typography } from 'antd';
-import type { LogEntry, AgentType } from '../../types';
+import type { LogEntry, AgentType, ApiProviderType } from '../../types';
+import { API_PATH_REGEX } from '../../constants';
 import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, HTTP_ERROR_STATUS_THRESHOLD } from '../../constants';
+import { ProviderIcon } from '../common/ProviderIcon';
 
 const { Text } = Typography;
 
@@ -22,6 +24,14 @@ const shortenModel = (model: string): string => {
     .replace(/^claude-(\d)-(\d)-/, 'claude-$1.$2-') // claude-3-5 → claude-3.5
     .replace(/^gpt-4-(\d+)/, 'gpt-4$1')             // gpt-4-0125 → gpt-40125
     .replace(/^gpt-3\.5-turbo.*$/, 'gpt-3.5-turbo');
+};
+
+/** 从 URL 检测 API 类型 */
+const detectApiType = (url: string): ApiProviderType | null => {
+  if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) return 'openai-responses';
+  if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) return 'anthropic-messages';
+  if (API_PATH_REGEX.OPENAI_CHAT.test(url)) return 'openai-chat';
+  return null;
 };
 
 export function LogListPanel({
@@ -178,8 +188,12 @@ export function LogListPanel({
                   <TimeWithTooltip timestamp={log.timestamp} />
                 </div>
 
-                {/* 行2：请求地址 + 耗时 + 状态码 */}
+                {/* 行2：协议图标 + 请求地址 + 耗时 + 状态码 */}
                 <div className="flex items-center gap-2 text-[13px] leading-[1.3]">
+                  {(() => {
+                    const apiType = log.apiType || detectApiType(log.request.url);
+                    return apiType ? <ProviderIcon type={apiType} size={14} className="text-text-secondary" /> : null;
+                  })()}
                   <span
                     className="text-text-quaternary truncate flex-1 min-w-0"
                     title={log.request.url}

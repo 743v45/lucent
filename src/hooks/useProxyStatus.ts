@@ -9,6 +9,7 @@ export function useProxyStatus() {
   const [status, setStatus] = useState<ProxyStatus>({
     enabled: false,
     running: false,
+    host: '127.0.0.1',
     webPort: 0,
     proxyPort: 0,
     logFile: null,

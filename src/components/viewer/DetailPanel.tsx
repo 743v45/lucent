@@ -1,15 +1,24 @@
 import { useState, useCallback, useEffect } from 'react';
-import type { LogEntry, TabType } from '../../types';
-import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL } from '../../constants';
+import type { LogEntry, TabType, ApiProviderType } from '../../types';
+import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, API_PATH_REGEX } from '../../constants';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { ProviderIcon } from '../common/ProviderIcon';
 import 'react-json-view-lite/dist/index.css';
 import './DetailPanel.css';
 
 // ==================== Chevron Icon ====================
+
+/** 从 URL 检测 API 类型 */
+const detectApiType = (url: string): ApiProviderType | null => {
+  if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) return 'openai-responses';
+  if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) return 'anthropic-messages';
+  if (API_PATH_REGEX.OPENAI_CHAT.test(url)) return 'openai-chat';
+  return null;
+};
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
@@ -247,8 +256,12 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
             </>
           )}
         </div>
-        <div className="text-sm text-text-tertiary truncate" title={log.request.url}>
-          {log.request.url}
+        <div className="flex items-center gap-2 text-sm text-text-tertiary truncate" title={log.request.url}>
+          {(() => {
+            const apiType = log.apiType || detectApiType(log.request.url);
+            return apiType ? <ProviderIcon type={apiType} size={14} /> : null;
+          })()}
+          <span className="truncate">{log.request.url}</span>
         </div>
       </div>
       {/* 右侧：Token/Cache 统计 */}

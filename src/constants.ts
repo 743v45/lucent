@@ -45,7 +45,6 @@ export const DEFAULT_UPSTREAM_URLS: Record<ApiProviderType, string> = {
   'anthropic-messages': 'https://api.anthropic.com',
   'openai-chat': 'https://api.openai.com',
   'openai-responses': 'https://api.openai.com',
-  'gemini-generate': 'https://generativelanguage.googleapis.com',
 };
 
 // ==================== 环境变量名 ====================
@@ -53,8 +52,21 @@ export const ENV_VAR_NAMES: Record<ApiProviderType, string> = {
   'anthropic-messages': 'ANTHROPIC_BASE_URL',
   'openai-chat': 'OPENAI_BASE_URL',
   'openai-responses': 'OPENAI_BASE_URL',
-  'gemini-generate': 'GEMINI_BASE_URL',
 };
+
+// ==================== 代理拦截的 API 路径 ====================
+export const API_INTERCEPT_PATHS: Record<ApiProviderType, string> = {
+  'anthropic-messages': '/v1/messages',
+  'openai-chat': '/v1/chat/completions',
+  'openai-responses': '/v1/responses',
+};
+
+// ==================== API 路径正则匹配 ====================
+export const API_PATH_REGEX = {
+  ANTHROPIC_MESSAGES: /\/v1\/messages|\/api\/v1\/messages/,
+  OPENAI_CHAT: /\/v1\/(chat\/completions|completions)/,
+  OPENAI_RESPONSES: /\/v1\/responses/,
+} as const;
 
 // ==================== 默认值 ====================
 export const DEFAULT_PROFILE_NAME = 'default';
