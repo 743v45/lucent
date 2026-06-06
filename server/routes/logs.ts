@@ -54,16 +54,35 @@ export function createLogsRouter(options: {
 
     res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: Date.now() })}\n\n`);
 
+    // 心跳写入失败时主动关闭连接（浏览器刷新时 req.on('close') 可能延迟触发）
     const sseHeartbeat = setInterval(() => {
-      res.write(': heartbeat\n\n');
+      try {
+        const ok = res.write(': heartbeat\n\n');
+        if (!ok) {
+          // 写入缓冲区满或连接已断开，主动清理
+          dbg('SSE 心跳写入失败，主动关闭连接');
+          clearInterval(sseHeartbeat);
+          SseBroadcaster.removeClient(res);
+          res.end();
+        }
+      } catch (err) {
+        dbg('SSE 心跳写入异常: %O', err);
+        clearInterval(sseHeartbeat);
+        SseBroadcaster.removeClient(res);
+        try { res.end(); } catch {}
+      }
     }, options.resolvedConfig.heartbeatIntervalMs);
 
     SseBroadcaster.addClient(res);
 
-    req.on('close', () => {
+    // 同时监听 req 和 res 的 close 事件，确保及时清理
+    const cleanup = () => {
       clearInterval(sseHeartbeat);
       SseBroadcaster.removeClient(res);
-    });
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
+    res.on('finish', cleanup); // 响应完成时也清理
   });
 
   // GET /api/logs/stats（必须在 :id 前面）
