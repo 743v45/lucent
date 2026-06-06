@@ -12,7 +12,6 @@ import {
   MAX_LOG_FILES_TO_READ,
   LOG_SPLIT_REGEX,
 } from '../constants.js';
-import { detectApiType } from '../context-extractors.js';
 import { extractContext } from '../context-extractors.js';
 import { getContextSizeForModel } from '../kvcache.js';
 import type { LogEntry, LogsQuery } from '../types.js';
@@ -88,13 +87,7 @@ function buildContextFromRequest(log: LogEntry): void {
 
   if (!body || typeof body !== 'object') return;
 
-  // 检测 API 类型
-  const apiType = detectApiType(url);
-  if (apiType) {
-    log.apiType = apiType;
-  }
-
-  // 使用统一的 context 提取器
+  // 使用统一的 context 提取器（内部会检测 API 类型）
   const extracted = extractContext(body, url);
   if (!extracted) return;
 

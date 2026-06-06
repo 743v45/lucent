@@ -26,7 +26,7 @@ import {
   MAX_BODY_PARSE_FAILURE_LENGTH,
   MAX_RESPONSE_BODY_LENGTH,
 } from './constants.js';
-import type { RawLogEntry } from './types.js';
+import type { ApiProviderType, RawLogEntry } from './types.js';
 import createDebug from 'debug';
 const dbg = createDebug('agentproxy:interceptor');
 const dbgSse = createDebug('agentproxy:interceptor:sse');
@@ -34,6 +34,23 @@ const dbgSse = createDebug('agentproxy:interceptor:sse');
 // ==================== 状态 ====================
 
 let interceptorInstalled = false;
+
+/**
+ * 后台 SSE 提取任务集合
+ * 用于优雅退出时等待所有任务完成
+ */
+const pendingSSETasks = new Set<Promise<void>>();
+
+/**
+ * 等待所有后台 SSE 任务完成
+ * 优雅退出时调用，确保数据不丢失
+ */
+export async function drainPendingSSETasks(): Promise<void> {
+  if (pendingSSETasks.size === 0) return;
+  dbg('等待后台 SSE 任务完成: count=%d', pendingSSETasks.size);
+  await Promise.all([...pendingSSETasks]);
+  dbg('所有后台 SSE 任务已完成');
+}
 
 // ==================== 工具函数 ====================
 
@@ -130,11 +147,16 @@ function handleStreamingResponse(
   };
 
   const [clientBody, logBody] = response.body!.tee();
-  extractInBackground(logBody, entry,
+
+  // 创建后台任务并跟踪
+  const task = extractInBackground(logBody, entry,
     (e) => LogWriter.writeLogEntry(e),
     () => commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp),
   );
-  dbgSse('SSE 流开始提取: id=%s', entry.id);
+  pendingSSETasks.add(task);
+  task.finally(() => pendingSSETasks.delete(task));
+
+  dbgSse('SSE 流开始提取: id=%s pending=%d', entry.id, pendingSSETasks.size);
 
   return new Response(clientBody, {
     status: response.status,
@@ -189,21 +211,29 @@ async function handleNormalResponse(
 // ==================== 请求处理 ====================
 
 /**
- * 判断是否需要拦截此请求
+ * 判断是否需要拦截此请求，同时返回检测到的 API 类型
+ * 返回 null 表示不拦截，返回 ApiProviderType 表示需要拦截
  */
-function shouldInterceptRequest(urlStr: string, headers: Record<string, unknown>): boolean {
+function checkIntercept(urlStr: string, headers: Record<string, unknown>): ApiProviderType | null {
   const isInternal = headers[INTERNAL_HEADERS[0]] || headers[INTERNAL_HEADERS[1]];
   const isProxyTrace = headers[PROXY_TRACE_HEADER] === 'true' || headers[PROXY_TRACE_HEADER] === true;
 
-  if (isInternal) return false;
+  if (isInternal) return null;
 
-  return isProxyTrace ||
-    urlStr.includes('anthropic') ||
-    urlStr.includes('claude') ||
-    urlStr.includes('openai') ||
-    isAnthropicApiPath(urlStr) ||
-    isOpenAIApiPath(urlStr) ||
-    detectApiType(urlStr) !== null;
+  // 先检测 API 类型（只调用一次）
+  const detectedApiType = detectApiType(urlStr);
+
+  if (isProxyTrace ||
+      urlStr.includes('anthropic') ||
+      urlStr.includes('claude') ||
+      urlStr.includes('openai') ||
+      isAnthropicApiPath(urlStr) ||
+      isOpenAIApiPath(urlStr) ||
+      detectedApiType !== null) {
+    return detectedApiType; // 返回检测结果（可能为 null 但仍需拦截）
+  }
+
+  return null;
 }
 
 /**
@@ -239,13 +269,13 @@ function buildRequestEntry(
   options: RequestInit | undefined,
   body: unknown,
   startTime: number,
+  detectedApiType: ApiProviderType | null,
 ): RawLogEntry {
   const headers = normalizeHeaders(options?.headers);
   const safeHeaders = sanitizeHeaders(headers);
   const isMain = isMainAgentRequest(body);
   const { agentType, subAgentType } = parseAgentType(body, isMain);
   const model = (body as any)?.model || 'unknown';
-  const detectedApiType = detectApiType(urlStr);
 
   const requestId = `${startTime}_${Math.random().toString(36).substring(2, 11)}`;
 
@@ -299,8 +329,9 @@ export function setupInterceptor(): void {
     const urlStr = typeof url === 'string' ? url : (url instanceof URL ? url.href : String(url));
     const headers = normalizeHeaders(options?.headers);
 
-    // 不拦截内部请求
-    if (!shouldInterceptRequest(urlStr, headers)) {
+    // 检查是否需要拦截，同时获取 API 类型（避免重复检测）
+    const detectedApiType = checkIntercept(urlStr, headers);
+    if (detectedApiType === null) {
       return originalFetch.call(this, url, options);
     }
 
@@ -311,7 +342,7 @@ export function setupInterceptor(): void {
 
     // 构建请求日志
     const body = parseRequestBody(options?.body as string | undefined);
-    const entry = buildRequestEntry(urlStr, options, body, startTime);
+    const entry = buildRequestEntry(urlStr, options, body, startTime, detectedApiType);
     const deltaState = processDeltaForMainAgent(entry, body);
 
     // 主 Agent 检查日志轮转
