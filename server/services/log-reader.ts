@@ -206,6 +206,14 @@ export function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: numb
     new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
   );
 
+  // 按 ID 去重（同名条目可能在多个文件中出现，保留最新的）
+  const seen = new Set<string>();
+  allLogs = allLogs.filter(log => {
+    if (seen.has(log.id)) return false;
+    seen.add(log.id);
+    return true;
+  });
+
   // 过滤掉没有响应的日志（还在进行中的请求）
   allLogs = allLogs.filter(log => log.response !== null && log.response !== undefined);
 

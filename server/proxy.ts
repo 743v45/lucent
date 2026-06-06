@@ -41,8 +41,8 @@ function forceIdentityAcceptEncoding(headers: Record<string, string>): Record<st
 
 /**
  * 移除 Content-Length header
- * 原因：代理会改写请求 body（interceptor 的模型替换 JSON.parse→改 model→JSON.stringify），
- * 客户端声明的 content-length 随之失真。透传旧值会触发 undici
+ * 原因：代理转发时会修改请求头（去掉 accept-encoding、加 trace header 等），
+ * 客户端声明的 content-length 可能失真。透传旧值会触发 undici
  * UND_ERR_REQ_CONTENT_LENGTH_MISMATCH → 502 → CLI 静默重试退避。
  */
 function stripContentLengthHeader(headers: Record<string, string>): Record<string, string> {
@@ -145,7 +145,8 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         headers = forceIdentityAcceptEncoding(headers);
         headers = stripContentLengthHeader(headers);
 
-        // 读取请求 body
+        // 读取请求 body（完整缓冲，因为 interceptor 需要解析 JSON 做日志记录；
+        // LLM API 请求体量通常在 KB~MB 级别，不需要流式传输）
         const buffers: Buffer[] = [];
         for await (const chunk of req) {
           buffers.push(chunk);

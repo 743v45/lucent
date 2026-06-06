@@ -220,7 +220,9 @@ export function setupInterceptor(): void {
 
             const [clientBody, logBody] = response.body!.tee();
             extractInBackground(logBody, entry,
-              (e) => LogWriter.writeLogEntry(e),
+              (e) => {
+                LogWriter.writeLogEntry(e);
+              },
               () => commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp),
             );
             dbgSse('SSE 流开始提取: id=%s', entry.id);

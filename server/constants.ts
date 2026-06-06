@@ -36,10 +36,6 @@ export const DEFAULT_LOG_QUERY_LIMIT = 100;         // 日志查询默认返回�
 export const LOG_ENTRY_SEPARATOR = '\n---\n';       // 日志条目之间的分隔符（写入时使用）
 export const LOG_SPLIT_REGEX = /\n---\n?/;          // 解析日志时用于拆分条目的正则
 
-// ==================== 心跳与超时 ====================
-/** SSE 心跳间隔，防止连接因空闲被关闭 */
-export const HEARTBEAT_INTERVAL_MS = 10000; // 10s — 刷新时更快检测断开连接
-
 // ==================== Delta 存储 ====================
 /** 每隔多少条 SSE delta 事件保存一次完整快照（用于上下文重建） */
 export const DELTA_CHECKPOINT_INTERVAL = 10;

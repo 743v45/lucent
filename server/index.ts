@@ -15,7 +15,6 @@ import open from 'open';
 import * as Config from './config.js';
 import * as LogWriter from './services/log-writer.js';
 import * as LogReader from './services/log-reader.js';
-import * as SseBroadcaster from './services/sse-broadcaster.js';
 import { mountRoutes } from './routes/index.js';
 import { startProxyServer } from './proxy.js';
 import { setupInterceptor } from './interceptor.js';
@@ -47,7 +46,7 @@ app.use(express.static(join(__dirname, '../public')));
 mountRoutes(app, {
   proxyEnabled: { get value() { return proxyEnabled; }, set value(v) { proxyEnabled = v; } },
   getLogFile: () => LogWriter.getCurrentLogFile(),
-  resolvedConfig: { get logDir() { return resolvedConfig.logDir; }, get heartbeatIntervalMs() { return resolvedConfig.heartbeatIntervalMs; } },
+  resolvedConfig: { get logDir() { return resolvedConfig.logDir; } },
   onLogsEnable: () => { /* 日志文件已在 LogWriter.init 中初始化 */ },
 });
 
@@ -130,7 +129,6 @@ export function shutdownServer(): void {
     proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));
   }
 
-  SseBroadcaster.closeAllClients();
   server.close();
 }
 

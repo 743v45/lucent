@@ -6,7 +6,7 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS, HEARTBEAT_INTERVAL_MS } from './constants.js';
+import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS } from './constants.js';
 import type { ApiProviderType } from './types.js';
 import createDebug from 'debug';
 const log = createDebug('agentproxy:config');
@@ -48,7 +48,6 @@ export interface ProxyConfig {
   logRetentionDays?: number;
   maxLogFileSize?: number;
   maxLogFiles?: number;
-  heartbeatIntervalMs?: number;
 }
 
 /**
@@ -63,7 +62,6 @@ export interface ResolvedConfig {
   logRetentionDays: number;
   maxLogFileSize: number;
   maxLogFiles: number;
-  heartbeatIntervalMs: number;
   groups: ProxyGroup[];
 }
 
@@ -316,7 +314,6 @@ export function resolveEffectiveConfig(): ResolvedConfig {
     logRetentionDays:    parseEnvNumber('AGENTPROXY_LOG_RETENTION_DAYS', raw.logRetentionDays ?? LOG_RETENTION_DAYS),
     maxLogFileSize:      parseEnvNumber('AGENTPROXY_MAX_LOG_FILE_SIZE',  raw.maxLogFileSize   ?? MAX_LOG_FILE_SIZE),
     maxLogFiles:         parseEnvNumber('AGENTPROXY_MAX_LOG_FILES',      raw.maxLogFiles      ?? MAX_LOG_FILES),
-    heartbeatIntervalMs: parseEnvNumber('AGENTPROXY_HEARTBEAT_INTERVAL', raw.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS),
     groups:              raw.groups,
   };
 }

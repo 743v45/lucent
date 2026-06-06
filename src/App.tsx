@@ -5,7 +5,6 @@ import { SettingsContext } from './contexts/SettingsContext';
 import { SettingsModal } from './components/settings/SettingsModal';
 import { UsageGuide } from './components/common/UsageGuide';
 import { useLogs } from './hooks/useLogs';
-import { useEventSource } from './hooks/useEventSource';
 import { ArrowPathIcon, Cog6ToothIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
 import type { LogEntry, TabType } from './types';
 import {
@@ -54,17 +53,7 @@ function App(): JSX.Element {
     updateUrl(selectedLogId, tab);
   }, [selectedLogId, updateUrl]);
 
-  const { logs, loading: logsLoading, loadLogs, addLog } = useLogs();
-
-  const handleNewLog = useCallback((log: LogEntry) => {
-    addLog(log);
-  }, [addLog]);
-
-  useEventSource({
-    onLog: handleNewLog,
-    onConnect: useCallback(() => console.log('[App] SSE connected'), []),
-    onDisconnect: useCallback(() => console.log('[App] SSE disconnected'), []),
-  });
+  const { logs, loading: logsLoading, loadLogs } = useLogs();
 
   const selectedLog = logs.find(log => log.id === selectedLogId);
 

@@ -2,7 +2,6 @@
  * 日志相关 API 路由
  *
  * GET    /api/logs          — 查询日志
- * GET    /api/logs/stream   — SSE 日志流
  * GET    /api/logs/stats    — 日志统计
  * GET    /api/logs/:id      — 单条日志详情
  * GET    /api/log-files     — 日志文件列表
@@ -16,13 +15,12 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import * as LogReader from '../services/log-reader.js';
 import * as LogManager from '../log-manager.js';
-import * as SseBroadcaster from '../services/sse-broadcaster.js';
 import type { LogsQuery } from '../types.js';
 import createDebug from 'debug';
 const dbg = createDebug('agentproxy:routes:logs');
 
 export function createLogsRouter(options: {
-  resolvedConfig: { logDir: string; heartbeatIntervalMs: number };
+  resolvedConfig: { logDir: string };
   onEnable: () => void; // 启用后的回调（设置日志文件）
 }): Router {
   const router = Router();
@@ -43,49 +41,7 @@ export function createLogsRouter(options: {
     res.json(result);
   });
 
-  // GET /api/logs/stream（必须在 :id 路由之前）
-  router.get('/api/logs/stream', (req, res) => {
-    res.writeHead(200, {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    });
-
-    res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: Date.now() })}\n\n`);
-
-    // 心跳写入失败时主动关闭连接（浏览器刷新时 req.on('close') 可能延迟触发）
-    const sseHeartbeat = setInterval(() => {
-      try {
-        const ok = res.write(': heartbeat\n\n');
-        if (!ok) {
-          // 写入缓冲区满或连接已断开，主动清理
-          dbg('SSE 心跳写入失败，主动关闭连接');
-          clearInterval(sseHeartbeat);
-          SseBroadcaster.removeClient(res);
-          res.end();
-        }
-      } catch (err) {
-        dbg('SSE 心跳写入异常: %O', err);
-        clearInterval(sseHeartbeat);
-        SseBroadcaster.removeClient(res);
-        try { res.end(); } catch {}
-      }
-    }, options.resolvedConfig.heartbeatIntervalMs);
-
-    SseBroadcaster.addClient(res);
-
-    // 同时监听 req 和 res 的 close 事件，确保及时清理
-    const cleanup = () => {
-      clearInterval(sseHeartbeat);
-      SseBroadcaster.removeClient(res);
-    };
-    req.on('close', cleanup);
-    res.on('close', cleanup);
-    res.on('finish', cleanup); // 响应完成时也清理
-  });
-
-  // GET /api/logs/stats（必须在 :id 前面）
+  // GET /api/logs/stats
   router.get('/api/logs/stats', (_req, res) => {
     try {
       const stats = LogManager.getLogStats();

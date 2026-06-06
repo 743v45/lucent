@@ -1,22 +1,13 @@
 /**
  * AgentProxy 前端常量
  *
- * 集中管理所有硬编码值
+ * 中管理所有硬编码值
  */
 
 import type { ApiProviderType } from './types';
 
 // ==================== API 路径 ====================
 export const API_BASE_PATH = '/api';
-export const SSE_ENDPOINT = '/api/logs/stream';
-
-// ==================== WebSocket ====================
-export const WS_URL = `ws://${window.location.host}/ws`;
-
-// ==================== 重连参数 ====================
-export const MAX_RECONNECT_ATTEMPTS = 10;
-export const RECONNECT_BASE_DELAY_MS = 1000;
-export const RECONNECT_MAX_DELAY_MS = 30000;
 
 // ==================== 布局尺寸 ====================
 export const SIDEBAR_DEFAULT_WIDTH = 300;
