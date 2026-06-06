@@ -6,7 +6,9 @@
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX, DEFAULT_SERVER_HOST } from './constants.js';
+import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS, HEARTBEAT_INTERVAL_MS } from './constants.js';
+import createDebug from 'debug';
+const log = createDebug('agentproxy:config');
 
 // ==================== 类型定义 ====================
 
@@ -41,6 +43,28 @@ export interface ProxyConfig {
   host: string;          // 服务器监听地址，默认 127.0.0.1
   proxyPort: number;     // 代理端口，默认 7048
   webPort: number;       // Web UI 端口，默认 7049
+  groups: ProxyGroup[];
+  // 可选的服务器配置（环境变量优先）
+  logDir?: string;
+  logRetentionDays?: number;
+  maxLogFileSize?: number;
+  maxLogFiles?: number;
+  heartbeatIntervalMs?: number;
+}
+
+/**
+ * 解析后的完整配置（所有字段必填）
+ * 优先级：环境变量 > 配置文件 > 默认值
+ */
+export interface ResolvedConfig {
+  host: string;
+  proxyPort: number;
+  webPort: number;
+  logDir: string;
+  logRetentionDays: number;
+  maxLogFileSize: number;
+  maxLogFiles: number;
+  heartbeatIntervalMs: number;
   groups: ProxyGroup[];
 }
 
@@ -271,7 +295,36 @@ function generateNextProfileId(profiles: ProxyProfile[]): string {
 // ==================== 核心 API ====================
 
 /**
+ * 解析环境变量中的数字，失败则返回 fallback
+ */
+function parseEnvNumber(name: string, fallback: number): number {
+  const val = process.env[name];
+  if (!val) return fallback;
+  const n = parseInt(val, 10);
+  return isNaN(n) ? fallback : n;
+}
+
+/**
+ * 解析完整配置：环境变量 > 配置文件 > 默认值
+ */
+export function resolveEffectiveConfig(): ResolvedConfig {
+  const raw = getConfig();
+  return {
+    host:                process.env.AGENTPROXY_HOST              || raw.host,
+    proxyPort:           parseEnvNumber('AGENTPROXY_PROXY_PORT',  raw.proxyPort),
+    webPort:             parseEnvNumber('AGENTPROXY_WEB_PORT',    raw.webPort),
+    logDir:              process.env.AGENTPROXY_LOG_DIR           || raw.logDir             || LOG_DIR,
+    logRetentionDays:    parseEnvNumber('AGENTPROXY_LOG_RETENTION_DAYS', raw.logRetentionDays ?? LOG_RETENTION_DAYS),
+    maxLogFileSize:      parseEnvNumber('AGENTPROXY_MAX_LOG_FILE_SIZE',  raw.maxLogFileSize   ?? MAX_LOG_FILE_SIZE),
+    maxLogFiles:         parseEnvNumber('AGENTPROXY_MAX_LOG_FILES',      raw.maxLogFiles      ?? MAX_LOG_FILES),
+    heartbeatIntervalMs: parseEnvNumber('AGENTPROXY_HEARTBEAT_INTERVAL', raw.heartbeatIntervalMs ?? HEARTBEAT_INTERVAL_MS),
+    groups:              raw.groups,
+  };
+}
+
+/**
  * 环境变量覆盖 host（CLI --host 选项通过 AGENTPROXY_HOST 传递）
+ * @deprecated 使用 resolveEffectiveConfig() 代替
  */
 function applyHostOverride(config: ProxyConfig): void {
   if (!config.host) {
@@ -294,7 +347,7 @@ export function loadConfig(): ProxyConfig {
       if (isLegacyConfig(parsed)) {
         const migrated = migrateLegacyConfig(parsed);
         saveConfig(migrated);
-        console.log('[Config] 旧配置已迁移到新的分组格式');
+        log('迁移旧格式配置 (legacy)');
         cachedConfig = migrated;
         applyHostOverride(cachedConfig);
         return cachedConfig;
@@ -304,7 +357,7 @@ export function loadConfig(): ProxyConfig {
         const middle = migrateOldNewFormat(parsed);
         const migrated = migrateMiddleFormat(middle);
         saveConfig(migrated);
-        console.log('[Config] 旧的新格式配置已迁移到新的分组格式');
+        log('迁移旧的新格式配置 (old-new)');
         cachedConfig = migrated;
         applyHostOverride(cachedConfig);
         return cachedConfig;
@@ -313,7 +366,7 @@ export function loadConfig(): ProxyConfig {
       if (isMiddleFormat(parsed)) {
         const migrated = migrateMiddleFormat(parsed);
         saveConfig(migrated);
-        console.log('[Config] 中间格式配置已迁移到新的分组格式');
+        log('迁移中间格式配置 (middle)');
         cachedConfig = migrated;
         applyHostOverride(cachedConfig);
         return cachedConfig;
@@ -326,7 +379,7 @@ export function loadConfig(): ProxyConfig {
       }
     }
   } catch (error) {
-    console.error('[Config] 加载配置失败，使用默认值:', error);
+    log('加载配置失败，使用默认值: %O', error);
   }
 
   cachedConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as ProxyConfig;
@@ -351,7 +404,7 @@ export function saveConfig(config: ProxyConfig): ProxyConfig {
   ensureDir();
   cachedConfig = config;
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
-  console.log('[Config] 配置已保存');
+  log('配置已保存: %d groups, host=%s, proxyPort=%d', config.groups.length, config.host, config.proxyPort);
   return config;
 }
 

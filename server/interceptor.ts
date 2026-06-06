@@ -9,14 +9,12 @@
  * - 支持流式响应捕获
  */
 
-import { appendFileSync, mkdirSync, existsSync, readFileSync, writeFileSync, statSync } from 'node:fs';
+import { appendFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { join, dirname, basename } from 'node:path';
+import { join, basename } from 'node:path';
 import { EventSourceParserStream } from 'eventsource-parser/stream';
 
 import {
-  LOG_DIR,
-  MAX_LOG_FILE_SIZE,
   DELTA_CHECKPOINT_INTERVAL,
   API_PATH_REGEX,
   API_KEY_MASK_THRESHOLD,
@@ -29,14 +27,22 @@ import {
   MAX_STREAM_ERROR_BODY_LENGTH,
   MAX_RESPONSE_BODY_LENGTH,
 } from './constants.js';
+import { resolveEffectiveConfig } from './config.js';
+import createDebug from 'debug';
+const dbg = createDebug('agentproxy:interceptor');
+const dbgSse = createDebug('agentproxy:interceptor:sse');
+const dbgDelta = createDebug('agentproxy:interceptor:delta');
 
 // ==================== 配置 ====================
-const INTERCEPTOR_CONFIG = {
-  logDir: LOG_DIR,
-  maxLogFileSize: MAX_LOG_FILE_SIZE,
-  deltaStorageEnabled: true, // 增量存储开关
-  checkpointInterval: DELTA_CHECKPOINT_INTERVAL,
-} as const;
+// 日志配置在 setupInterceptor() 中从 resolveEffectiveConfig() 惰性获取
+
+// ==================== 状态 ====================
+let interceptorConfig: {
+  logDir: string;
+  maxLogFileSize: number;
+  deltaStorageEnabled: boolean;
+  checkpointInterval: number;
+} | null = null;
 
 // ==================== 状态 ====================
 let currentLogFile: string | null = null;
@@ -251,8 +257,12 @@ export async function extractInBackground(
 
     writeLogEntry(entry);
     commitDeltaState(deltaOriginalMessagesLength, deltaOriginalTailFp);
+
+    dbgSse('SSE 提取完成: textLen=%d thinkingLen=%d toolCalls=%d usage=%o stopReason=%s model=%s',
+      extracted.text.length, extracted.thinking.length, extracted.toolCalls.length,
+      extracted.usage, extracted.stopReason, extracted.model);
   } catch (err) {
-    console.error('[AgentProxy] SSE extract error:', err);
+    dbgSse('SSE 提取失败: %O', err);
     entry.response = {
       status: entry.response?.status || 200,
       statusText: entry.response?.statusText || 'OK',
@@ -266,12 +276,25 @@ export async function extractInBackground(
 
 // ==================== 工具函数 ====================
 
+function ensureConfig(): void {
+  if (!interceptorConfig) {
+    const rc = resolveEffectiveConfig();
+    interceptorConfig = {
+      logDir: rc.logDir,
+      maxLogFileSize: rc.maxLogFileSize,
+      deltaStorageEnabled: true,
+      checkpointInterval: DELTA_CHECKPOINT_INTERVAL,
+    };
+  }
+}
+
 /**
  * 初始化日志目录
  */
 function initLogDir(): void {
-  if (!existsSync(INTERCEPTOR_CONFIG.logDir)) {
-    mkdirSync(INTERCEPTOR_CONFIG.logDir, { recursive: true });
+  ensureConfig();
+  if (!existsSync(interceptorConfig!.logDir)) {
+    mkdirSync(interceptorConfig!.logDir, { recursive: true });
   }
 }
 
@@ -294,7 +317,7 @@ function generateLogFilePath(): string {
   const date = now.toISOString().split('T')[0];
   const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
   const projectName = basename(getCurrentProjectDir()).replace(/[^a-zA-Z0-9_\-\.]/g, '_');
-  return join(INTERCEPTOR_CONFIG.logDir, `${projectName}_${date}_${time}.jsonl`);
+  return join(interceptorConfig!.logDir, `${projectName}_${date}_${time}.jsonl`);
 }
 
 /**
@@ -454,7 +477,7 @@ function writeLogEntry(entry: LogEntry): void {
     const line = JSON.stringify(entry) + LOG_ENTRY_SEPARATOR;
     appendFileSync(currentLogFile!, line);
   } catch (error) {
-    console.error('[AgentProxy Interceptor] 写入日志失败:', error);
+    dbg('写入日志失败: %O', error);
   }
 }
 
@@ -465,7 +488,7 @@ function checkAndRotateLogFile(): void {
   if (!currentLogFile) return;
 
   try {
-    if (!existsSync(currentLogFile) || statSync(currentLogFile).size < INTERCEPTOR_CONFIG.maxLogFileSize) {
+    if (!existsSync(currentLogFile) || statSync(currentLogFile).size < interceptorConfig!.maxLogFileSize) {
       return;
     }
 
@@ -475,8 +498,9 @@ function checkAndRotateLogFile(): void {
     _lastMessagesCount = 0;
     _lastTailFp = '';
     _mainAgentDeltaCount = 0;
+    dbg('日志轮转: 新文件=%s, delta 状态已重置', currentLogFile);
   } catch (error) {
-    console.error('[AgentProxy Interceptor] 日志轮转失败:', error);
+    dbg('日志轮转失败: %O', error);
   }
 }
 
@@ -484,7 +508,7 @@ function checkAndRotateLogFile(): void {
  * Delta 存储：completed 写入成功后更新状态
  */
 function commitDeltaState(originalLength: number, originalTailFp: string): void {
-  if (INTERCEPTOR_CONFIG.deltaStorageEnabled && originalLength > 0 && originalLength > _lastMessagesCount) {
+  if (interceptorConfig!.deltaStorageEnabled && originalLength > 0 && originalLength > _lastMessagesCount) {
     _lastMessagesCount = originalLength;
     if (typeof originalTailFp === 'string') {
       _lastTailFp = originalTailFp;
@@ -502,6 +526,16 @@ export function setupInterceptor(): void {
     return;
   }
   interceptorInstalled = true;
+
+  // 从统一配置获取日志参数
+  const rc = resolveEffectiveConfig();
+  interceptorConfig = {
+    logDir: rc.logDir,
+    maxLogFileSize: rc.maxLogFileSize,
+    deltaStorageEnabled: true,
+    checkpointInterval: DELTA_CHECKPOINT_INTERVAL,
+  };
+  dbg('安装拦截器, logDir=%s maxLogFileSize=%d', rc.logDir, rc.maxLogFileSize);
 
   // 初始化日志文件
   initLogFile();
@@ -551,6 +585,7 @@ export function setupInterceptor(): void {
             body = JSON.parse(options.body as string);
           } catch {
             body = String(options.body).slice(0, MAX_BODY_PARSE_FAILURE_LENGTH);
+            dbg('body 解析失败, 存储为截断字符串 len=%d', body.length);
           }
         }
 
@@ -610,8 +645,12 @@ export function setupInterceptor(): void {
           error: undefined,
         };
 
+        dbg('拦截 %s %s apiType=%s agentType=%s subAgentType=%s model=%s stream=%s bodySize=%d',
+          options?.method || 'GET', urlStr, detectedApiType ?? '-', agentType, subAgentType ?? '-',
+          model, isStream, options?.body ? String(options.body).length : 0);
+
         // Delta 存储处理
-        if (INTERCEPTOR_CONFIG.deltaStorageEnabled && isMain && Array.isArray(body?.messages)) {
+        if (interceptorConfig!.deltaStorageEnabled && isMain && Array.isArray(body?.messages)) {
           const messages = body.messages;
           deltaOriginalMessagesLength = messages.length;
           deltaOriginalTailFp = messages.length > 0 ? fingerprintMsg(messages[messages.length - 1]) : '';
@@ -641,7 +680,7 @@ export function setupInterceptor(): void {
           const needsCheckpoint =
             prevMessagesCount === 0 ||
             messages.length < prevMessagesCount ||
-            (_mainAgentDeltaCount % INTERCEPTOR_CONFIG.checkpointInterval === 0) ||
+            (_mainAgentDeltaCount % interceptorConfig!.checkpointInterval === 0) ||
             sameLenInPlaceReplace;
 
           if (needsCheckpoint) {
@@ -653,6 +692,7 @@ export function setupInterceptor(): void {
             if (sameLenInPlaceReplace) {
               requestEntry._inPlaceReplaceDetected = true;
             }
+            dbgDelta('Checkpoint: isCheckpoint=true totalMsgs=%d prevCount=%d inPlaceReplace=%s', messages.length, prevMessagesCount, sameLenInPlaceReplace);
           } else {
             // Delta：只保留新增的 messages
             const delta = messages.slice(prevMessagesCount);
@@ -661,6 +701,7 @@ export function setupInterceptor(): void {
             requestEntry._conversationId = 'mainAgent';
             requestEntry._isCheckpoint = false;
             requestEntry.body.messages = delta;
+            dbgDelta('Delta: slicing messages [%d..%d] (%d new)', prevMessagesCount, messages.length, delta.length);
           }
         }
 
@@ -700,6 +741,7 @@ export function setupInterceptor(): void {
 
             // 后台提取（不阻塞客户端）
             extractInBackground(logBody, entry, deltaOriginalMessagesLength, deltaOriginalTailFp);
+            dbgSse('SSE 流开始提取: id=%s', entry.id);
 
             // 直接返回原始流给客户端
             return new Response(clientBody, {

@@ -12,13 +12,12 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getConfig } from './config.js';
-import { DEFAULT_PROXY_PORT, SERVER_HOST, PROXY_TRACE_HEADER, DEFAULT_UPSTREAM_URLS, CLAUDE_SETTINGS_DIR } from './constants.js';
+import { DEFAULT_PROXY_PORT, DEFAULT_SERVER_HOST, PROXY_TRACE_HEADER, DEFAULT_UPSTREAM_URLS, CLAUDE_SETTINGS_DIR } from './constants.js';
+import createDebug from 'debug';
+const log = createDebug('agentproxy:proxy');
 
 // ==================== 配置 ====================
-const PROXY_CONFIG = {
-  defaultPort: DEFAULT_PROXY_PORT,
-  host: SERVER_HOST,
-} as const;
+// 默认值从 constants 取，运行时由 startProxyServer 参数覆盖
 
 // ==================== 工具函数 ====================
 
@@ -128,8 +127,9 @@ export interface ProxyServer {
 /**
  * 启动代理服务器
  */
-export async function startProxyServer(options?: { port?: number }): Promise<ProxyServer> {
-  const port = options?.port || PROXY_CONFIG.defaultPort;
+export async function startProxyServer(options?: { port?: number; host?: string }): Promise<ProxyServer> {
+  const port = options?.port || DEFAULT_PROXY_PORT;
+  const host = options?.host || DEFAULT_SERVER_HOST;
 
   return new Promise<ProxyServer>((resolve, reject) => {
     const server = createServer(async (req, res) => {
@@ -175,6 +175,8 @@ export async function startProxyServer(options?: { port?: number }): Promise<Pro
         const cleanReq = reqUrl.startsWith('/') ? reqUrl.slice(1) : reqUrl;
         const fullUrl = `${cleanBase}/${cleanReq}`;
 
+        log('代理请求: %s %s -> %s', req.method, req.url, fullUrl);
+
         // 发起请求
         const response = await fetch(fullUrl, fetchOptions);
 
@@ -195,12 +197,13 @@ export async function startProxyServer(options?: { port?: number }): Promise<Pro
         if (!response.ok) {
           try {
             const errorText = await response.text();
+            log('上游错误响应: status=%d', response.status);
             res.writeHead(response.status, responseHeaders);
             res.end(errorText);
             return;
           } catch (err) {
             // 读取 body 失败，回退到流式处理
-            console.error('[AgentProxy Proxy] Failed to read error body:', err);
+            log('读取错误 body 失败: %O', err);
           }
         }
 
@@ -218,22 +221,22 @@ export async function startProxyServer(options?: { port?: number }): Promise<Pro
           // pipeline 处理流错误
           pipeline(nodeStream, res, (err) => {
             if (err) {
-              console.error('[AgentProxy Proxy] Stream pipeline error:', err.message);
+              log('Stream pipeline 错误: %s', err.message);
             }
           });
         } else {
           res.end();
         }
       } catch (err) {
-        console.error('[AgentProxy Proxy] Error:', err);
+        log('代理错误: %O', err);
         res.statusCode = 502;
         res.end('Proxy Error');
       }
     });
 
     // 启动服务器
-    server.listen(port, PROXY_CONFIG.host, () => {
-      console.log(`[AgentProxy] 代理服务器: http://${PROXY_CONFIG.host}:${port}`);
+    server.listen(port, host, () => {
+      console.log(`[AgentProxy] 代理服务器: http://${host}:${port}`);
       resolve({
         port,
         stop: async () => {
@@ -261,7 +264,7 @@ export async function startProxyServer(options?: { port?: number }): Promise<Pro
  */
 export function createProxyServer(options?: { port?: number }): ProxyServer {
   let serverInstance: any = null;
-  const port = options?.port || PROXY_CONFIG.defaultPort;
+  const port = options?.port || DEFAULT_PROXY_PORT;
 
   return {
     port,

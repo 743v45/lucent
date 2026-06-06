@@ -29,12 +29,6 @@ import { startProxyServer } from './proxy.js';
 import { setupInterceptor } from './interceptor.js';
 import { extractContext, detectApiType } from './context-extractors.js';
 import {
-  DEFAULT_WEB_PORT,
-  DEFAULT_PROXY_PORT,
-  LOG_DIR,
-  MAX_LOG_FILE_SIZE,
-  LOG_RETENTION_DAYS,
-  HEARTBEAT_INTERVAL_MS,
   DEFAULT_LOG_QUERY_LIMIT,
   MAX_LOG_FILES_TO_READ,
   LOG_SPLIT_REGEX,
@@ -44,20 +38,17 @@ import {
   ANTHROPIC_API_VERSION,
   TEST_REQUEST_CONTENT,
   TEST_MAX_TOKENS,
-  DEFAULT_SERVER_HOST,
 } from './constants.js';
+import createDebug from 'debug';
+const dbg = createDebug('agentproxy:server');
+const dbgSse = createDebug('agentproxy:server:sse');
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 // ==================== 配置 ====================
-const CONFIG = {
-  webPort: DEFAULT_WEB_PORT,
-  proxyPort: DEFAULT_PROXY_PORT,
-  logDir: LOG_DIR,
-  maxLogFileSize: MAX_LOG_FILE_SIZE,
-  logRetentionDays: LOG_RETENTION_DAYS,
-} as const;
+// 运行时配置从 resolveEffectiveConfig() 获取（环境变量 > 配置文件 > 默认值）
+let resolvedConfig!: Config.ResolvedConfig;
 
 // ==================== 状态 ====================
 let proxyEnabled = false;
@@ -234,8 +225,8 @@ function buildContextFromRequest(log: LogEntry): void {
 
 // ==================== 日志管理 ====================
 function initLogDir(): void {
-  if (!existsSync(CONFIG.logDir)) {
-    mkdirSync(CONFIG.logDir, { recursive: true });
+  if (!existsSync(resolvedConfig.logDir)) {
+    mkdirSync(resolvedConfig.logDir, { recursive: true });
   }
 }
 
@@ -243,7 +234,7 @@ function getLogFilePath(): string {
   const now = new Date();
   const date = now.toISOString().split('T')[0];
   const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
-  return join(CONFIG.logDir, `agentproxy_${date}_${time}.jsonl`);
+  return join(resolvedConfig.logDir, `agentproxy_${date}_${time}.jsonl`);
 }
 
 /**
@@ -256,13 +247,14 @@ function checkAndRotateLogFile(): void {
 
   try {
     const stats = statSync(currentLogFile);
-    if (stats.size >= CONFIG.maxLogFileSize) {
+    if (stats.size >= resolvedConfig.maxLogFileSize) {
       console.log('[AgentProxy] 日志文件达到大小限制，轮转中...');
       currentLogFile = getLogFilePath();
+      dbg('日志轮转: 新文件=%s', currentLogFile);
       console.log('[AgentProxy] 新日志文件:', currentLogFile);
     }
   } catch (error) {
-    console.error('[AgentProxy] 检查日志文件大小失败:', error);
+    dbg('检查日志文件大小失败: %O', error);
   }
 }
 
@@ -271,33 +263,33 @@ function checkAndRotateLogFile(): void {
  */
 function cleanupOldLogs(): void {
   try {
-    if (!existsSync(CONFIG.logDir)) {
+    if (!existsSync(resolvedConfig.logDir)) {
       return;
     }
 
     const now = Date.now();
-    const maxAge = CONFIG.logRetentionDays * 24 * 60 * 60 * 1000; // 转换为毫秒
+    const maxAge = resolvedConfig.logRetentionDays * 24 * 60 * 60 * 1000; // 转换为毫秒
 
-    const files = readdirSync(CONFIG.logDir).filter(f =>
+    const files = readdirSync(resolvedConfig.logDir).filter(f =>
       f.endsWith('.jsonl')
     );
 
     for (const file of files) {
-      const filePath = join(CONFIG.logDir, file);
+      const filePath = join(resolvedConfig.logDir, file);
       try {
         const stats = statSync(filePath);
         const age = now - stats.mtimeMs;
 
         if (age > maxAge) {
           unlinkSync(filePath);
-          console.log('[AgentProxy] 删除过期日志:', file);
+          dbg('删除过期日志: %s', file);
         }
       } catch (error) {
-        console.error('[AgentProxy] 删除日志文件失败:', file, error);
+        dbg('删除日志文件失败: %s %O', file, error);
       }
     }
   } catch (error) {
-    console.error('[AgentProxy] 清理日志失败:', error);
+    dbg('清理日志失败: %O', error);
   }
 }
 
@@ -306,6 +298,7 @@ function cleanupOldLogs(): void {
 
 function broadcastLogEntry(entry: LogEntry): void {
   // SSE 广播
+  dbgSse('广播日志: id=%s clients=%d', entry.id, sseClients.size);
   sseClients.forEach((res: any) => {
     try {
       res.write(`event: log\ndata: ${JSON.stringify(entry)}\n\n`);
@@ -378,18 +371,18 @@ function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: number } {
   let allLogs: LogEntry[] = [];
 
   try {
-    if (!existsSync(CONFIG.logDir)) {
+    if (!existsSync(resolvedConfig.logDir)) {
       return { logs: [], total: 0 };
     }
 
-    const files = readdirSync(CONFIG.logDir)
+    const files = readdirSync(resolvedConfig.logDir)
       .filter(f => f.endsWith('.jsonl') && !f.startsWith('export_'))
       .sort()
       .reverse()
       .slice(0, MAX_LOG_FILES_TO_READ);
 
     for (const file of files) {
-      const filePath = join(CONFIG.logDir, file);
+      const filePath = join(resolvedConfig.logDir, file);
       const content = readFileSync(filePath, 'utf-8');
 
       // 按分隔符切分：interceptor 写入格式是 JSON + '\n---\n'
@@ -406,7 +399,7 @@ function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: number } {
       }
     }
   } catch (error) {
-    console.error('[AgentProxy] 读取日志失败:', error);
+    dbg('读取日志失败: %O', error);
     return { logs: [], total: 0 };
   }
 
@@ -488,14 +481,14 @@ function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: number } {
  */
 function getLogById(id: string): LogEntry | null {
   try {
-    if (!existsSync(CONFIG.logDir)) {
+    if (!existsSync(resolvedConfig.logDir)) {
       return null;
     }
 
-    const files = readdirSync(CONFIG.logDir).filter(f => f.endsWith('.jsonl'));
+    const files = readdirSync(resolvedConfig.logDir).filter(f => f.endsWith('.jsonl'));
 
     for (const file of files) {
-      const filePath = join(CONFIG.logDir, file);
+      const filePath = join(resolvedConfig.logDir, file);
       const content = readFileSync(filePath, 'utf-8');
 
       // 按分隔符切分
@@ -515,7 +508,7 @@ function getLogById(id: string): LogEntry | null {
       }
     }
   } catch (error) {
-    console.error('[AgentProxy] 获取日志详情失败:', error);
+    dbg('获取日志详情失败: %O', error);
   }
 
   return null;
@@ -596,15 +589,17 @@ app.get('/api/logs/stream', (req, res) => {
   // 心跳：每 30 秒发一次注释行，防止连接超时
   const sseHeartbeat = setInterval(() => {
     res.write(': heartbeat\n\n');
-  }, HEARTBEAT_INTERVAL_MS);
+  }, resolvedConfig.heartbeatIntervalMs);
 
   // 注册到 SSE 广播列表
   sseClients.add(res as any);
+  dbgSse('SSE 客户端连接, 总数: %d', sseClients.size);
 
   // 客户端断开时清理
   req.on('close', () => {
     clearInterval(sseHeartbeat);
     sseClients.delete(res as any);
+    dbgSse('SSE 客户端断开, 总数: %d', sseClients.size);
   });
 });
 
@@ -614,7 +609,7 @@ app.get('/api/logs/stats', (_req, res) => {
     const stats = LogManager.getLogStats();
     res.json(stats);
   } catch (error) {
-    console.error('[AgentProxy] 获取日志统计失败:', error);
+    dbg('获取日志统计失败: %O', error);
     res.status(500).json({ error: 'Failed to get log stats' });
   }
 });
@@ -632,15 +627,15 @@ app.get('/api/logs/:id', (req, res) => {
 // API: 获取日志文件列表
 app.get('/api/log-files', (_req, res) => {
   try {
-    if (!existsSync(CONFIG.logDir)) {
+    if (!existsSync(resolvedConfig.logDir)) {
       res.json({ files: [] });
       return;
     }
 
-    const files = readdirSync(CONFIG.logDir)
+    const files = readdirSync(resolvedConfig.logDir)
       .filter(f => f.endsWith('.jsonl'))
       .map(file => {
-        const filePath = join(CONFIG.logDir, file);
+        const filePath = join(resolvedConfig.logDir, file);
         try {
           const stats = statSync(filePath);
           return {
@@ -662,7 +657,7 @@ app.get('/api/log-files', (_req, res) => {
 
     res.json({ files });
   } catch (error) {
-    console.error('[AgentProxy] 获取日志文件列表失败:', error);
+    dbg('获取日志文件列表失败: %O', error);
     res.status(500).json({ error: 'Failed to get log files' });
   }
 });
@@ -671,7 +666,7 @@ app.get('/api/log-files', (_req, res) => {
 app.post('/api/logs/export', (req, res) => {
   try {
     const { format = 'jsonl', includeMeta = false } = req.body;
-    const exportPath = join(CONFIG.logDir, `export_${Date.now()}.${format}`);
+    const exportPath = join(resolvedConfig.logDir, `export_${Date.now()}.${format}`);
 
     const result = LogManager.exportLogs(exportPath, {
       format,
@@ -680,7 +675,7 @@ app.post('/api/logs/export', (req, res) => {
 
     res.json(result);
   } catch (error) {
-    console.error('[AgentProxy] 导出日志失败:', error);
+    dbg('导出日志失败: %O', error);
     res.status(500).json({ error: 'Failed to export logs' });
   }
 });
@@ -698,7 +693,7 @@ app.post('/api/logs/import', (req, res) => {
     const result = LogManager.importLogs(filePath, { merge, validate });
     res.json(result);
   } catch (error) {
-    console.error('[AgentProxy] 导入日志失败:', error);
+    dbg('导入日志失败: %O', error);
     res.status(500).json({ error: 'Failed to import logs' });
   }
 });
@@ -713,7 +708,7 @@ app.delete('/api/logs', (_req, res) => {
 
     res.json(result);
   } catch (error) {
-    console.error('[AgentProxy] 清空日志失败:', error);
+    dbg('清空日志失败: %O', error);
     res.status(500).json({ error: 'Failed to clear logs' });
   }
 });
@@ -752,7 +747,7 @@ app.get('/api/config', (_req, res) => {
       })),
     });
   } catch (error) {
-    console.error('[AgentProxy] 获取配置失败:', error);
+    dbg('获取配置失败: %O', error);
     res.status(500).json({ error: 'Failed to get config' });
   }
 });
@@ -782,7 +777,7 @@ app.get('/api/config/:apiType/:id/full', (req, res) => {
       apiType: group.apiType,
     });
   } catch (error) {
-    console.error('[AgentProxy] 获取配置详情失败:', error);
+    dbg('获取配置详情失败: %O', error);
     res.status(500).json({ error: 'Failed to get config' });
   }
 });
@@ -824,7 +819,7 @@ app.post('/api/config/:apiType/profiles', (req, res) => {
       })) || [],
     });
   } catch (error) {
-    console.error('[AgentProxy] 创建配置失败:', error);
+    dbg('创建配置失败: %O', error);
     res.status(500).json({ error: 'Failed to create config' });
   }
 });
@@ -862,7 +857,7 @@ app.put('/api/config/:apiType/profiles/:id', (req, res) => {
       })) || [],
     });
   } catch (error) {
-    console.error('[AgentProxy] 更新配置失败:', error);
+    dbg('更新配置失败: %O', error);
     res.status(500).json({ error: 'Failed to update config' });
   }
 });
@@ -901,7 +896,7 @@ app.post('/api/config/:apiType/active', (req, res) => {
       })) || [],
     });
   } catch (error) {
-    console.error('[AgentProxy] 切换配置失败:', error);
+    dbg('切换配置失败: %O', error);
     res.status(500).json({ error: 'Failed to switch config' });
   }
 });
@@ -940,7 +935,7 @@ app.put('/api/config/:apiType/profiles/:id/rename', (req, res) => {
       })) || [],
     });
   } catch (error) {
-    console.error('[AgentProxy] 重命名配置失败:', error);
+    dbg('重命名配置失败: %O', error);
     res.status(500).json({ error: 'Failed to rename config' });
   }
 });
@@ -973,7 +968,7 @@ app.delete('/api/config/:apiType/profiles/:id', (req, res) => {
       })) || [],
     });
   } catch (error) {
-    console.error('[AgentProxy] 删除配置失败:', error);
+    dbg('删除配置失败: %O', error);
     res.status(500).json({ error: 'Failed to delete config' });
   }
 });
@@ -1061,43 +1056,43 @@ const server = createHttpServer(app);
 
 // ==================== 启动函数 ====================
 export async function startServer(): Promise<void> {
-  initLogDir();
-
-  // 加载配置
+  // 加载并解析配置（环境变量 > 配置文件 > 默认值）
   Config.loadConfig();
-  const config = Config.getConfig();
+  resolvedConfig = Config.resolveEffectiveConfig();
+
+  initLogDir();
 
   currentLogFile = getLogFilePath();
 
   // 清理过期日志
   cleanupOldLogs();
 
-  // 启动代理服务器（从配置读取端口）
-  const proxyPort = config.proxyPort;
+  // 启动代理服务器（从配置读取端口和 host）
+  const proxyPort = resolvedConfig.proxyPort;
+  const host = resolvedConfig.host;
   try {
-    proxyServer = await startProxyServer({ port: proxyPort });
-    console.log(`[AgentProxy] 代理服务器已启动，端口: ${proxyPort}`);
+    proxyServer = await startProxyServer({ port: proxyPort, host });
+    dbg('代理服务器已启动: port=%d host=%s', proxyPort, host);
   } catch (error) {
-    console.error('[AgentProxy] 代理服务器启动失败:', error);
+    dbg('代理服务器启动失败: %O', error);
     throw error;
   }
 
   // 设置拦截器（记录 API 请求）
   try {
     setupInterceptor();
-    console.log(`[AgentProxy] API 拦截器已启动`);
+    dbg('拦截器已启动');
   } catch (error) {
-    console.error('[AgentProxy] 拦截器启动失败:', error);
+    dbg('拦截器启动失败: %O', error);
   }
 
-  const webPort = config.webPort;
-  const host = config.host || DEFAULT_SERVER_HOST;
+  const webPort = resolvedConfig.webPort;
   return new Promise<void>((resolve, reject) => {
     server.listen(webPort, host, () => {
       console.log(`[AgentProxy] Web UI: http://${host}:${webPort}`);
       console.log(`[AgentProxy] 代理端口: ${proxyPort}`);
       console.log(`[AgentProxy] 日志文件: ${currentLogFile}`);
-      console.log(`[AgentProxy] 日志目录: ${CONFIG.logDir}`);
+      console.log(`[AgentProxy] 日志目录: ${resolvedConfig.logDir}`);
 
       console.log('[AgentProxy] ============================');
       console.log('[AgentProxy] 接入方式 (设置环境变量):');
@@ -1107,27 +1102,26 @@ export async function startServer(): Promise<void> {
 
       // 自动打开浏览器
       open(`http://${host}:${webPort}`).catch(err => {
-        console.warn('[AgentProxy] 无法自动打开浏览器:', err.message);
+        dbg('无法自动打开浏览器: %s', err.message);
       });
 
       resolve();
     });
 
     server.on('error', error => {
-      console.error('[AgentProxy] 服务器错误:', error);
+      dbg('服务器错误: %O', error);
       reject(error);
     });
   });
 }
 
 export function getServerStatus(): ProxyStatus {
-  const config = Config.getConfig();
   return {
     enabled: proxyEnabled,
     running: true,
-    host: config.host,
-    webPort: config.webPort,
-    proxyPort: config.proxyPort,
+    host: resolvedConfig.host,
+    webPort: resolvedConfig.webPort,
+    proxyPort: resolvedConfig.proxyPort,
     logFile: currentLogFile,
   };
 }
@@ -1138,7 +1132,7 @@ export function shutdownServer(): void {
   // 关闭代理服务器
   if (proxyServer) {
     proxyServer.stop().catch(err => {
-      console.error('[AgentProxy] 关闭代理服务器失败:', err);
+      dbg('关闭代理服务器失败: %O', err);
     });
   }
 
@@ -1155,7 +1149,7 @@ export function shutdownServer(): void {
 // ==================== 直接运行 ====================
 if (import.meta.url === `file://${process.argv[1]}`) {
   startServer().catch(error => {
-    console.error('[AgentProxy] 启动失败:', error);
+    dbg('启动失败: %O', error);
     process.exit(1);
   });
 

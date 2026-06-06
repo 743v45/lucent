@@ -7,7 +7,9 @@
 import { mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { LogEntry } from '../src/types.js';
-import { LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES } from './constants.js';
+import { resolveEffectiveConfig } from './config.js';
+import createDebug from 'debug';
+const log = createDebug('agentproxy:log-manager');
 
 export interface LogExportOptions {
   format: 'jsonl' | 'markdown';
@@ -21,13 +23,30 @@ export interface LogImportOptions {
 }
 
 // 常量从 constants.ts 导入
+// logDir 从统一配置惰性获取（支持配置文件/环境变量覆盖）
+
+/**
+ * 获取有效的日志目录（优先使用配置值）
+ */
+function getEffectiveLogDir(): string {
+  return resolveEffectiveConfig().logDir;
+}
+
+function getEffectiveMaxLogFileSize(): number {
+  return resolveEffectiveConfig().maxLogFileSize;
+}
+
+function getEffectiveMaxLogFiles(): number {
+  return resolveEffectiveConfig().maxLogFiles;
+}
 
 /**
  * 初始化日志目录
  */
 export function initLogDir(): void {
-  if (!existsSync(LOG_DIR)) {
-    mkdirSync(LOG_DIR, { recursive: true });
+  const logDir = getEffectiveLogDir();
+  if (!existsSync(logDir)) {
+    mkdirSync(logDir, { recursive: true });
   }
 }
 
@@ -38,7 +57,7 @@ export function getCurrentLogFilePath(): string {
   const now = new Date();
   const date = now.toISOString().split('T')[0];
   const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
-  return join(LOG_DIR, `agentproxy_${date}_${time}.jsonl`);
+  return join(getEffectiveLogDir(), `agentproxy_${date}_${time}.jsonl`);
 }
 
 /**
@@ -54,7 +73,7 @@ export function writeLogEntry(entry: LogEntry): void {
     // 检查文件大小，如果超过限制则轮转
     if (existsSync(logFile)) {
       const stats = statSync(logFile);
-      if (stats.size >= MAX_LOG_FILE_SIZE) {
+      if (stats.size >= getEffectiveMaxLogFileSize()) {
         rotateLogFile(logFile);
       }
     }
@@ -62,7 +81,7 @@ export function writeLogEntry(entry: LogEntry): void {
     const line = JSON.stringify(entry) + '\n';
     appendFileSync(logFile, line);
   } catch (error) {
-    console.error('[LogManager] 写入日志失败:', error);
+    log('写入日志失败: %O', error);
     throw error;
   }
 }
@@ -74,17 +93,17 @@ export function readLogs(limit?: number, filter?: (entry: LogEntry) => boolean):
   const logs: LogEntry[] = [];
 
   try {
-    if (!existsSync(LOG_DIR)) {
+    if (!existsSync(getEffectiveLogDir())) {
       return logs;
     }
 
-    const files = readdirSync(LOG_DIR)
+    const files = readdirSync(getEffectiveLogDir())
       .filter(f => f.endsWith('.jsonl') && !f.startsWith('export_'))
       .sort()
       .reverse();
 
     for (const file of files) {
-      const filePath = join(LOG_DIR, file);
+      const filePath = join(getEffectiveLogDir(), file);
       const content = readFileSync(filePath, 'utf-8');
 
       // 按分隔符切分：interceptor 写入格式是 JSON + '\n---\n'
@@ -98,12 +117,12 @@ export function readLogs(limit?: number, filter?: (entry: LogEntry) => boolean):
             logs.push(entry);
           }
         } catch (error) {
-          console.warn('[LogManager] 解析日志行失败:', error);
+          log('解析日志行失败: %O', error);
         }
       }
     }
   } catch (error) {
-    console.error('[LogManager] 读取日志失败:', error);
+    log('读取日志失败: %O', error);
   }
 
   // 按时间戳排序（最新的在前）
@@ -137,13 +156,15 @@ export function exportLogs(
       writeFileSync(outputPath, content, 'utf-8');
     }
 
+    log('导出日志: %d 条 -> %s (format=%s)', logs.length, outputPath, options.format);
+
     return {
       success: true,
       count: logs.length,
       path: outputPath,
     };
   } catch (error) {
-    console.error('[LogManager] 导出日志失败:', error);
+    log('导出日志失败: %O', error);
     throw error;
   }
 }
@@ -186,14 +207,16 @@ export function importLogs(
         writeLogEntry(entry);
         imported++;
       } catch (error) {
-        console.warn('[LogManager] 导入日志行失败:', error);
+        log('导入日志行失败: %O', error);
         errors++;
       }
     }
 
+    log('导入日志: imported=%d errors=%d from=%s', imported, errors, inputPath);
+
     return { success: true, imported, errors };
   } catch (error) {
-    console.error('[LogManager] 导入日志失败:', error);
+    log('导入日志失败: %O', error);
     throw error;
   }
 }
@@ -205,21 +228,23 @@ export function clearAllLogs(): { success: boolean; deleted: number } {
   let deleted = 0;
 
   try {
-    if (!existsSync(LOG_DIR)) {
+    if (!existsSync(getEffectiveLogDir())) {
       return { success: true, deleted: 0 };
     }
 
-    const files = readdirSync(LOG_DIR).filter(f => f.endsWith('.jsonl'));
+    const files = readdirSync(getEffectiveLogDir()).filter(f => f.endsWith('.jsonl'));
 
     for (const file of files) {
-      const filePath = join(LOG_DIR, file);
+      const filePath = join(getEffectiveLogDir(), file);
       unlinkSync(filePath);
       deleted++;
     }
 
+    log('清空日志: deleted=%d', deleted);
+
     return { success: true, deleted };
   } catch (error) {
-    console.error('[LogManager] 清空日志失败:', error);
+    log('清空日志失败: %O', error);
     throw error;
   }
 }
@@ -235,7 +260,8 @@ export function getLogStats(): {
   newestEntry?: string;
 } {
   try {
-    if (!existsSync(LOG_DIR)) {
+    const logDir = getEffectiveLogDir();
+    if (!existsSync(logDir)) {
       return {
         totalEntries: 0,
         totalSize: 0,
@@ -243,14 +269,14 @@ export function getLogStats(): {
       };
     }
 
-    const files = readdirSync(LOG_DIR).filter(f => f.endsWith('.jsonl'));
+    const files = readdirSync(logDir).filter(f => f.endsWith('.jsonl'));
     let totalEntries = 0;
     let totalSize = 0;
     let oldestEntry: string | undefined;
     let newestEntry: string | undefined;
 
     for (const file of files) {
-      const filePath = join(LOG_DIR, file);
+      const filePath = join(logDir, file);
       const stats = statSync(filePath);
       totalSize += stats.size;
       // 按 --- 分隔符切分统计条目数
@@ -273,7 +299,7 @@ export function getLogStats(): {
       newestEntry,
     };
   } catch (error) {
-    console.error('[LogManager] 获取日志统计失败:', error);
+    log('获取日志统计失败: %O', error);
     return {
       totalEntries: 0,
       totalSize: 0,
@@ -294,24 +320,25 @@ function rotateLogFile(filePath: string): void {
     // 重命名当前文件
     // 注意：Node.js 没有直接的 rename 函数在 fs 模块中，这里假设我们会用其他方式处理
     // 在实际使用中，你可能需要使用 rename 或者复制后删除
-    console.log(`[LogManager] 日志文件轮转: ${filePath} -> ${newFilePath}`);
+    log('日志文件轮转: %s -> %s', filePath, newFilePath);
   } catch (error) {
-    console.error('[LogManager] 日志轮转失败:', error);
+    log('日志轮转失败: %O', error);
   }
 }
 
 /**
  * 清理旧日志文件（保留最近的N个文件）
  */
-export function cleanupOldLogs(maxFiles: number = MAX_LOG_FILES): { deleted: number } {
+export function cleanupOldLogs(maxFiles: number = getEffectiveMaxLogFiles()): { deleted: number } {
   let deleted = 0;
 
   try {
-    if (!existsSync(LOG_DIR)) {
+    const logDir = getEffectiveLogDir();
+    if (!existsSync(logDir)) {
       return { deleted: 0 };
     }
 
-    const files = readdirSync(LOG_DIR)
+    const files = readdirSync(logDir)
       .filter(f => f.endsWith('.jsonl') && !f.startsWith('export_'))
       .sort()
       .reverse();
@@ -320,15 +347,17 @@ export function cleanupOldLogs(maxFiles: number = MAX_LOG_FILES): { deleted: num
     if (files.length > maxFiles) {
       const filesToDelete = files.slice(maxFiles);
       for (const file of filesToDelete) {
-        const filePath = join(LOG_DIR, file);
+        const filePath = join(logDir, file);
         unlinkSync(filePath);
         deleted++;
       }
     }
 
+    log('清理旧日志: deleted=%d maxFiles=%d', deleted, maxFiles);
+
     return { deleted };
   } catch (error) {
-    console.error('[LogManager] 清理旧日志失败:', error);
+    log('清理旧日志失败: %O', error);
     return { deleted: 0 };
   }
 }
@@ -405,5 +434,5 @@ function convertToMarkdown(logs: LogEntry[], includeMeta?: boolean): string {
  * 获取日志目录路径
  */
 export function getLogDir(): string {
-  return LOG_DIR;
+  return getEffectiveLogDir();
 }
