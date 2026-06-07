@@ -239,10 +239,10 @@ export function extractCachedContent(body: RequestBody, usage?: ResponseUsage): 
   result.cacheReadTokens = usage?.cache_read_input_tokens || 0;
   result.totalCachedTokens = result.cacheCreateTokens + result.cacheReadTokens;
 
-  // 计算命中率
-  const totalInputTokens = (usage?.input_tokens || 0) + result.totalCachedTokens;
-  if (totalInputTokens > 0) {
-    result.hitRate = Math.round((result.cacheReadTokens / totalInputTokens) * 100);
+  // 计算命中率: cache read / 全部 token (input + output + create + read)
+  const totalTokens = (usage?.input_tokens || 0) + (usage?.output_tokens || 0) + result.totalCachedTokens;
+  if (totalTokens > 0) {
+    result.hitRate = Math.round((result.cacheReadTokens / totalTokens) * 100);
   }
 
   // 提取系统缓存

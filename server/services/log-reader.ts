@@ -13,7 +13,7 @@ import {
   LOG_SPLIT_REGEX,
 } from '../constants.js';
 import { extractContext } from '../context-extractors.js';
-import { getContextSizeForModel } from '../kvcache.js';
+import { extractCachedContent, getContextSizeForModel } from '../kvcache.js';
 import type { LogEntry, LogsQuery } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
@@ -68,7 +68,12 @@ export function normalizeLogEntry(raw: any): LogEntry {
       stream: raw.isStream ?? !!body.stream,
       error: raw.error,
     },
-    tokenUsage: raw.tokenUsage,
+    tokenUsage: raw.tokenUsage ? {
+      input_tokens: raw.tokenUsage.inputTokens ?? 0,
+      output_tokens: raw.tokenUsage.outputTokens ?? 0,
+      cache_creation_tokens: raw.tokenUsage.cacheWriteTokens,
+      cache_read_tokens: raw.tokenUsage.cacheReadTokens,
+    } : raw.tokenUsage,
     kvCache: raw.kvCache,
     context: raw.context,
     error: raw.error,
@@ -86,6 +91,33 @@ function buildContextFromRequest(log: LogEntry): void {
   const url = log.request?.url || '';
 
   if (!body || typeof body !== 'object') return;
+
+  // 提取 KV-Cache 信息（命中率、缓存内容）
+  // 优先用已归一化的 tokenUsage（兼容 SSE/非 SSE），fallback 到 response.body.usage
+  if (!log.kvCache) {
+    const tu = log.tokenUsage as any;
+    const rawRespUsage = (log.response?.body as any)?.usage;
+    const normalizedUsage = (tu?.input_tokens !== undefined) ? {
+      input_tokens: tu.input_tokens,
+      output_tokens: tu.output_tokens,
+      cache_creation_input_tokens: tu.cache_creation_tokens,
+      cache_read_input_tokens: tu.cache_read_tokens,
+    } : rawRespUsage;
+    if (normalizedUsage) {
+      const cached = extractCachedContent(body, normalizedUsage);
+      if (cached.totalCachedTokens > 0) {
+        log.kvCache = {
+          hitRate: cached.hitRate,
+          cacheReadTokens: cached.cacheReadTokens,
+          cacheCreateTokens: cached.cacheCreateTokens,
+          totalCachedTokens: cached.totalCachedTokens,
+          ...(cached.system.length ? { system: cached.system } : {}),
+          ...(cached.messages.length ? { messages: cached.messages } : {}),
+          ...(cached.tools.length ? { tools: cached.tools } : {}),
+        };
+      }
+    }
+  }
 
   // 使用统一的 context 提取器（内部会检测 API 类型）
   const extracted = extractContext(body, url);
