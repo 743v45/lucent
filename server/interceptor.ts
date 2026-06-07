@@ -26,6 +26,7 @@ import {
   MAX_BODY_PARSE_FAILURE_LENGTH,
   MAX_RESPONSE_BODY_LENGTH,
 } from './constants.js';
+import { extractTokenUsage } from './agent-identifier.js';
 import type { ApiProviderType, RawLogEntry } from './types.js';
 import createDebug from 'debug';
 const dbg = createDebug('agentproxy:interceptor');
@@ -203,6 +204,9 @@ async function handleNormalResponse(
     ...buildResponseBase(response),
     body,
   };
+
+  // 从响应体提取 token 使用情况
+  entry.tokenUsage = extractTokenUsage(body);
 
   LogWriter.writeLogEntry(entry);
   commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);

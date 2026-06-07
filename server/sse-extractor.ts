@@ -181,6 +181,17 @@ export async function collectSSELinesInBackground(
       },
     };
 
+    // 从 SSE 行中提取 token 使用情况
+    const extracted = extractFromSSELines(lines);
+    if (extracted.usage.input > 0 || extracted.usage.output > 0) {
+      entry.tokenUsage = {
+        inputTokens: extracted.usage.input,
+        outputTokens: extracted.usage.output,
+        cacheReadTokens: extracted.usage.cache_read || undefined,
+        cacheWriteTokens: extracted.usage.cache_create || undefined,
+      };
+    }
+
     onLogEntry(entry);
     onDeltaCommit();
 

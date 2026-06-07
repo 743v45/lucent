@@ -222,8 +222,8 @@ export function extractTokenUsage(responseBody: unknown): TokenUsage | undefined
   const result = {
     inputTokens: typeof usage.input_tokens === 'number' ? usage.input_tokens : 0,
     outputTokens: typeof usage.output_tokens === 'number' ? usage.output_tokens : 0,
-    cacheReadTokens: typeof usage.cache_read_tokens === 'number' ? usage.cache_read_tokens : undefined,
-    cacheWriteTokens: typeof usage.cache_creation_tokens === 'number' ? usage.cache_creation_tokens : undefined,
+    cacheReadTokens: typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : undefined,
+    cacheWriteTokens: typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : undefined,
   };
   log('Token 使用: input=%d output=%d cacheRead=%d cacheWrite=%d', result.inputTokens, result.outputTokens, result.cacheReadTokens ?? 0, result.cacheWriteTokens ?? 0);
   return result;

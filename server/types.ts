@@ -120,10 +120,15 @@ export interface RawLogEntry {
   _conversationId?: string;
   _isCheckpoint?: boolean;
   _inPlaceReplaceDetected?: boolean;
-  // 其他元数据
-  proxyProfile?: string;
-  proxyUrl?: string;
   error?: string;
+  tokenUsage?: {
+    inputTokens: number;
+    outputTokens: number;
+    cacheReadTokens?: number;
+    cacheWriteTokens?: number;
+  };
+  kvCache?: LogEntry['kvCache'];
+  context?: LogEntry['context'];
 }
 
 // ==================== SSE 流提取 ====================
