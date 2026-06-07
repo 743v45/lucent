@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import type { LogEntry, TabType, ApiProviderType, SSERawBody } from '../../types';
+import type { LogEntry, TabType, ApiProviderType, SSERawBody, SSERawLine } from '../../types';
 import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, API_PATH_REGEX } from '../../constants';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import ReactMarkdown from 'react-markdown';
@@ -435,6 +435,37 @@ function RequestTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: RequestTa
   );
 }
 
+// ==================== SSE View Mode Toggle ====================
+
+type SSEViewMode = 'extracted' | 'raw';
+
+function SSEViewToggle({ mode, onModeChange }: { mode: SSEViewMode; onModeChange: (m: SSEViewMode) => void }) {
+  return (
+    <div className="flex items-center rounded-md border border-border-subtle overflow-hidden">
+      <button
+        onClick={() => onModeChange('extracted')}
+        className={`px-2.5 py-0.5 text-[13px] font-[510] transition-colors ${
+          mode === 'extracted'
+            ? 'bg-bg-active text-text-primary'
+            : 'text-text-quaternary hover:text-text-secondary bg-bg-deep'
+        }`}
+      >
+        结构化
+      </button>
+      <button
+        onClick={() => onModeChange('raw')}
+        className={`px-2.5 py-0.5 text-[13px] font-[510] transition-colors ${
+          mode === 'raw'
+            ? 'bg-bg-active text-text-primary'
+            : 'text-text-quaternary hover:text-text-secondary bg-bg-deep'
+        }`}
+      >
+        原始 SSE
+      </button>
+    </div>
+  );
+}
+
 // ==================== Response Tab ====================
 
 interface ResponseTabProps {
@@ -444,24 +475,52 @@ interface ResponseTabProps {
   onCopy: (data: unknown) => void;
 }
 
+/**
+ * 将原始 SSE lines 重建为实际的 SSE 文本流格式
+ * 输出格式：event: xxx\ndata: {...}\n\n
+ */
+function sseLinesToRawText(lines: SSERawLine[]): string {
+  return lines.map(line => {
+    const parts: string[] = [];
+    if (line.event) {
+      parts.push(`event: ${line.event}`);
+    }
+    parts.push(`data: ${line.data}`);
+    return parts.join('\n');
+  }).join('\n\n');
+}
+
 function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: ResponseTabProps): JSX.Element {
   const response = log.response;
+  const [sseViewMode, setSseViewMode] = useState<SSEViewMode>('extracted');
 
-  // 判断是否为 SSE 原始数据，如果是则提取结构化信息展示
-  const displayBody = useMemo(() => {
+  // 判断是否为 SSE 原始数据
+  const isSSE = response.body != null
+    && typeof response.body === 'object'
+    && (response.body as SSERawBody).type === 'sse_raw';
+
+  const sseBody = isSSE ? response.body as SSERawBody : null;
+
+  // 计算结构化展示内容（非 raw 模式使用）
+  const extractedBody = useMemo(() => {
     const body = response.body;
-    // SSE 原始数据：提取结构化信息展示
-    if (body && typeof body === 'object' && (body as SSERawBody).type === 'sse_raw') {
-      const sseBody = body as SSERawBody;
-      if (sseBody.error) {
-        return { type: 'sse_raw', error: sseBody.error, linesCount: sseBody.lines?.length || 0 };
-      }
-      const extracted = extractFromSSELines(sseBody.lines);
-      return extractedToResponseBody(extracted);
+    if (!isSSE) return body;
+
+    // SSE 错误
+    if (sseBody?.error) {
+      return { type: 'sse_raw', error: sseBody.error, linesCount: sseBody.lines?.length || 0 };
     }
-    // 其他格式：直接展示
-    return body;
-  }, [response.body]);
+
+    // 结构化模式：提取后展示
+    const extracted = extractFromSSELines(sseBody!.lines);
+    return extractedToResponseBody(extracted);
+  }, [response.body, isSSE, sseBody]);
+
+  // 原始 SSE 文本（raw 模式使用）
+  const rawSSEText = useMemo(() => {
+    if (!isSSE || !sseBody?.lines?.length) return '';
+    return sseLinesToRawText(sseBody.lines);
+  }, [isSSE, sseBody]);
 
   return (
     <div className="flex flex-col h-full bg-bg-deep">
@@ -474,14 +533,30 @@ function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: Response
       {/* Body */}
       <div className="flex-1 min-h-0 flex flex-col bg-bg-deep px-4 pb-4">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[17px] font-[510] text-text-secondary">Body</span>
+          <span className="text-[17px] font-[510] text-text-secondary">
+            Body
+            {isSSE && sseBody && (
+              <span className="ml-2 text-sm font-normal text-text-quaternary">
+                ({sseBody.lines?.length ?? 0} events)
+              </span>
+            )}
+          </span>
           <div className="flex items-center gap-2">
+            {isSSE && (
+              <SSEViewToggle mode={sseViewMode} onModeChange={setSseViewMode} />
+            )}
             <CollapseButton collapsed={bodyCollapsed} onToggle={onToggleCollapsed} />
-            <CopyButton onCopy={() => onCopy(displayBody)} />
+            <CopyButton onCopy={() => onCopy(sseViewMode === 'raw' ? rawSSEText : extractedBody)} />
           </div>
         </div>
         <div className="flex-1 min-h-0">
-          <JsonBlock data={displayBody} collapsed={bodyCollapsed} />
+          {sseViewMode === 'raw' && isSSE ? (
+            <pre className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary overflow-auto whitespace-pre-wrap break-words" style={{ backgroundColor: '#08090a' }}>
+              {rawSSEText}
+            </pre>
+          ) : (
+            <JsonBlock data={extractedBody} collapsed={bodyCollapsed} />
+          )}
         </div>
       </div>
     </div>
