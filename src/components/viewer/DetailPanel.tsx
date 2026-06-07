@@ -272,6 +272,13 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
                 </span>
               </>
             )}
+            <span className={`text-xs px-1.5 py-0.5 rounded border ${
+              log.metadata.stream
+                ? 'text-brand-accent border-brand-accent/30'
+                : 'text-text-quaternary border-border-subtle'
+            }`}>
+              {log.metadata.stream ? 'SSE' : 'JSON'}
+            </span>
           </div>
           <div className="flex items-center gap-2 text-sm text-text-tertiary truncate" title={log.request.url}>
             {(() => {
@@ -1150,7 +1157,7 @@ function MetaRow({
               <circle cx="8" cy="8" r="6.5" />
               <path strokeLinecap="round" d="M8 7v4M8 5.5v0" />
             </svg>
-            <span className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity duration-150 absolute left-0 bottom-full mb-2 px-2.5 py-1.5 bg-bg-surface rounded-lg border border-border-subtle shadow-lg text-[13px] text-text-secondary leading-relaxed max-w-[280px] z-50 pointer-events-none whitespace-normal">
+            <span className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity duration-150 absolute left-0 top-full mt-2 px-3 py-2 bg-bg-surface rounded-lg border border-border-subtle shadow-lg text-[13px] text-text-secondary leading-relaxed w-max max-w-[420px] z-50 pointer-events-none whitespace-normal">
               {description}
             </span>
           </span>

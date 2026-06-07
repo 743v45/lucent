@@ -176,7 +176,7 @@ export function LogListPanel({
                   }
                 `}
               >
-                {/* 行1：Agent类型 tag + 模型名 + 时间 */}
+                {/* 行1：Agent类型 tag + 模型名 + SSE/JSON + 时间 */}
                 <div className="flex items-center gap-2 text-sm leading-[1.3]">
                   {agentTag}
                   <span
@@ -184,6 +184,13 @@ export function LogListPanel({
                     title={log.metadata.model}
                   >
                     {shortenModel(log.metadata.model)}
+                  </span>
+                  <span className={`shrink-0 text-xs px-1 rounded border ${
+                    log.metadata.stream
+                      ? 'text-brand-accent border-brand-accent/30'
+                      : 'text-text-quaternary border-border-subtle'
+                  }`}>
+                    {log.metadata.stream ? 'SSE' : 'JSON'}
                   </span>
                   <TimeWithTooltip timestamp={log.timestamp} />
                 </div>
