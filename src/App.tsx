@@ -53,7 +53,7 @@ function App(): JSX.Element {
     updateUrl(selectedLogId, tab);
   }, [selectedLogId, updateUrl]);
 
-  const { logs, loading: logsLoading, loadLogs } = useLogs();
+  const { logs, loading: logsLoading, loadingMore, hasMore, loadLogs, loadMore } = useLogs();
 
   const selectedLog = logs.find(log => log.id === selectedLogId);
 
@@ -152,6 +152,9 @@ function App(): JSX.Element {
             selectedId={selectedLogId}
             onSelectLog={handleSelectLog}
             loading={logsLoading}
+            loadingMore={loadingMore}
+            hasMore={hasMore}
+            onLoadMore={loadMore}
             width={sidebarWidth}
           />
           {/* 拖拽分割栏 */}

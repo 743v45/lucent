@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { Empty, Spin, Typography } from 'antd';
 import type { LogEntry, AgentType, ApiProviderType } from '../../types';
-import { API_PATH_REGEX } from '../../constants';
-import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, HTTP_ERROR_STATUS_THRESHOLD } from '../../constants';
+import { API_PATH_REGEX, getStatusColor } from '../../constants';
+import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD } from '../../constants';
 import { ProviderIcon } from '../common/ProviderIcon';
 
 const { Text } = Typography;
@@ -12,6 +12,9 @@ interface LogListPanelProps {
   selectedId: string | null;
   onSelectLog: (id: string) => void;
   loading: boolean;
+  loadingMore: boolean;
+  hasMore: boolean;
+  onLoadMore: () => void;
   width: number;
 }
 
@@ -39,6 +42,9 @@ export function LogListPanel({
   selectedId,
   onSelectLog,
   loading,
+  loadingMore,
+  hasMore,
+  onLoadMore,
   width,
 }: LogListPanelProps): JSX.Element {
   // MainAgent: 金色加灰 #C9A227, SubAgent: 橙色加灰 #B87A4A
@@ -159,7 +165,15 @@ export function LogListPanel({
           />
         </div>
       ) : (
-        <div className="flex-1 overflow-y-auto p-2">
+        <div
+          className="flex-1 overflow-y-auto p-2"
+          onScroll={(e) => {
+            const el = e.currentTarget;
+            if (el.scrollHeight - el.scrollTop - el.clientHeight < 100 && hasMore && !loadingMore) {
+              onLoadMore();
+            }
+          }}
+        >
           {logs.map((log) => {
             const isSelected = selectedId === log.id;
             const { tag: agentTag, color: agentColor } = getAgentTypeTag(log.agentType);
@@ -212,9 +226,7 @@ export function LogListPanel({
                   </span>
                   {log.response && (
                     <span
-                      className={`font-[510] shrink-0 ${
-                        log.response.status < HTTP_ERROR_STATUS_THRESHOLD ? 'text-success' : 'text-error'
-                      }`}
+                      className={`font-[510] shrink-0 ${getStatusColor(log.response.status)}`}
                     >
                       {log.response.status}
                     </span>
@@ -223,6 +235,11 @@ export function LogListPanel({
               </div>
             );
           })}
+          {loadingMore && (
+            <div className="flex justify-center py-3">
+              <Spin size="small" />
+            </div>
+          )}
         </div>
       )}
     </div>

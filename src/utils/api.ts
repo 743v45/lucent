@@ -44,9 +44,10 @@ export async function getProxyStatus(): Promise<{
 }
 
 /**
- * 获取日志列表
+ * 获取日志列表（分页）
  */
-export async function getLogs(): Promise<{
+export async function getLogs(params?: { limit?: number; offset?: number }): Promise<{
+  total: number;
   logs: Array<{
     id: string;
     timestamp: string;
@@ -90,7 +91,11 @@ export async function getLogs(): Promise<{
     error?: string;
   }>;
 }> {
-  return request('/logs');
+  const qs = new URLSearchParams();
+  if (params?.limit) qs.set('limit', String(params.limit));
+  if (params?.offset) qs.set('offset', String(params.offset));
+  const query = qs.toString();
+  return request(`/logs${query ? `?${query}` : ''}`);
 }
 
 /**

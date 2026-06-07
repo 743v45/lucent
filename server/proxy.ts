@@ -140,6 +140,7 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         // 转换 incoming headers
         let headers: Record<string, string> = { ...req.headers } as Record<string, string>;
         delete headers.host; // 让 fetch 设置 host
+        delete headers.authorization; // 上游不认 OAuth token，只保留 x-api-key
 
         // 应用请求头转换
         headers = forceIdentityAcceptEncoding(headers);

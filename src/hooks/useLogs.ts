@@ -1,46 +1,55 @@
 /**
- * 日志数据管理 Hook
+ * 日志数据管理 Hook（支持分页加载）
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getLogs } from '../utils/api';
 import type { LogEntry } from '../types';
+
+const PAGE_SIZE = 50;
 
 export function useLogs() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const offsetRef = useRef(0);
 
-  // 加载日志
+  // 转换 API 数据格式
+  const formatLog = (log: any): LogEntry => ({
+    id: log.id,
+    timestamp: log.timestamp,
+    request: {
+      ...log.request,
+      body: {
+        ...log.request.body,
+        messages: (log.request.body.messages || []).map((msg: any) => ({
+          role: msg.role,
+          content: typeof msg.content === 'string' ? msg.content : (msg.content || []),
+        })),
+      },
+    },
+    response: log.response as LogEntry['response'],
+    agentType: log.agentType as LogEntry['agentType'],
+    subAgentType: log.subAgentType as LogEntry['subAgentType'],
+    duration: log.duration,
+    metadata: log.metadata as LogEntry['metadata'],
+    tokenUsage: log.tokenUsage as LogEntry['tokenUsage'],
+    kvCache: log.kvCache as LogEntry['kvCache'],
+    context: log.context as LogEntry['context'],
+    error: log.error,
+  });
+
+  // 初始加载（最新的 PAGE_SIZE 条）
   const loadLogs = async () => {
     try {
       setLoading(true);
       setError(null);
-      const data = await getLogs();
-      // 转换 API 返回的数据格式为 LogEntry 格式
-      const formattedLogs = (data.logs || []).map((log: any): LogEntry => ({
-        id: log.id,
-        timestamp: log.timestamp,
-        request: {
-          ...log.request,
-          body: {
-            ...log.request.body,
-            messages: (log.request.body.messages || []).map((msg: any) => ({
-              role: msg.role,
-              content: typeof msg.content === 'string' ? msg.content : (msg.content || []),
-            })),
-          },
-        },
-        response: log.response as LogEntry['response'],
-        agentType: log.agentType as LogEntry['agentType'],
-        subAgentType: log.subAgentType as LogEntry['subAgentType'],
-        duration: log.duration,
-        metadata: log.metadata as LogEntry['metadata'],
-        tokenUsage: log.tokenUsage as LogEntry['tokenUsage'],
-        kvCache: log.kvCache as LogEntry['kvCache'],
-        context: log.context as LogEntry['context'],
-        error: log.error,
-      }));
-      setLogs(formattedLogs);
+      const data = await getLogs({ limit: PAGE_SIZE, offset: 0 });
+      const formatted = (data.logs || []).map(formatLog);
+      setLogs(formatted);
+      offsetRef.current = formatted.length;
+      setHasMore(formatted.length < data.total);
     } catch (err) {
       setError(err instanceof Error ? err.message : '加载失败');
       console.error('Failed to load logs:', err);
@@ -49,18 +58,31 @@ export function useLogs() {
     }
   };
 
-  // 添加新日志（用于 WebSocket 推送）— 带 ID 去重，防止双通道重复
+  // 加载更多（往下翻时调用）
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
+    try {
+      setLoadingMore(true);
+      const data = await getLogs({ limit: PAGE_SIZE, offset: offsetRef.current });
+      const formatted = (data.logs || []).map(formatLog);
+      setLogs(prev => [...prev, ...formatted]);
+      offsetRef.current += formatted.length;
+      setHasMore(formatted.length >= PAGE_SIZE);
+    } catch (err) {
+      console.error('Failed to load more logs:', err);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [loadingMore, hasMore]);
+
+  // 添加新日志（WebSocket 推送）— 带 ID 去重
   const addLog = (log: LogEntry) => {
     setLogs(prev => {
-      // 如果已存在相同 ID，跳过
-      if (prev.some(item => item.id === log.id)) {
-        return prev;
-      }
+      if (prev.some(item => item.id === log.id)) return prev;
       return [log, ...prev];
     });
   };
 
-  // 初始加载
   useEffect(() => {
     loadLogs();
   }, []);
@@ -68,8 +90,11 @@ export function useLogs() {
   return {
     logs,
     loading,
+    loadingMore,
+    hasMore,
     error,
     loadLogs,
+    loadMore,
     addLog,
     setLogs,
   };
