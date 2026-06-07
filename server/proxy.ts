@@ -12,7 +12,7 @@ import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { getConfig } from './config.js';
-import { DEFAULT_PROXY_PORT, DEFAULT_SERVER_HOST, PROXY_TRACE_HEADER, DEFAULT_UPSTREAM_URLS, CLAUDE_SETTINGS_DIR } from './constants.js';
+import { DEFAULT_PROXY_PORT, DEFAULT_SERVER_HOST, PROXY_TRACE_HEADER, DEFAULT_UPSTREAM_URLS, CLAUDE_SETTINGS_DIR, MAX_REQUEST_BODY_SIZE } from './constants.js';
 import createDebug from 'debug';
 const log = createDebug('agentproxy:proxy');
 
@@ -148,7 +148,15 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         // 读取请求 body（完整缓冲，因为 interceptor 需要解析 JSON 做日志记录；
         // LLM API 请求体量通常在 KB~MB 级别，不需要流式传输）
         const buffers: Buffer[] = [];
+        let bodySize = 0;
         for await (const chunk of req) {
+          bodySize += chunk.length;
+          if (bodySize > MAX_REQUEST_BODY_SIZE) {
+            log('请求体超限: %d bytes (限制 %d bytes)', bodySize, MAX_REQUEST_BODY_SIZE);
+            res.writeHead(413, { 'content-type': 'text/plain' });
+            res.end(`Request body too large (${bodySize} > ${MAX_REQUEST_BODY_SIZE} bytes)`);
+            return;
+          }
           buffers.push(chunk);
         }
         const body = Buffer.concat(buffers);

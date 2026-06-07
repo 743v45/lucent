@@ -27,6 +27,10 @@ export const LOG_DIR = join(homedir(), APP_DATA_DIR_NAME, LOG_SUBDIR);      // ~
 export const CONFIG_DIR = join(homedir(), APP_DATA_DIR_NAME);               // ~/.agentproxy
 export const CONFIG_PATH = join(CONFIG_DIR, CONFIG_FILE_NAME);              // ~/.agentproxy/config.json
 
+// ==================== 请求体限制 ====================
+/** 代理转发的请求体最大体积（50MB）—— LLM API 请求通常在 KB~MB 级别，此限制防止 OOM */
+export const MAX_REQUEST_BODY_SIZE = 50 * 1024 * 1024;
+
 // ==================== 日志配置 ====================
 export const MAX_LOG_FILE_SIZE = 100 * 1024 * 1024; // 100MB — 单个日志文件最大体积
 export const MAX_LOG_FILES = 50;                    // 日志轮转保留文件数
