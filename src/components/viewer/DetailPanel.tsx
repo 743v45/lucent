@@ -92,58 +92,74 @@ function formatTokenValue(n: number | undefined): string {
 
 // ==================== Token Stats Card ====================
 
-function TokenStatsCard({ log }: { log: LogEntry }) {
-  const hasTokenData = log.tokenUsage != null;
+/**
+ * 从日志的响应体中提取 token 使用情况（前端 fallback）
+ * 覆盖三种情况：tokenUsage 已有、非流式 JSON 响应、SSE 流式响应
+ */
+function resolveTokenUsage(log: LogEntry) {
+  // 1. 服务端已映射好的 tokenUsage
+  if (log.tokenUsage?.input_tokens || log.tokenUsage?.output_tokens) {
+    return log.tokenUsage;
+  }
+
+  const body = log.response?.body;
+
+  // 2. 非流式 JSON 响应：从 response.body.usage 提取（Anthropic 字段名）
+  if (body && typeof body === 'object' && body.type !== 'sse_raw') {
+    const usage = (body as any).usage;
+    if (usage && typeof usage === 'object') {
+      return {
+        input_tokens: usage.input_tokens ?? 0,
+        output_tokens: usage.output_tokens ?? 0,
+        cache_creation_tokens: usage.cache_creation_input_tokens,
+        cache_read_tokens: usage.cache_read_input_tokens,
+      };
+    }
+  }
+
+  // 3. SSE 流式响应：从 SSE 原始行提取
+  if (body && typeof body === 'object' && (body as SSERawBody).type === 'sse_raw') {
+    const lines = (body as SSERawBody).lines;
+    if (lines?.length) {
+      const extracted = extractFromSSELines(lines);
+      if (extracted.usage.input > 0 || extracted.usage.output > 0) {
+        return {
+          input_tokens: extracted.usage.input,
+          output_tokens: extracted.usage.output,
+          cache_creation_tokens: extracted.usage.cache_create || undefined,
+          cache_read_tokens: extracted.usage.cache_read || undefined,
+        };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function InlineTokenStats({ log }: { log: LogEntry }) {
+  const tokenUsage = resolveTokenUsage(log);
+  const inputTokens = tokenUsage?.input_tokens;
+  const outputTokens = tokenUsage?.output_tokens;
+  const cacheCreate = tokenUsage?.cache_creation_tokens;
+  const cacheRead = tokenUsage?.cache_read_tokens;
+  const hitRate = log.kvCache?.hitRate ?? 0;
   const hasHitRate = log.kvCache?.hitRate != null && log.kvCache.hitRate > 0;
 
-  if (!hasTokenData && !hasHitRate) return null;
-
-  const inputTokens = log.tokenUsage?.input_tokens;
-  const outputTokens = log.tokenUsage?.output_tokens;
-  const cacheCreate = log.tokenUsage?.cache_creation_tokens;
-  const cacheRead = log.tokenUsage?.cache_read_tokens;
-  const hitRate = log.kvCache?.hitRate ?? 0;
-
   return (
-    <div className="rounded-lg border border-border-subtle overflow-hidden shrink-0 font-mono">
-      <div className="flex h-full">
-        {/* 左栏：数据区 */}
-        <div className="flex flex-col">
-          {/* 第一行：Token */}
-          <div className="flex items-center px-3 py-1.5 gap-3 border-b border-border-subtle">
-            <span className="text-text-secondary font-[510]">Token</span>
-            <span className="text-text-quaternary">
-              input: <span className="text-text-primary">{formatTokenValue(inputTokens)}</span>
-            </span>
-            <span className="text-text-quaternary">
-              output: <span className="text-text-primary">{formatTokenValue(outputTokens)}</span>
-            </span>
-          </div>
-          {/* 第二行：Cache */}
-          <div className="flex items-center px-3 py-1.5 gap-3">
-            <span className="text-text-secondary font-[510]">Cache</span>
-            <span className="text-text-quaternary">
-              create: <span className="text-text-primary">{formatTokenValue(cacheCreate)}</span>
-            </span>
-            <span className="text-text-quaternary">
-              read: <span className="text-text-primary">{formatTokenValue(cacheRead)}</span>
-            </span>
-          </div>
+    <div className="shrink-0 flex items-center gap-4 font-mono text-sm">
+      <div className="rounded-lg bg-bg-surface/50 px-3 py-2 space-y-1">
+        <div className="flex items-center gap-3">
+          <span className="text-text-quaternary">input: <span className="text-text-primary">{formatTokenValue(inputTokens)}</span></span>
+          <span className="text-text-quaternary">output: <span className="text-text-primary">{formatTokenValue(outputTokens)}</span></span>
         </div>
-        {/* 竖分隔线 */}
-        <div className="border-l border-border-subtle" />
-        {/* 右栏：命中率（竖跨两行） */}
-        <div className="flex flex-col items-center justify-center px-4">
-          {hasHitRate ? (
-            <>
-              <span className="text-text-primary font-[510]">{hitRate.toFixed(1)}%</span>
-              <span className="text-text-quaternary text-xs">命中率</span>
-            </>
-          ) : (
-            <span className="text-text-quaternary text-xs">—</span>
-          )}
+        <div className="flex items-center gap-3">
+          <span className="text-text-quaternary">create: <span className="text-text-primary">{formatTokenValue(cacheCreate)}</span></span>
+          <span className="text-text-quaternary">read: <span className="text-text-primary">{formatTokenValue(cacheRead)}</span></span>
         </div>
       </div>
+      {hasHitRate && (
+        <span className={`font-[510] text-base ${hitRate > 70 ? 'text-success' : hitRate > 30 ? 'text-warning' : 'text-error'}`}>{hitRate.toFixed(1)}%</span>
+      )}
     </div>
   );
 }
@@ -228,45 +244,45 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
   return (
     <div className="flex-1 min-w-0 h-full flex flex-col bg-bg-panel p-3 gap-3">
       {/* 头部信息区 */}
-      <div className="flex gap-3">
-      {/* 左侧：请求基本信息 */}
-      <div className="flex-1 min-w-0 border border-border-subtle rounded-lg px-5 py-4">
-        <div className="flex items-center gap-2 mb-1">
-          <span className="text-text-quaternary text-sm">
-            {new Date(log.timestamp).toLocaleString('zh-CN')}
-          </span>
-          <span
-            className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
-              log.request.method === 'POST'
-                ? 'text-brand-accent'
-                : 'text-success'
-            }`}
-          >
-            {log.request.method}
-          </span>
-          {log.response && (
-            <>
-              <span
-                className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
-                  log.response.status >= 400 ? 'text-error' : 'text-success'
-                }`}
-                title={log.response.statusText}
-              >
-                {log.response.status}
-              </span>
-            </>
-          )}
+      <div className="border border-border-subtle rounded-lg px-5 py-4 flex items-center gap-6">
+        {/* 左侧：请求基本信息 */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 mb-1">
+            <span className="text-text-quaternary text-sm">
+              {new Date(log.timestamp).toLocaleString('zh-CN')}
+            </span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
+                log.request.method === 'POST'
+                  ? 'text-brand-accent'
+                  : 'text-success'
+              }`}
+            >
+              {log.request.method}
+            </span>
+            {log.response && (
+              <>
+                <span
+                  className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
+                    log.response.status >= 400 ? 'text-error' : 'text-success'
+                  }`}
+                  title={log.response.statusText}
+                >
+                  {log.response.status}
+                </span>
+              </>
+            )}
+          </div>
+          <div className="flex items-center gap-2 text-sm text-text-tertiary truncate" title={log.request.url}>
+            {(() => {
+              const apiType = log.apiType || detectApiType(log.request.url);
+              return apiType ? <ProviderIcon type={apiType} size={14} /> : null;
+            })()}
+            <span className="truncate">{log.request.url}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2 text-sm text-text-tertiary truncate" title={log.request.url}>
-          {(() => {
-            const apiType = log.apiType || detectApiType(log.request.url);
-            return apiType ? <ProviderIcon type={apiType} size={14} /> : null;
-          })()}
-          <span className="truncate">{log.request.url}</span>
-        </div>
-      </div>
-      {/* 右侧：Token/Cache 统计 */}
-      <TokenStatsCard log={log} />
+        {/* 右侧：Token/Cache 内嵌卡片 */}
+        <InlineTokenStats log={log} />
       </div>
 
       {/* Tab 卡片 - 包含导航栏 + 内容 */}
@@ -1019,27 +1035,56 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
     <div className="p-4">
       <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-3">
         <div className="space-y-3 text-lg">
-          <MetaRow label="Agent 类型" value={log.agentType === 'main' ? 'MainAgent' : 'SubAgent'} />
-          {log.subAgentType && <MetaRow label="子类型" value={log.subAgentType} />}
-          <MetaRow label="模型" value={log.metadata.model || 'Unknown'} />
-          <MetaRow label="提供商" value={log.metadata.provider || 'Unknown'} />
-          <MetaRow label="耗时" value={`${log.duration}ms`} />
-          <MetaRow label="流式" value={log.metadata.stream ? '是' : '否'} />
+          <MetaRow
+            label="Agent 类型"
+            value={log.agentType === 'main' ? 'MainAgent' : 'SubAgent'}
+            description="请求的发起方类型。MainAgent 为主代理（用户直接交互），SubAgent 为子代理（由主代理调度）"
+          />
+          {log.subAgentType && (
+            <MetaRow
+              label="子类型"
+              value={log.subAgentType}
+              description="SubAgent 的功能分类，如 plan（规划）、search（搜索）、bash（命令执行）、workflow（工作流）"
+            />
+          )}
+          <MetaRow
+            label="模型"
+            value={log.metadata.model || 'Unknown'}
+            description="处理此请求的 AI 模型标识符，如 claude-sonnet-4-5、gpt-4o 等"
+          />
+          <MetaRow
+            label="提供商"
+            value={log.metadata.provider || 'Unknown'}
+            description="API 服务提供商，决定请求转发的目标端点"
+          />
+          <MetaRow
+            label="耗时"
+            value={`${log.duration}ms`}
+            description="从请求发出到收到完整响应的总耗时（含网络传输）"
+          />
+          <MetaRow
+            label="流式"
+            value={log.metadata.stream ? '是' : '否'}
+            description="是否使用 SSE 流式传输。开启后响应会逐步返回，适合长文本生成"
+          />
           {log.tokenUsage && (
             <>
               <MetaRow
                 label="Input Tokens"
                 value={log.tokenUsage.input_tokens?.toLocaleString() ?? '0'}
+                description="请求中包含的输入 token 数量（含系统提示词和用户消息）"
               />
               <MetaRow
                 label="Output Tokens"
                 value={log.tokenUsage.output_tokens?.toLocaleString() ?? '0'}
+                description="模型生成的输出 token 数量"
               />
               {log.tokenUsage.cache_read_tokens != null && (
                 <MetaRow
                   label="Cache Read"
                   value={log.tokenUsage.cache_read_tokens.toLocaleString()}
                   valueClassName="text-success"
+                  description="从缓存读取的 token 数量，命中缓存可降低延迟和费用"
                 />
               )}
               {log.tokenUsage.cache_creation_tokens != null && (
@@ -1047,6 +1092,7 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
                   label="Cache Creation"
                   value={log.tokenUsage.cache_creation_tokens.toLocaleString()}
                   valueClassName="text-brand-accent"
+                  description="写入缓存的 token 数量，首次请求时创建"
                 />
               )}
             </>
@@ -1054,8 +1100,14 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
           <MetaRow
             label="请求时间"
             value={new Date(log.timestamp).toLocaleString('zh-CN')}
+            description="请求发起的时间戳"
           />
-          <MetaRow label="请求 ID" value={log.id} mono />
+          <MetaRow
+            label="请求 ID"
+            value={log.id}
+            mono
+            description="请求的唯一标识符，用于追踪和调试"
+          />
           {log.error && (
             <div className="mt-2 pt-2 border-t border-error/20">
               <span className="text-error text-[15px] font-[510]">错误: {log.error}</span>
@@ -1074,15 +1126,36 @@ function MetaRow({
   value,
   mono = false,
   valueClassName = '',
+  description,
 }: {
   label: string;
   value: string;
   mono?: boolean;
   valueClassName?: string;
+  description?: string;
 }) {
   return (
     <div className="flex justify-between items-center">
-      <span className="text-text-secondary">{label}</span>
+      <span className="text-text-secondary flex items-center gap-1.5">
+        {label}
+        {description && (
+          <span className="group relative inline-flex items-center">
+            <svg
+              className="w-3.5 h-3.5 text-text-quaternary cursor-help"
+              fill="none"
+              viewBox="0 0 16 16"
+              stroke="currentColor"
+              strokeWidth={1.5}
+            >
+              <circle cx="8" cy="8" r="6.5" />
+              <path strokeLinecap="round" d="M8 7v4M8 5.5v0" />
+            </svg>
+            <span className="invisible group-hover:visible opacity-0 group-hover:opacity-100 transition-opacity duration-150 absolute left-0 bottom-full mb-2 px-2.5 py-1.5 bg-bg-surface rounded-lg border border-border-subtle shadow-lg text-[13px] text-text-secondary leading-relaxed max-w-[280px] z-50 pointer-events-none whitespace-normal">
+              {description}
+            </span>
+          </span>
+        )}
+      </span>
       <span
         className={`text-text-primary ${mono ? 'font-mono text-sm' : ''} ${valueClassName}`}
       >
