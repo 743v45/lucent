@@ -32,6 +32,8 @@ export function useLogs() {
     response: log.response as LogEntry['response'],
     agentType: log.agentType as LogEntry['agentType'],
     subAgentType: log.subAgentType as LogEntry['subAgentType'],
+    apiType: log.apiType as LogEntry['apiType'],
+    clientType: log.clientType as LogEntry['clientType'],
     duration: log.duration,
     metadata: log.metadata as LogEntry['metadata'],
     tokenUsage: log.tokenUsage as LogEntry['tokenUsage'],

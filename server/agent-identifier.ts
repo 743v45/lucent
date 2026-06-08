@@ -4,7 +4,7 @@
  * 用于识别请求中的 Agent 类型和子类型
  */
 
-import { AgentType, SubAgentType } from './types.js';
+import { AgentType, SubAgentType, ClientType } from './types.js';
 import createDebug from 'debug';
 const log = createDebug('agentproxy:agent-id');
 
@@ -268,6 +268,56 @@ export function identifyProvider(url: string): 'openai' | 'claude' | 'unknown' {
   if (lower.includes('anthropic') || lower.includes('claude')) {
     log('识别提供商: claude, url=%s', url);
     return 'claude';
+  }
+
+  return 'unknown';
+}
+
+// ==================== 客户端识别 ====================
+
+/**
+ * 从请求 headers 识别客户端应用
+ *
+ * 各客户端 User-Agent 特征：
+ * - Claude Code CLI: 包含 "claude-code" 或 "claude-cli"
+ * - OpenCode: 包含 "opencode"
+ * - Codex CLI: 包含 "codex"
+ * - Cursor: 包含 "cursor"
+ * - Windsurf: 包含 "windsurf"
+ * - 测试客户端: 包含 "test-client" 或 "agentproxy-test"
+ */
+export function identifyClient(headers: Record<string, string>): ClientType {
+  const ua = (headers['user-agent'] || '').toLowerCase();
+  const originator = (headers['originator'] || '').toLowerCase();
+
+  // OpenCode 会发送 originator header
+  if (originator.includes('opencode') || ua.includes('opencode')) {
+    return 'opencode';
+  }
+
+  // Claude Code CLI
+  if (ua.includes('claude-code') || ua.includes('claude-cli') || ua.includes('claude')) {
+    return 'claude-code';
+  }
+
+  // Codex CLI
+  if (ua.includes('codex')) {
+    return 'codex';
+  }
+
+  // Cursor
+  if (ua.includes('cursor')) {
+    return 'cursor';
+  }
+
+  // Windsurf
+  if (ua.includes('windsurf')) {
+    return 'windsurf';
+  }
+
+  // Test Client
+  if (ua.includes('test-client') || ua.includes('agentproxy-test')) {
+    return 'test-client';
   }
 
   return 'unknown';

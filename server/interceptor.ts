@@ -26,7 +26,7 @@ import {
   MAX_BODY_PARSE_FAILURE_LENGTH,
   MAX_RESPONSE_BODY_LENGTH,
 } from './constants.js';
-import { extractTokenUsage } from './agent-identifier.js';
+import { extractTokenUsage, identifyClient } from './agent-identifier.js';
 import type { ApiProviderType, RawLogEntry } from './types.js';
 import createDebug from 'debug';
 const dbg = createDebug('agentproxy:interceptor');
@@ -280,12 +280,13 @@ function buildRequestEntry(
   const isMain = isMainAgentRequest(body);
   const { agentType, subAgentType } = parseAgentType(body, isMain);
   const model = (body as any)?.model || 'unknown';
+  const clientType = identifyClient(headers);
 
   const requestId = `${startTime}_${Math.random().toString(36).substring(2, 11)}`;
 
-  dbg('拦截 %s %s apiType=%s agentType=%s subAgentType=%s model=%s stream=%s',
+  dbg('拦截 %s %s apiType=%s agentType=%s subAgentType=%s clientType=%s model=%s stream=%s',
     options?.method || 'GET', urlStr, detectedApiType ?? '-', agentType, subAgentType ?? '-',
-    model, (body as any)?.stream === true);
+    clientType, model, (body as any)?.stream === true);
 
   return {
     id: requestId,
@@ -302,6 +303,7 @@ function buildRequestEntry(
     agentType,
     subAgentType,
     apiType: detectedApiType || undefined,
+    clientType,
   };
 }
 

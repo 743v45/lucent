@@ -61,6 +61,7 @@ export function normalizeLogEntry(raw: any): LogEntry {
     agentType: raw.agentType || (raw.mainAgent ? 'main' : 'sub'),
     subAgentType: raw.subAgentType,
     apiType: raw.apiType,
+    clientType: raw.clientType || 'unknown',
     duration: raw.duration || 0,
     metadata: {
       model: body.model || 'unknown',

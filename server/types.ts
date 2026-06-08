@@ -8,6 +8,10 @@
 
 export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses';
 
+// ==================== 客户端类型 ====================
+
+export type ClientType = 'claude-code' | 'opencode' | 'codex' | 'cursor' | 'windsurf' | 'test-client' | 'unknown';
+
 // ==================== Agent 类型 ====================
 
 export type AgentType = 'main' | 'sub';
@@ -33,6 +37,7 @@ export interface LogEntry {
   agentType: AgentType;
   subAgentType?: SubAgentType;
   apiType?: ApiProviderType;
+  clientType?: ClientType;
   duration: number;
   tokenUsage?: {
     inputTokens: number;
@@ -114,7 +119,7 @@ export interface RawLogEntry {
   agentType?: AgentType;
   subAgentType?: SubAgentType;
   apiType?: ApiProviderType;
-  // Delta 存储字段
+  clientType?: ClientType;
   _deltaFormat?: number;
   _totalMessageCount?: number;
   _conversationId?: string;

@@ -11,6 +11,7 @@ export interface LogEntry {
   agentType: AgentType;
   subAgentType?: SubAgentType;
   apiType?: ApiProviderType;
+  clientType?: ClientType;
   duration: number;
   tokenUsage?: TokenUsage;
   metadata: Metadata;
@@ -22,6 +23,8 @@ export interface LogEntry {
 export type AgentType = 'main' | 'sub';
 
 export type SubAgentType = 'plan' | 'search' | 'bash' | 'workflow' | 'unknown';
+
+export type ClientType = 'claude-code' | 'opencode' | 'codex' | 'cursor' | 'windsurf' | 'test-client' | 'unknown';
 
 export interface RequestData {
   method: string;

@@ -4,6 +4,7 @@ import type { LogEntry, AgentType, ApiProviderType } from '../../types';
 import { API_PATH_REGEX, getStatusColor } from '../../constants';
 import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD } from '../../constants';
 import { ProviderIcon } from '../common/ProviderIcon';
+import { ClientIcon } from '../common/ClientIcon';
 
 const { Text } = Typography;
 
@@ -209,8 +210,9 @@ export function LogListPanel({
                   <TimeWithTooltip timestamp={log.timestamp} />
                 </div>
 
-                {/* 行2：协议图标 + 请求地址 + 耗时 + 状态码 */}
+                {/* 行2：客户端图标 + 协议图标 + 请求地址 + 耗时 + 状态码 */}
                 <div className="flex items-center gap-2 text-[13px] leading-[1.3]">
+                  <ClientIcon clientType={log.clientType} />
                   {(() => {
                     const apiType = log.apiType || detectApiType(log.request.url);
                     return apiType ? <ProviderIcon type={apiType} size={14} className="text-text-secondary" /> : null;
