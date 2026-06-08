@@ -2,15 +2,28 @@
  * SSE 流端到端测试
  *
  * 模拟真实 SSE 流式响应，测试 extractInBackground 函数
+ * 新架构存储原始 SSE 行数据 (sse_raw)，使用 extractFromSSELines 提取结构化信息
  */
 
 import { describe, it, expect } from 'vitest';
 import { ReadableStream } from 'node:stream/web';
-import { extractInBackground } from '../server/sse-extractor.js';
-import type { ExtractedInfo, RawLogEntry } from '../server/types.js';
+import { extractInBackground, extractFromSSELines } from '../server/sse-extractor.js';
+import type { ExtractedInfo, RawLogEntry, SSERawBody } from '../server/types.js';
 
 // 测试中用 RawLogEntry 替代原 LogEntry
 type LogEntry = RawLogEntry;
+
+/**
+ * 从日志条目的 SSE 原始数据中提取结构化信息
+ * 新架构中，response.body 是 SSERawBody {type: 'sse_raw', lines: [...]}
+ */
+function extractFromEntry(entry: LogEntry): ExtractedInfo {
+  const body = entry.response?.body as SSERawBody | undefined;
+  if (!body || body.type !== 'sse_raw' || !body.lines) {
+    throw new Error('Expected sse_raw body with lines');
+  }
+  return extractFromSSELines(body.lines);
+}
 
 // SSE 格式编码函数
 function encodeSSE(events: Array<{ event?: string; data: any }>): Uint8Array {
@@ -101,12 +114,14 @@ describe('extractInBackground 端到端测试', () => {
       () => { /* no-op */ },
     );
 
-    expect(entry.response?.body.type).toBe('message');
-    expect(entry.response?.body.model).toBe('claude-3-opus-20240229');
-    expect(entry.response?.body.content[0].text).toBe('Hello world');
-    expect(entry.response?.body.stop_reason).toBe('end_turn');
-    expect(entry.response?.body.usage.input).toBe(100);
-    expect(entry.response?.body.usage.output).toBe(50);
+    // 新架构：response.body 是 SSERawBody，用 extractFromEntry 提取结构化信息
+    const extracted = extractFromEntry(entry);
+    expect(entry.response?.body.type).toBe('sse_raw');
+    expect(extracted.model).toBe('claude-3-opus-20240229');
+    expect(extracted.text).toBe('Hello world');
+    expect(extracted.stopReason).toBe('end_turn');
+    expect(extracted.usage.input).toBe(100);
+    expect(extracted.usage.output).toBe(50);
   });
 
   it('应该解析 OpenAI Chat SSE 流', async () => {
@@ -165,10 +180,12 @@ describe('extractInBackground 端到端测试', () => {
       () => { /* no-op */ },
     );
 
-    expect(entry.response?.body.content[0].text).toBe('Hello world');
-    expect(entry.response?.body.stop_reason).toBe('stop');
-    expect(entry.response?.body.usage.input).toBe(100);
-    expect(entry.response?.body.usage.output).toBe(50);
+    // 新架构：使用 extractFromEntry 提取结构化信息
+    const extracted = extractFromEntry(entry);
+    expect(extracted.text).toBe('Hello world');
+    expect(extracted.stopReason).toBe('stop');
+    expect(extracted.usage.input).toBe(100);
+    expect(extracted.usage.output).toBe(50);
   });
 
   it('应该解析包含 tool_calls 的 SSE 流', async () => {
@@ -247,9 +264,11 @@ describe('extractInBackground 端到端测试', () => {
       () => { /* no-op */ },
     );
 
-    expect(entry.response?.body.content[0].type).toBe('tool_use');
-    expect(entry.response?.body.content[0].name).toBe('bash');
-    expect(entry.response?.body.content[0].input).toEqual({ command: 'ls' });
-    expect(entry.response?.body.stop_reason).toBe('tool_use');
+    // 新架构：使用 extractFromEntry 提取结构化信息
+    const extracted = extractFromEntry(entry);
+    // toolCalls 数组中的元素隐含 type='tool_use'
+    expect(extracted.toolCalls[0].name).toBe('bash');
+    expect(extracted.toolCalls[0].input).toEqual({ command: 'ls' });
+    expect(extracted.stopReason).toBe('tool_use');
   });
 });

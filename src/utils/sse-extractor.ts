@@ -73,10 +73,14 @@ function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): voi
     }
   }
 
-  // OpenAI Responses API 格式
+  // OpenAI Responses API 格式（包括慧星云兼容格式）
   else if (data.type && typeof data.type === 'string' && data.type.startsWith('response.')) {
     if (data.type === 'response.output_text.delta') {
       acc.text += data.delta || '';
+    }
+    // 慧星云兼容格式：reasoning 内容计入 thinking
+    if (data.type === 'response.reasoning_text.delta') {
+      acc.thinking += data.delta || '';
     }
     if (data.type === 'response.function_call_arguments.delta') {
       const callId = data.call_id;

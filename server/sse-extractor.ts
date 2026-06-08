@@ -19,7 +19,7 @@ const dbgSse = createDebug('agentproxy:interceptor:sse');
  * 从单个 SSE 事件中提取关键信息
  * 支持 Anthropic、OpenAI Chat、OpenAI Responses 三种格式
  */
-function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): void {
+export function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): void {
   // Anthropic 格式
   if (eventType === 'message_start') {
     acc.model = data.message?.model || acc.model;
@@ -80,10 +80,14 @@ function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): voi
     }
   }
 
-  // OpenAI Responses API 格式
+  // OpenAI Responses API 格式（包括慧星云兼容格式）
   else if (data.type && typeof data.type === 'string' && data.type.startsWith('response.')) {
     if (data.type === 'response.output_text.delta') {
       acc.text += data.delta || '';
+    }
+    // 慧星云兼容格式：response.reasoning_text.delta
+    if (data.type === 'response.reasoning_text.delta') {
+      acc.thinking += data.delta || '';
     }
     if (data.type === 'response.function_call_arguments.delta') {
       const callId = data.call_id;
