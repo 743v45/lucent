@@ -6,7 +6,7 @@ import { SettingsModal } from './components/settings/SettingsModal';
 import { UsageGuide } from './components/common/UsageGuide';
 import { useLogs } from './hooks/useLogs';
 import { ArrowPathIcon, Cog6ToothIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
-import type { LogEntry, TabType } from './types';
+import type { TabType } from './types';
 import {
   URL_PARAM_LOG_ID,
   URL_PARAM_TAB,

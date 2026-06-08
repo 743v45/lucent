@@ -2,6 +2,7 @@
  * 日志相关 API 路由
  *
  * GET    /api/logs          — 查询日志
+ * GET    /api/logs/stream   — SSE 推送新日志
  * GET    /api/logs/stats    — 日志统计
  * GET    /api/logs/:id      — 单条日志详情
  * GET    /api/log-files     — 日志文件列表
@@ -19,11 +20,45 @@ import type { LogsQuery } from '../types.js';
 import createDebug from 'debug';
 const dbg = createDebug('agentproxy:routes:logs');
 
+// SSE 客户端连接集合
+const sseClients = new Set<import('express').Response>();
+
 export function createLogsRouter(options: {
-  resolvedConfig: { logDir: string };
+  resolvedConfig: { logDir: string; heartbeatIntervalMs: number };
   onEnable: () => void; // 启用后的回调（设置日志文件）
 }): Router {
   const router = Router();
+
+  // GET /api/logs/stream — SSE 推送
+  router.get('/api/logs/stream', (_req, res) => {
+    // 设置 SSE headers
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+      'X-Accel-Buffering': 'no',
+    });
+
+    // 发送 connected 事件
+    res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`);
+
+    // 添加到客户端集合
+    sseClients.add(res);
+    dbg('SSE 客户端连接: total=%d', sseClients.size);
+
+    // 心跳保活
+    const heartbeatInterval = options.resolvedConfig.heartbeatIntervalMs || 30000;
+    const heartbeat = setInterval(() => {
+      res.write(`: heartbeat\n\n`);
+    }, heartbeatInterval);
+
+    // 客户端断开时清理
+    _req.on('close', () => {
+      clearInterval(heartbeat);
+      sseClients.delete(res);
+      dbg('SSE 客户端断开: total=%d', sseClients.size);
+    });
+  });
 
   // GET /api/logs
   router.get('/api/logs', (req, res) => {

@@ -86,6 +86,14 @@ export const CACHE_HIT_RATE_BAD_THRESHOLD = 30;
 // ==================== HTTP 状态码 ====================
 export const HTTP_ERROR_STATUS_THRESHOLD = 400;
 
+/** 按状态码范围返回 Tailwind 文字颜色类 */
+export function getStatusColor(status: number): string {
+  if (status >= 500) return 'text-error';    // 5xx - 红色 (服务端错误)
+  if (status >= 400) return 'text-tool';     // 4xx - 橙色 (客户端错误)
+  if (status >= 300) return 'text-warning';  // 3xx - 黄色 (重定向)
+  return 'text-success';                     // 2xx - 绿色 (成功)
+}
+
 // ==================== 时间格式化 ====================
 export const MS_TO_S_THRESHOLD = 1000;
 export const TOKEN_FORMAT_THRESHOLD_MILLION = 1_000_000;

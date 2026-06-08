@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import type { LogEntry, TabType, ApiProviderType, SSERawBody, SSERawLine } from '../../types';
-import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, API_PATH_REGEX } from '../../constants';
+import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, API_PATH_REGEX, getStatusColor } from '../../constants';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -263,9 +263,7 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
             {log.response && (
               <>
                 <span
-                  className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${
-                    log.response.status >= 400 ? 'text-error' : 'text-success'
-                  }`}
+                  className={`px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary ${getStatusColor(log.response.status)}`}
                   title={log.response.statusText}
                 >
                   {log.response.status}
@@ -782,7 +780,6 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
         return {
           title: `工具: ${tool.name}`,
           content: tool.description || '无描述',
-          contentType: 'text',
         };
       case 'message':
         const msg = data.messages?.[selected.index];

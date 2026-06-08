@@ -28,6 +28,7 @@ Thumbs.db
 # Local config
 config.local.json
 preferences.local.json
+opencode.json
 
 # Logs directory (optional, for testing)
 logs/
