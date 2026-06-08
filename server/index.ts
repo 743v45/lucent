@@ -46,7 +46,10 @@ app.use(express.static(join(__dirname, '../public')));
 mountRoutes(app, {
   proxyEnabled: { get value() { return proxyEnabled; }, set value(v) { proxyEnabled = v; } },
   getLogFile: () => LogWriter.getCurrentLogFile(),
-  resolvedConfig: { get logDir() { return resolvedConfig.logDir; } },
+  resolvedConfig: {
+    get logDir() { return resolvedConfig.logDir; },
+    heartbeatIntervalMs: 30000,
+  },
   onLogsEnable: () => { /* 日志文件已在 LogWriter.init 中初始化 */ },
 });
 
@@ -70,9 +73,8 @@ export async function startServer(): Promise<void> {
   const host = resolvedConfig.host;
   try {
     proxyServer = await startProxyServer({ port: proxyPort, host });
-    dbg('代理服务器已启动: port=%d host=%s', proxyPort, host);
-  } catch (error) {
-    dbg('代理服务器启动失败: %O', error);
+  } catch (error: any) {
+    console.error('[AgentProxy] 代理服务器启动失败:', error.message);
     throw error;
   }
 
@@ -104,9 +106,14 @@ export async function startServer(): Promise<void> {
       resolve();
     });
 
-    server.on('error', error => {
-      dbg('服务器错误: %O', error);
-      reject(error);
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`[AgentProxy] ⚠️ Web UI 端口 ${webPort} 已被占用，请检查是否有其他 AgentProxy 实例正在运行`);
+        console.error(`[AgentProxy]   提示: lsof -i :${webPort} 或 kill $(lsof -ti :${webPort})`);
+      } else {
+        console.error('[AgentProxy] Web 服务器错误:', err.message);
+      }
+      reject(err);
     });
   });
 }
@@ -154,7 +161,7 @@ server.on('close', () => {
 
 if (import.meta.url === `file://${process.argv[1]}`) {
   startServer().catch(error => {
-    dbg('启动失败: %O', error);
+    console.error('[AgentProxy] 启动失败:', error.message);
     process.exit(1);
   });
 

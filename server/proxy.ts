@@ -263,7 +263,13 @@ export async function startProxyServer(options?: { port?: number; host?: string 
       });
     });
 
-    server.on('error', (err) => {
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`[AgentProxy] ⚠️ 代理端口 ${port} 已被占用，请检查是否有其他 AgentProxy 实例正在运行`);
+        console.error(`[AgentProxy]   提示: lsof -i :${port} 或 kill $(lsof -ti :${port})`);
+      } else {
+        console.error('[AgentProxy] 代理服务器启动失败:', err.message);
+      }
       reject(err);
     });
   });
