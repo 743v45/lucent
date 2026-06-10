@@ -21,6 +21,8 @@ import { getProxyStatus } from './utils/api';
 
 const PROVIDER_FILTER_STORAGE_KEY = 'lucent.providerFilter';
 const PROVIDER_FILTER_ALL = 'all';
+const ENDPOINT_FILTER_STORAGE_KEY = 'lucent.endpointFilter';
+const ENDPOINT_FILTER_ALL = 'all';
 
 function App(): JSX.Element {
   // 读取初始 URL 参数
@@ -59,18 +61,29 @@ function App(): JSX.Element {
 
   const { logs: allLogs, loading: logsLoading, loadingMore, hasMore, loadLogs, loadMore } = useLogs();
 
-  // 按供应商筛选（客户端）
+  // 按供应商+协议筛选（客户端）
   const [providerFilter, setProviderFilter] = useState<string>(() => {
     return localStorage.getItem(PROVIDER_FILTER_STORAGE_KEY) || PROVIDER_FILTER_ALL;
   });
+  const [endpointFilter, setEndpointFilter] = useState<string>(() => {
+    return localStorage.getItem(ENDPOINT_FILTER_STORAGE_KEY) || ENDPOINT_FILTER_ALL;
+  });
   const logs = useMemo(() => {
-    if (providerFilter === PROVIDER_FILTER_ALL) return allLogs;
-    return allLogs.filter((l) => l.providerName === providerFilter);
-  }, [allLogs, providerFilter]);
+    return allLogs.filter((l) => {
+      if (providerFilter !== PROVIDER_FILTER_ALL && l.providerName !== providerFilter) return false;
+      if (endpointFilter !== ENDPOINT_FILTER_ALL && l.endpointType !== endpointFilter) return false;
+      return true;
+    });
+  }, [allLogs, providerFilter, endpointFilter]);
 
   const handleProviderFilterChange = useCallback((name: string) => {
     setProviderFilter(name);
     localStorage.setItem(PROVIDER_FILTER_STORAGE_KEY, name);
+  }, []);
+
+  const handleEndpointFilterChange = useCallback((type: string) => {
+    setEndpointFilter(type);
+    localStorage.setItem(ENDPOINT_FILTER_STORAGE_KEY, type);
   }, []);
 
   // 从代理状态拉取 providers 列表（用于筛选下拉）
@@ -198,6 +211,8 @@ function App(): JSX.Element {
             providers={providers}
             providerFilter={providerFilter}
             onProviderFilterChange={handleProviderFilterChange}
+            endpointFilter={endpointFilter}
+            onEndpointFilterChange={handleEndpointFilterChange}
           />
           {/* 拖拽分割栏 */}
           <div

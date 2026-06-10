@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { Empty, Select, Spin, Typography } from 'antd';
-import type { LogEntry, AgentType, Provider } from '../../types';
-import { ENDPOINT_LABELS } from '../../types';
+import type { LogEntry, AgentType, Provider, EndpointType } from '../../types';
+import { ENDPOINT_LABELS, ENDPOINT_TYPES } from '../../types';
 import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, getStatusColor } from '../../constants';
 import { ClientIcon } from '../common/ClientIcon';
 import { ProviderIcon } from '../common/ProviderIcon';
@@ -22,6 +22,8 @@ interface LogListPanelProps {
   providers?: Provider[];
   providerFilter?: string;
   onProviderFilterChange?: (name: string) => void;
+  endpointFilter?: string;
+  onEndpointFilterChange?: (type: string) => void;
 }
 
 /** 截断模型名，保留关键信息 */
@@ -49,6 +51,8 @@ export function LogListPanel({
   providers,
   providerFilter,
   onProviderFilterChange,
+  endpointFilter,
+  onEndpointFilterChange,
 }: LogListPanelProps): JSX.Element {
   // MainAgent: 金色加灰 #C9A227, SubAgent: 橙色加灰 #B87A4A
   const getAgentTypeTag = (agentType: AgentType): { tag: JSX.Element; color: string } => {
@@ -164,8 +168,28 @@ export function LogListPanel({
                   value: p.name,
                   label: (
                     <span className="flex items-center gap-1.5">
-                      {p.name && <ProviderIcon providerName={p.name} size={14} />}
+                      <ProviderIcon providerName={p.name} size={14} />
                       {p.name}
+                    </span>
+                  ),
+                })),
+              ]}
+            />
+          )}
+          {onEndpointFilterChange && (
+            <Select
+              size="small"
+              className="min-w-[120px]"
+              value={endpointFilter ?? 'all'}
+              onChange={(v) => onEndpointFilterChange(v)}
+              options={[
+                { value: 'all', label: '全部协议' },
+                ...ENDPOINT_TYPES.map((et) => ({
+                  value: et,
+                  label: (
+                    <span className="flex items-center gap-1.5">
+                      <ProtocolIcon type={et} size={14} />
+                      {ENDPOINT_LABELS[et]}
                     </span>
                   ),
                 })),
