@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>AI Agent 中转代理</strong> — 透明拦截、记录、可视化 OpenAI / Claude API 通信
+  <strong>AI Agent 透明代理</strong> — 穿透转发、全量记录、可视化 OpenAI / Claude API 通信
 </p>
 
 <p align="center">
@@ -16,28 +16,30 @@
 
 ## 设计思路
 
-Lucent 是一个 **API 中转站**，位于 AI 客户端和上游 API 之间，零侵入地拦截所有通信：
+Lucent 是一个 **透明代理**，位于 AI 客户端和上游 API 之间，零侵入地穿透并记录所有通信：
 
 ```
 Claude Code / Cursor / 其他客户端
             │
             ▼
     ┌───────────────┐
-    │  Lucent   │  ← 中转代理 (端口 7048)
-    │  拦截 · 记录   │
+    │  Lucent   │  ← 透明代理 (端口 7048)
+    │  穿透 · 记录   │
     └───────┬───────┘
-            │ 转发到上游
+            │ 穿透到上游
             ▼
    Anthropic / OpenAI API
 ```
 
-**核心理念：** 客户端只需将 API Base URL 指向本地代理端口，即可获得完整的通信可视化能力，无需修改任何业务代码。
+**核心理念：** 客户端只需将 API Base URL 指向本地代理端口，请求直接穿透上游，同时获得完整的通信可视化能力，无需修改任何业务代码。
 
 ## 功能特性
 
-- 📡 **代理转发** — 透明拦截 OpenAI / Claude API 请求与响应
-- 📝 **完整记录** — Request、Response、KV-Cache-Text、Context 全量捕获
+- 📡 **透明代理** — 穿透转发 OpenAI / Claude API 请求与响应
+- 📝 **全量记录** — Request、Response、KV-Cache-Text、Context 完整捕获
 - 🏷️ **Agent 识别** — 自动区分主 Agent（MainAgent）和子 Agent（SubAgent）
+- 🔧 **预设供应商** — 内置官方/社区预设，一键配置 Anthropic、OpenAI、DeepSeek 等
+- 🎯 **多维筛选** — 按供应商、协议筛选通信记录
 - ⚡ **SSE 就绪** — SSE 推送端点已搭建，支持流式数据通道
 - 🌐 **Web UI** — 纯浏览器访问，无需安装桌面客户端
 - 🎨 **深色 UI** — Linear 风格暗色设计，长时间使用不疲劳
@@ -108,7 +110,7 @@ lucent start --open     # 启动后自动打开浏览器
 
 | 区域 | 功能 |
 |------|------|
-| 左侧日志列表 | 显示所有通信记录，包含 Agent 类型、耗时、状态码 |
+| 左侧日志列表 | 显示所有通信记录，支持按供应商/协议筛选，包含 Agent 类型、耗时、状态码 |
 | 右侧详情面板 | 展示 Request / Response / KV-Cache / Context / Meta 五个 Tab |
 | 顶部导航栏 | 应用标题 + 操作按钮（刷新、使用说明、配置） |
 
