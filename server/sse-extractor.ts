@@ -11,7 +11,7 @@
 import { EventSourceParserStream } from 'eventsource-parser/stream';
 import type { ExtractedInfo, RawLogEntry, SSERawLine } from './types.js';
 import createDebug from 'debug';
-const dbgSse = createDebug('agentproxy:interceptor:sse');
+const dbgSse = createDebug('lucent:interceptor:sse');
 
 // ==================== SSE 事件提取（内部函数） ====================
 

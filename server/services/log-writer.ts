@@ -11,7 +11,7 @@ import { LOG_ENTRY_SEPARATOR } from '../constants.js';
 import type { RawLogEntry } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
-const dbg = createDebug('agentproxy:log-writer');
+const dbg = createDebug('lucent:log-writer');
 
 // ==================== 状态 ====================
 
@@ -47,7 +47,7 @@ function generateLogFilePath(): string {
   const now = new Date();
   const date = now.toISOString().split('T')[0];
   const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
-  return join(resolvedConfig.logDir, `agentproxy_${date}_${time}.jsonl`);
+  return join(resolvedConfig.logDir, `lucent_${date}_${time}.jsonl`);
 }
 
 // ==================== 写入 ====================

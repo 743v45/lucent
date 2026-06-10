@@ -1,7 +1,7 @@
-# AgentProxy
+# Lucent
 
 <p align="center">
-  <img src="./docs/screenshot.png" alt="AgentProxy Screenshot" width="800">
+  <img src="./docs/screenshot.png" alt="Lucent Screenshot" width="800">
 </p>
 
 <p align="center">
@@ -16,14 +16,14 @@
 
 ## 设计思路
 
-AgentProxy 是一个 **API 中转站**，位于 AI 客户端和上游 API 之间，零侵入地拦截所有通信：
+Lucent 是一个 **API 中转站**，位于 AI 客户端和上游 API 之间，零侵入地拦截所有通信：
 
 ```
 Claude Code / Cursor / 其他客户端
             │
             ▼
     ┌───────────────┐
-    │  AgentProxy   │  ← 中转代理 (端口 7048)
+    │  Lucent   │  ← 中转代理 (端口 7048)
     │  拦截 · 记录   │
     └───────┬───────┘
             │ 转发到上游
@@ -57,12 +57,12 @@ npm start
 ## CLI 命令
 
 ```bash
-agentproxy start            # 启动服务器
-agentproxy stop             # 停止服务器
-agentproxy status           # 查看状态
-agentproxy logs             # 查看日志
-agentproxy start -p 8080    # 指定端口启动
-agentproxy start --no-open  # 不自动打开浏览器
+lucent start            # 启动服务器
+lucent stop             # 停止服务器
+lucent status           # 查看状态
+lucent logs             # 查看日志
+lucent start -p 8080    # 指定端口启动
+lucent start --no-open  # 不自动打开浏览器
 ```
 
 ## 界面说明
@@ -76,7 +76,7 @@ agentproxy start --no-open  # 不自动打开浏览器
 ## 项目结构
 
 ```
-agentproxy/
+lucent/
 ├── bin/              # CLI 入口
 ├── server/           # Express 服务器 + 代理 + SSE 推送
 ├── src/              # React 前端 (Vite + TypeScript + Ant Design)
@@ -108,7 +108,7 @@ npm run build   # 构建生产版本
 
 ## 配置
 
-配置文件：`~/.agentproxy/config.json`
+配置文件：`~/.lucent/config.json`
 
 ```json
 {

@@ -1,5 +1,5 @@
 /**
- * AgentProxy 服务端常量
+ * Lucent 服务端常量
  *
  * 集中管理所有硬编码值，避免分散在各个模块中
  */
@@ -19,13 +19,13 @@ export const DEFAULT_SERVER_HOST = '127.0.0.1';
 export const SERVER_HOST = DEFAULT_SERVER_HOST;
 
 // ==================== 应用数据目录 ====================
-export const APP_DATA_DIR_NAME = '.agentproxy';  // 用户主目录下的应用数据目录
+export const APP_DATA_DIR_NAME = '.lucent';  // 用户主目录下的应用数据目录
 export const LOG_SUBDIR = 'logs';
 export const CONFIG_FILE_NAME = 'config.json';
 
-export const LOG_DIR = join(homedir(), APP_DATA_DIR_NAME, LOG_SUBDIR);      // ~/~/.agentproxy/logs
-export const CONFIG_DIR = join(homedir(), APP_DATA_DIR_NAME);               // ~/.agentproxy
-export const CONFIG_PATH = join(CONFIG_DIR, CONFIG_FILE_NAME);              // ~/.agentproxy/config.json
+export const LOG_DIR = join(homedir(), APP_DATA_DIR_NAME, LOG_SUBDIR);      // ~/~/.lucent/logs
+export const CONFIG_DIR = join(homedir(), APP_DATA_DIR_NAME);               // ~/.lucent
+export const CONFIG_PATH = join(CONFIG_DIR, CONFIG_FILE_NAME);              // ~/.lucent/config.json
 
 // ==================== 请求体限制 ====================
 /** 代理转发的请求体最大体积（50MB）—— LLM API 请求通常在 KB~MB 级别，此限制防止 OOM */
@@ -80,9 +80,9 @@ export const ANTHROPIC_API_VERSION = '2023-06-01';
 
 // ==================== 自定义请求头 ====================
 /** 标记请求经过本代理的 trace header，用于请求追踪 */
-export const PROXY_TRACE_HEADER = 'x-agentproxy-trace';
+export const PROXY_TRACE_HEADER = 'x-lucent-trace';
 /** 内部组件间通信使用的请求头，不透传到上游 */
-export const INTERNAL_HEADERS = ['x-agentproxy-internal', 'x-cc-viewer-internal'] as const;
+export const INTERNAL_HEADERS = ['x-lucent-internal', 'x-cc-viewer-internal'] as const;
 
 // ==================== 内容截断限制 ====================
 /** 解析请求/响应体失败时，截取用于错误日志的最大长度 */

@@ -113,7 +113,7 @@ function App(): JSX.Element {
           {/* 左：标题 */}
           <div className="flex items-center gap-3">
             <h1 className="text-[19px] font-[510] tracking-[-0.24px] text-text-primary">
-              AgentProxy
+              Lucent
             </h1>
             <span className="text-[15px] text-text-quaternary">AI Agent 代理</span>
           </div>

@@ -1,5 +1,5 @@
 /**
- * AgentProxy 服务端统一类型定义
+ * Lucent 服务端统一类型定义
  *
  * 消除分散在 interceptor.ts、config.ts、context-extractors.ts 中的重复类型
  */

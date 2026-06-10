@@ -18,7 +18,7 @@ import * as LogReader from '../services/log-reader.js';
 import * as LogManager from '../log-manager.js';
 import type { LogsQuery } from '../types.js';
 import createDebug from 'debug';
-const dbg = createDebug('agentproxy:routes:logs');
+const dbg = createDebug('lucent:routes:logs');
 
 // SSE 客户端连接集合
 const sseClients = new Set<import('express').Response>();

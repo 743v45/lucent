@@ -17,7 +17,7 @@ import { extractCachedContent, getContextSizeForModel } from '../kvcache.js';
 import type { LogEntry, LogsQuery } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
-const dbg = createDebug('agentproxy:log-reader');
+const dbg = createDebug('lucent:log-reader');
 
 // ==================== 初始化 ====================
 

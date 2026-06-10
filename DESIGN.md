@@ -1,8 +1,8 @@
-# AgentProxy 设计文档
+# Lucent 设计文档
 
 ## 项目概述
 
-AgentProxy 是一个 AI Agent 代理服务器应用，用于拦截、记录和可视化 OpenAI/Claude API 通信内容。
+Lucent 是一个 AI Agent 代理服务器应用，用于拦截、记录和可视化 OpenAI/Claude API 通信内容。
 
 ### 核心功能
 - 代理 OpenAI/Claude API 请求
@@ -261,7 +261,7 @@ class RequestInterceptor {
 
 #### 存储结构
 ```
-~/.agentproxy/
+~/.lucent/
   ├── logs/
   │   ├── default/
   │   │   ├── 2024-01-01_123456.jsonl
@@ -567,7 +567,7 @@ class SessionManager {
     "mode": "inject"
   },
   "log": {
-    "dir": "~/.agentproxy/logs",
+    "dir": "~/.lucent/logs",
     "maxFileSize": 104857600,
     "retentionDays": 30
   },

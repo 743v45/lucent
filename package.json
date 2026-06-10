@@ -1,12 +1,12 @@
 {
-  "name": "agentproxy",
+  "name": "lucent",
   "version": "0.1.0",
   "description": "AI Agent Proxy Server - OpenAI/Claude API interceptor and visualizer",
   "license": "MIT",
   "type": "module",
   "author": "taevas",
   "bin": {
-    "agentproxy": "./bin/cli.js"
+    "lucent": "./bin/cli.js"
   },
   "scripts": {
     "dev": "vite",

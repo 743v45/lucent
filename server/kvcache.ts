@@ -10,7 +10,7 @@ import {
   TOOL_INPUT_PREVIEW_LENGTH,
 } from './constants.js';
 import createDebug from 'debug';
-const log = createDebug('agentproxy:kvcache');
+const log = createDebug('lucent:kvcache');
 
 interface CacheControlBlock {
   type: string;

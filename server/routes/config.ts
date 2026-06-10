@@ -22,7 +22,7 @@ import {
 } from '../constants.js';
 import type { ApiProviderType } from '../types.js';
 import createDebug from 'debug';
-const dbg = createDebug('agentproxy:routes:config');
+const dbg = createDebug('lucent:routes:config');
 
 /**
  * 返回指定 API 类型的序列化 group 数据

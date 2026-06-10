@@ -9,7 +9,7 @@ import {
 } from './constants.js';
 import { getContextSizeForModel } from './kvcache.js';
 import createDebug from 'debug';
-const log = createDebug('agentproxy:context:rebuild');
+const log = createDebug('lucent:context:rebuild');
 
 interface ContextMessage {
   role: string;

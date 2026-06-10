@@ -1,7 +1,7 @@
 /**
- * AgentProxy 配置管理模块
+ * Lucent 配置管理模块
  *
- * 配置文件: ~/.agentproxy/config.json
+ * 配置文件: ~/.lucent/config.json
  * 支持多 API 类型分组，每个 group 多 profile 切换，运行时可修改，内存缓存 + 磁盘持久化
  */
 
@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS } from './constants.js';
 import type { ApiProviderType } from './types.js';
 import createDebug from 'debug';
-const log = createDebug('agentproxy:config');
+const log = createDebug('lucent:config');
 
 // ==================== 类型定义 ====================
 
@@ -307,27 +307,27 @@ function parseEnvNumber(name: string, fallback: number): number {
 export function resolveEffectiveConfig(): ResolvedConfig {
   const raw = getConfig();
   return {
-    host:                process.env.AGENTPROXY_HOST              || raw.host,
-    proxyPort:           parseEnvNumber('AGENTPROXY_PROXY_PORT',  raw.proxyPort),
-    webPort:             parseEnvNumber('AGENTPROXY_WEB_PORT',    raw.webPort),
-    logDir:              process.env.AGENTPROXY_LOG_DIR           || raw.logDir             || LOG_DIR,
-    logRetentionDays:    parseEnvNumber('AGENTPROXY_LOG_RETENTION_DAYS', raw.logRetentionDays ?? LOG_RETENTION_DAYS),
-    maxLogFileSize:      parseEnvNumber('AGENTPROXY_MAX_LOG_FILE_SIZE',  raw.maxLogFileSize   ?? MAX_LOG_FILE_SIZE),
-    maxLogFiles:         parseEnvNumber('AGENTPROXY_MAX_LOG_FILES',      raw.maxLogFiles      ?? MAX_LOG_FILES),
+    host:                process.env.LUCENT_HOST              || raw.host,
+    proxyPort:           parseEnvNumber('LUCENT_PROXY_PORT',  raw.proxyPort),
+    webPort:             parseEnvNumber('LUCENT_WEB_PORT',    raw.webPort),
+    logDir:              process.env.LUCENT_LOG_DIR           || raw.logDir             || LOG_DIR,
+    logRetentionDays:    parseEnvNumber('LUCENT_LOG_RETENTION_DAYS', raw.logRetentionDays ?? LOG_RETENTION_DAYS),
+    maxLogFileSize:      parseEnvNumber('LUCENT_MAX_LOG_FILE_SIZE',  raw.maxLogFileSize   ?? MAX_LOG_FILE_SIZE),
+    maxLogFiles:         parseEnvNumber('LUCENT_MAX_LOG_FILES',      raw.maxLogFiles      ?? MAX_LOG_FILES),
     groups:              raw.groups,
   };
 }
 
 /**
- * 环境变量覆盖 host（CLI --host 选项通过 AGENTPROXY_HOST 传递）
+ * 环境变量覆盖 host（CLI --host 选项通过 LUCENT_HOST 传递）
  * @deprecated 使用 resolveEffectiveConfig() 代替
  */
 function applyHostOverride(config: ProxyConfig): void {
   if (!config.host) {
     config.host = DEFAULT_SERVER_HOST;
   }
-  if (process.env.AGENTPROXY_HOST) {
-    config.host = process.env.AGENTPROXY_HOST;
+  if (process.env.LUCENT_HOST) {
+    config.host = process.env.LUCENT_HOST;
   }
 }
 

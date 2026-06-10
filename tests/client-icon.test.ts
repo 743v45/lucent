@@ -46,7 +46,7 @@ describe('identifyClient - 客户端识别', () => {
 
     it('应该识别测试客户端', () => {
       expect(identifyClient({ 'user-agent': 'test-client/1.0' })).toBe('test-client');
-      expect(identifyClient({ 'user-agent': 'agentproxy-test/1.0' })).toBe('test-client');
+      expect(identifyClient({ 'user-agent': 'lucent-test/1.0' })).toBe('test-client');
       expect(identifyClient({ 'user-agent': 'Test-Client/1.0' })).toBe('test-client');
     });
   });
@@ -114,7 +114,7 @@ describe('identifyClient - 客户端识别', () => {
         { ua: 'WINDSURF/1.0', expected: 'windsurf' },
         { ua: 'WindSurf/1.0', expected: 'windsurf' },
         { ua: 'TEST-CLIENT/1.0', expected: 'test-client' },
-        { ua: 'AgentProxy-TEST/1.0', expected: 'test-client' },
+        { ua: 'Lucent-TEST/1.0', expected: 'test-client' },
       ];
 
       for (const { ua, expected } of clients) {
@@ -254,7 +254,7 @@ describe('客户端识别集成测试', () => {
       },
       {
         name: 'test-client 通过 user-agent',
-        headers: { 'user-agent': 'agentproxy-test', originator: '' },
+        headers: { 'user-agent': 'lucent-test', originator: '' },
         expected: 'test-client',
       },
       {

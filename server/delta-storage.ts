@@ -8,7 +8,7 @@
 import { DELTA_CHECKPOINT_INTERVAL } from './constants.js';
 import type { RawLogEntry } from './types.js';
 import createDebug from 'debug';
-const dbgDelta = createDebug('agentproxy:interceptor:delta');
+const dbgDelta = createDebug('lucent:interceptor:delta');
 
 // ==================== Delta 状态 ====================
 

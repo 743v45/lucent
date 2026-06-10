@@ -9,7 +9,7 @@ import { join } from 'node:path';
 import { LogEntry } from './types.js';
 import { resolveEffectiveConfig } from './config.js';
 import createDebug from 'debug';
-const log = createDebug('agentproxy:log-manager');
+const log = createDebug('lucent:log-manager');
 
 export interface LogExportOptions {
   format: 'jsonl' | 'markdown';
@@ -57,7 +57,7 @@ export function getCurrentLogFilePath(): string {
   const now = new Date();
   const date = now.toISOString().split('T')[0];
   const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
-  return join(getEffectiveLogDir(), `agentproxy_${date}_${time}.jsonl`);
+  return join(getEffectiveLogDir(), `lucent_${date}_${time}.jsonl`);
 }
 
 /**
@@ -390,7 +390,7 @@ function isValidLogEntry(entry: unknown): entry is LogEntry {
 function convertToMarkdown(logs: LogEntry[], includeMeta?: boolean): string {
   const lines: string[] = [];
 
-  lines.push('# AgentProxy 日志报告\n');
+  lines.push('# Lucent 日志报告\n');
   lines.push(`生成时间: ${new Date().toISOString()}\n`);
   lines.push(`总条目数: ${logs.length}\n\n`);
   lines.push('---\n\n');

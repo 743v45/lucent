@@ -1,4 +1,4 @@
-# AgentProxy 页面设计说明
+# Lucent 页面设计说明
 
 ## 页面访问
 
@@ -39,7 +39,7 @@
 
 ### 左侧：品牌信息
 ```
-📦 AgentProxy
+📦 Lucent
    AI Agent 代理服务器
 ```
 

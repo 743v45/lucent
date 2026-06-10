@@ -1,5 +1,5 @@
 /**
- * AgentProxy Fetch 拦截器模块
+ * Lucent Fetch 拦截器模块
  *
  * 功能：
  * - 拦截所有 API 请求
@@ -29,8 +29,8 @@ import {
 import { extractTokenUsage, identifyClient } from './agent-identifier.js';
 import type { ApiProviderType, RawLogEntry } from './types.js';
 import createDebug from 'debug';
-const dbg = createDebug('agentproxy:interceptor');
-const dbgSse = createDebug('agentproxy:interceptor:sse');
+const dbg = createDebug('lucent:interceptor');
+const dbgSse = createDebug('lucent:interceptor:sse');
 
 // ==================== 状态 ====================
 
@@ -385,7 +385,7 @@ export function setupInterceptor(): void {
     }
   };
 
-  console.log('[AgentProxy Interceptor] Fetch 拦截器已安装');
+  console.log('[Lucent Interceptor] Fetch 拦截器已安装');
 }
 
 // ==================== 导出 ====================

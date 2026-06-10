@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * AgentProxy CLI
+ * Lucent CLI
  */
 
 import { Command } from 'commander';
@@ -17,7 +17,7 @@ const __dirname = dirname(__filename);
 const program = new Command();
 
 program
-  .name('agentproxy')
+  .name('lucent')
   .description('AI Agent 代理服务器')
   .version(JSON.parse(readFileSync(join(__dirname, '../package.json'), 'utf-8')).version);
 
@@ -34,12 +34,12 @@ program
 
     // 构建环境变量，传递给子进程
     const envOverrides: Record<string, string> = {};
-    if (options.host)       envOverrides.AGENTPROXY_HOST        = options.host;
-    if (options.port)       envOverrides.AGENTPROXY_WEB_PORT    = String(options.port);
-    if (options.proxyPort)  envOverrides.AGENTPROXY_PROXY_PORT  = String(options.proxyPort);
-    if (options.logDir)     envOverrides.AGENTPROXY_LOG_DIR     = options.logDir;
+    if (options.host)       envOverrides.LUCENT_HOST        = options.host;
+    if (options.port)       envOverrides.LUCENT_WEB_PORT    = String(options.port);
+    if (options.proxyPort)  envOverrides.LUCENT_PROXY_PORT  = String(options.proxyPort);
+    if (options.logDir)     envOverrides.LUCENT_LOG_DIR     = options.logDir;
 
-    console.log('[AgentProxy] 正在启动...');
+    console.log('[Lucent] 正在启动...');
 
     const child = spawn('node', [serverPath], {
       stdio: 'inherit',
@@ -47,7 +47,7 @@ program
     });
 
     child.on('error', (err) => {
-      console.error('[AgentProxy] 启动失败:', err.message);
+      console.error('[Lucent] 启动失败:', err.message);
       process.exit(1);
     });
 
@@ -57,7 +57,7 @@ program
     setTimeout(() => {
       if (options.open !== false) {
         open(`http://${openHost}:${openPort}`).catch((err: { message: string }) => {
-          console.warn('[AgentProxy] 无法自动打开浏览器:', err.message);
+          console.warn('[Lucent] 无法自动打开浏览器:', err.message);
         });
       }
     }, 1000);
@@ -73,8 +73,8 @@ program
   .command('stop')
   .description('停止代理服务器')
   .action(() => {
-    console.log('[AgentProxy] stop 功能待实现');
-    console.log('[AgentProxy] 提示: 使用 Ctrl+C 停止运行中的服务器');
+    console.log('[Lucent] stop 功能待实现');
+    console.log('[Lucent] 提示: 使用 Ctrl+C 停止运行中的服务器');
   });
 
 program
@@ -82,16 +82,16 @@ program
   .description('查看代理状态')
   .action(async () => {
     // 从配置文件或环境变量获取端口
-    const host = process.env.AGENTPROXY_HOST || DEFAULT_SERVER_HOST;
-    const port = process.env.AGENTPROXY_WEB_PORT
-      ? parseInt(process.env.AGENTPROXY_WEB_PORT, 10)
+    const host = process.env.LUCENT_HOST || DEFAULT_SERVER_HOST;
+    const port = process.env.LUCENT_WEB_PORT
+      ? parseInt(process.env.LUCENT_WEB_PORT, 10)
       : await readPortFromConfig() || DEFAULT_WEB_PORT;
 
     try {
       const response = await fetch(`http://${host}:${port}/api/status`);
       const status = await response.json();
 
-      console.log('[AgentProxy] 状态:');
+      console.log('[Lucent] 状态:');
       console.log(`  - 运行中: ${status.running ? '是' : '否'}`);
       console.log(`  - 代理启用: ${status.enabled ? '是' : '否'}`);
       console.log(`  - Web UI: http://${host}:${status.webPort}`);
@@ -100,7 +100,7 @@ program
         console.log(`  - 日志文件: ${status.logFile}`);
       }
     } catch {
-      console.log('[AgentProxy] 服务器未运行');
+      console.log('[Lucent] 服务器未运行');
     }
   });
 
@@ -109,16 +109,16 @@ program
   .description('查看日志')
   .option('-n, --number <num>', '显示条数', '10')
   .action(async (options) => {
-    const host = process.env.AGENTPROXY_HOST || DEFAULT_SERVER_HOST;
-    const port = process.env.AGENTPROXY_WEB_PORT
-      ? parseInt(process.env.AGENTPROXY_WEB_PORT, 10)
+    const host = process.env.LUCENT_HOST || DEFAULT_SERVER_HOST;
+    const port = process.env.LUCENT_WEB_PORT
+      ? parseInt(process.env.LUCENT_WEB_PORT, 10)
       : await readPortFromConfig() || DEFAULT_WEB_PORT;
 
     try {
       const response = await fetch(`http://${host}:${port}/api/logs?limit=${options.number}`);
       const data = await response.json();
 
-      console.log(`[AgentProxy] 最近 ${data.logs.length} 条记录:\n`);
+      console.log(`[Lucent] 最近 ${data.logs.length} 条记录:\n`);
 
       for (const log of data.logs) {
         const time = new Date(log.timestamp).toLocaleTimeString('zh-CN');
@@ -129,7 +129,7 @@ program
         console.log(`  ${time} ${type} ${model} (${duration})`);
       }
     } catch {
-      console.log('[AgentProxy] 无法获取日志，服务器可能未运行');
+      console.log('[Lucent] 无法获取日志，服务器可能未运行');
     }
   });
 
@@ -141,7 +141,7 @@ async function readPortFromConfig(): Promise<number | null> {
     const { homedir } = await import('node:os');
     const { readFileSync: rf } = await import('node:fs');
     const { join: j } = await import('node:path');
-    const configPath = j(homedir(), '.agentproxy', 'config.json');
+    const configPath = j(homedir(), '.lucent', 'config.json');
     const raw = rf(configPath, 'utf-8');
     const config = JSON.parse(raw);
     return config.webPort || null;

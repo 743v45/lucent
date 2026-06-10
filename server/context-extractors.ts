@@ -7,7 +7,7 @@
 import { API_PATH_REGEX } from './constants.js';
 import type { ApiProviderType } from './types.js';
 import createDebug from 'debug';
-const log = createDebug('agentproxy:context');
+const log = createDebug('lucent:context');
 
 // ==================== 类型定义 ====================
 

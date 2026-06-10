@@ -1,5 +1,5 @@
 /**
- * AgentProxy 共享工具函数
+ * Lucent 共享工具函数
  *
  * 集中管理 API Key 脱敏、Header 清理等跨模块复用的工具
  */

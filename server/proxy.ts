@@ -1,5 +1,5 @@
 /**
- * AgentProxy HTTP 代理转发模块
+ * Lucent HTTP 代理转发模块
  *
  * 功能：
  * - 接收客户端请求
@@ -14,7 +14,7 @@ import { join } from 'node:path';
 import { getConfig } from './config.js';
 import { DEFAULT_PROXY_PORT, DEFAULT_SERVER_HOST, PROXY_TRACE_HEADER, DEFAULT_UPSTREAM_URLS, CLAUDE_SETTINGS_DIR, MAX_REQUEST_BODY_SIZE } from './constants.js';
 import createDebug from 'debug';
-const log = createDebug('agentproxy:proxy');
+const log = createDebug('lucent:proxy');
 
 // ==================== 配置 ====================
 // 默认值从 constants 取，运行时由 startProxyServer 参数覆盖
@@ -57,7 +57,7 @@ function stripContentLengthHeader(headers: Record<string, string>): Record<strin
  * 从 Claude 配置文件获取原始 Base URL（fallback 用）
  */
 function getOriginalBaseUrl(): string {
-  // 优先使用 AgentProxy 配置（取第一个 group 的 active profile）
+  // 优先使用 Lucent 配置（取第一个 group 的 active profile）
   const config = getConfig();
   const firstGroup = config.groups[0];
   if (firstGroup) {
@@ -168,7 +168,7 @@ export async function startProxyServer(options?: { port?: number; host?: string 
           headers: headers,
         };
 
-        // 标记此请求为 AgentProxy 代理转发的请求
+        // 标记此请求为 Lucent 代理转发的请求
         // 拦截器识别到此 Header 会强制记录
         fetchOptions.headers = {
           ...fetchOptions.headers,
@@ -246,7 +246,7 @@ export async function startProxyServer(options?: { port?: number; host?: string 
 
     // 启动服务器
     server.listen(port, host, () => {
-      console.log(`[AgentProxy] 代理服务器: http://${host}:${port}`);
+      console.log(`[Lucent] 代理服务器: http://${host}:${port}`);
       resolve({
         port,
         stop: async () => {
@@ -265,10 +265,10 @@ export async function startProxyServer(options?: { port?: number; host?: string 
 
     server.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'EADDRINUSE') {
-        console.error(`[AgentProxy] ⚠️ 代理端口 ${port} 已被占用，请检查是否有其他 AgentProxy 实例正在运行`);
-        console.error(`[AgentProxy]   提示: lsof -i :${port} 或 kill $(lsof -ti :${port})`);
+        console.error(`[Lucent] ⚠️ 代理端口 ${port} 已被占用，请检查是否有其他 Lucent 实例正在运行`);
+        console.error(`[Lucent]   提示: lsof -i :${port} 或 kill $(lsof -ti :${port})`);
       } else {
-        console.error('[AgentProxy] 代理服务器启动失败:', err.message);
+        console.error('[Lucent] 代理服务器启动失败:', err.message);
       }
       reject(err);
     });

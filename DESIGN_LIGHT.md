@@ -1,4 +1,4 @@
-# AgentProxy 轻量级设计
+# Lucent 轻量级设计
 
 ## 方案对比
 
@@ -36,25 +36,25 @@
 
 ```bash
 # 启动代理 + Web UI
-agentproxy start
+lucent start
 
 # 访问界面
 open http://localhost:7049
 
 # 停止代理
-agentproxy stop
+lucent stop
 
 # 查看状态
-agentproxy status
+lucent status
 
 # 查看日志
-agentproxy logs
+lucent logs
 ```
 
 ### 目录结构（精简版）
 
 ```
-agentproxy/
+lucent/
 ├── bin/              # CLI 命令
 │   └── cli.js        # 命令行入口
 ├── server/           # 代理服务器
@@ -63,7 +63,7 @@ agentproxy/
 │   └── routes.js     # API 路由
 ├── src/              # React UI（构建后到 dist/）
 ├── dist/             # 构建输出
-├── logs/             # 日志文件（~/.agentproxy/logs）
+├── logs/             # 日志文件（~/.lucent/logs）
 └── package.json
 ```
 

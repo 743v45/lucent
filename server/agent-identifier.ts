@@ -6,7 +6,7 @@
 
 import { AgentType, SubAgentType, ClientType } from './types.js';
 import createDebug from 'debug';
-const log = createDebug('agentproxy:agent-id');
+const log = createDebug('lucent:agent-id');
 
 export interface AgentIdentification {
   agentType: AgentType;
@@ -284,7 +284,7 @@ export function identifyProvider(url: string): 'openai' | 'claude' | 'unknown' {
  * - Codex CLI: 包含 "codex"
  * - Cursor: 包含 "cursor"
  * - Windsurf: 包含 "windsurf"
- * - 测试客户端: 包含 "test-client" 或 "agentproxy-test"
+ * - 测试客户端: 包含 "test-client" 或 "lucent-test"
  */
 export function identifyClient(headers: Record<string, string>): ClientType {
   const ua = (headers['user-agent'] || '').toLowerCase();
@@ -316,7 +316,7 @@ export function identifyClient(headers: Record<string, string>): ClientType {
   }
 
   // Test Client
-  if (ua.includes('test-client') || ua.includes('agentproxy-test')) {
+  if (ua.includes('test-client') || ua.includes('lucent-test')) {
     return 'test-client';
   }
 
