@@ -14,38 +14,55 @@
  */
 
 import { resolveEffectiveConfig } from './config.js';
-import { detectApiType } from './context-extractors.js';
 import { sanitizeHeaders } from './utils.js';
 import { extractInBackground } from './sse-extractor.js';
 import { processDelta, commitDeltaState } from './delta-storage.js';
 import * as LogWriter from './services/log-writer.js';
 import {
-  API_PATH_REGEX,
   INTERNAL_HEADERS,
   PROXY_TRACE_HEADER,
   MAX_BODY_PARSE_FAILURE_LENGTH,
   MAX_RESPONSE_BODY_LENGTH,
 } from './constants.js';
 import { extractTokenUsage, identifyClient } from './agent-identifier.js';
-import type { ApiProviderType, RawLogEntry } from './types.js';
+import type { EndpointType, RawLogEntry } from './types.js';
 import createDebug from 'debug';
 const dbg = createDebug('lucent:interceptor');
 const dbgSse = createDebug('lucent:interceptor:sse');
 
+// ==================== 路径解析 ====================
+
+/** 匹配 /api/{name}/{rest} */
+const CUSTOM_PATH_REGEX = /^\/api\/([a-zA-Z0-9_-]+)(\/.*)$/;
+
+/** 从 rest 推断 endpointType */
+function inferEndpointTypeFromRest(rest: string): EndpointType | null {
+  if (rest === '/v1/messages') return 'anthropic-messages';
+  if (rest === '/v1/chat/completions' || rest === '/v1/completions') return 'openai-chat';
+  if (rest === '/v1/responses') return 'openai-responses';
+  return null;
+}
+
+/** 从完整 URL 解析 providerName + endpointType */
+function parseCustomPath(url: string): { providerName: string; endpointType: EndpointType } | null {
+  try {
+    const u = new URL(url);
+    const match = CUSTOM_PATH_REGEX.exec(u.pathname);
+    if (!match) return null;
+    const [, providerName, rest] = match;
+    const endpointType = inferEndpointTypeFromRest(rest);
+    if (!endpointType) return null;
+    return { providerName, endpointType };
+  } catch {
+    return null;
+  }
+}
+
 // ==================== 状态 ====================
 
 let interceptorInstalled = false;
-
-/**
- * 后台 SSE 提取任务集合
- * 用于优雅退出时等待所有任务完成
- */
 const pendingSSETasks = new Set<Promise<void>>();
 
-/**
- * 等待所有后台 SSE 任务完成
- * 优雅退出时调用，确保数据不丢失
- */
 export async function drainPendingSSETasks(): Promise<void> {
   if (pendingSSETasks.size === 0) return;
   dbg('等待后台 SSE 任务完成: count=%d', pendingSSETasks.size);
@@ -55,9 +72,6 @@ export async function drainPendingSSETasks(): Promise<void> {
 
 // ==================== 工具函数 ====================
 
-/**
- * 判断是否为主 Agent 请求
- */
 function isMainAgentRequest(body: any): boolean {
   if (!body || typeof body !== 'object') return false;
   const messages = body.messages;
@@ -66,16 +80,9 @@ function isMainAgentRequest(body: any): boolean {
   return messages.some((m: any) => m.role === 'assistant');
 }
 
-/**
- * 解析 Agent 类型
- */
 function parseAgentType(body: any, isMain: boolean): { agentType: 'main' | 'sub'; subAgentType?: 'plan' | 'search' | 'bash' | 'workflow' | 'unknown' } {
   if (isMain) return { agentType: 'main' };
-
-  // body 可能为 null（比如压缩请求体）
-  if (!body || !body.messages) {
-    return { agentType: 'sub', subAgentType: 'unknown' };
-  }
+  if (!body || !body.messages) return { agentType: 'sub', subAgentType: 'unknown' };
 
   const messages = body.messages || [];
   const firstMessage = messages[0] as any;
@@ -103,18 +110,33 @@ function parseAgentType(body: any, isMain: boolean): { agentType: 'main' | 'sub'
   return { agentType: 'sub', subAgentType: 'unknown' };
 }
 
-/**
- * 检查是否为 Anthropic API 路径
- */
-function isAnthropicApiPath(url: string): boolean {
-  return API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url);
+function parseRequestBody(bodyRaw: string | undefined): unknown {
+  if (!bodyRaw) return null;
+  try {
+    return JSON.parse(bodyRaw);
+  } catch {
+    const truncated = String(bodyRaw).slice(0, MAX_BODY_PARSE_FAILURE_LENGTH);
+    dbg('body 解析失败, 存储为截断字符串 len=%d', truncated.length);
+    return truncated;
+  }
 }
 
-/**
- * 检查是否为 OpenAI API 路径
- */
-function isOpenAIApiPath(url: string): boolean {
-  return API_PATH_REGEX.OPENAI_CHAT.test(url);
+function normalizeHeaders(rawHeaders: HeadersInit | undefined): Record<string, string> {
+  if (!rawHeaders) return {};
+  if (rawHeaders instanceof Headers) return Object.fromEntries(rawHeaders as any);
+  return { ...rawHeaders } as Record<string, string>;
+}
+
+function isTestRequest(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false;
+  const messages = (body as any).messages;
+  if (!Array.isArray(messages)) return false;
+  const firstUserMsg = messages.find((m: any) => m.role === 'user');
+  if (!firstUserMsg) return false;
+  const content = firstUserMsg.content;
+  if (typeof content !== 'string') return false;
+  const trimmed = content.trim().toLowerCase();
+  return /^hi[!?.?\s]*$/.test(trimmed);
 }
 
 // ==================== 响应处理 ====================
@@ -124,9 +146,6 @@ interface DeltaState {
   originalTailFp: string;
 }
 
-/**
- * 构建响应基础信息（status, statusText, headers）
- */
 function buildResponseBase(response: Response): {
   status: number;
   statusText: string;
@@ -139,9 +158,6 @@ function buildResponseBase(response: Response): {
   };
 }
 
-/**
- * 处理流式响应：tee body，后台提取 SSE，返回客户端响应
- */
 function handleStreamingResponse(
   response: Response,
   entry: RawLogEntry,
@@ -153,8 +169,6 @@ function handleStreamingResponse(
   };
 
   const [clientBody, logBody] = response.body!.tee();
-
-  // 创建后台任务并跟踪
   const task = extractInBackground(logBody, entry,
     (e) => LogWriter.writeLogEntry(e),
     () => commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp),
@@ -171,9 +185,6 @@ function handleStreamingResponse(
   });
 }
 
-/**
- * 处理流式响应失败：记录错误，提交 delta
- */
 function handleStreamingFailure(
   response: Response,
   entry: RawLogEntry,
@@ -187,9 +198,6 @@ function handleStreamingFailure(
   commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);
 }
 
-/**
- * 处理非流式响应：克隆、解析、记录日志
- */
 async function handleNormalResponse(
   response: Response,
   entry: RawLogEntry,
@@ -210,96 +218,20 @@ async function handleNormalResponse(
     body,
   };
 
-  // 从响应体提取 token 使用情况
   entry.tokenUsage = extractTokenUsage(body);
-
   LogWriter.writeLogEntry(entry);
   commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);
 }
 
 // ==================== 请求处理 ====================
 
-/**
- * 判断是否需要拦截此请求，同时返回检测到的 API 类型
- * 返回 null 表示不拦截，返回 ApiProviderType 表示需要拦截
- */
-function checkIntercept(urlStr: string, headers: Record<string, unknown>): ApiProviderType | null {
-  const isInternal = headers[INTERNAL_HEADERS[0]] || headers[INTERNAL_HEADERS[1]];
-  const isProxyTrace = headers[PROXY_TRACE_HEADER] === 'true' || headers[PROXY_TRACE_HEADER] === true;
-
-  if (isInternal) return null;
-
-  // 先检测 API 类型（只调用一次）
-  const detectedApiType = detectApiType(urlStr);
-
-  if (isProxyTrace ||
-      urlStr.includes('anthropic') ||
-      urlStr.includes('claude') ||
-      urlStr.includes('openai') ||
-      isAnthropicApiPath(urlStr) ||
-      isOpenAIApiPath(urlStr) ||
-      detectedApiType !== null) {
-    return detectedApiType; // 返回检测结果（可能为 null 但仍需拦截）
-  }
-
-  return null;
-}
-
-/**
- * 解析请求 body
- */
-function parseRequestBody(bodyRaw: string | undefined): unknown {
-  if (!bodyRaw) return null;
-  try {
-    return JSON.parse(bodyRaw);
-  } catch {
-    const truncated = String(bodyRaw).slice(0, MAX_BODY_PARSE_FAILURE_LENGTH);
-    dbg('body 解析失败, 存储为截断字符串 len=%d', truncated.length);
-    return truncated;
-  }
-}
-
-/**
- * 转换 headers 为普通对象
- */
-function normalizeHeaders(rawHeaders: HeadersInit | undefined): Record<string, string> {
-  if (!rawHeaders) return {};
-  if (rawHeaders instanceof Headers) {
-    return Object.fromEntries(rawHeaders as any);
-  }
-  return { ...rawHeaders } as Record<string, string>;
-}
-
-/**
- * 判断是否为测试请求（content 为 "hi" 变体）
- */
-function isTestRequest(body: unknown): boolean {
-  if (!body || typeof body !== 'object') return false;
-  const messages = (body as any).messages;
-  if (!Array.isArray(messages)) return false;
-
-  // 找第一条 user message
-  const firstUserMsg = messages.find((m: any) => m.role === 'user');
-  if (!firstUserMsg) return false;
-
-  const content = firstUserMsg.content;
-  if (typeof content !== 'string') return false;
-
-  // 判断是否为 "hi" 变体（忽略大小写，允许标点）
-  const trimmed = content.trim().toLowerCase();
-  // 匹配 "hi", "hi!", "hi?", "hi." 等变体
-  return /^hi[!?.?\s]*$/.test(trimmed);
-}
-
-/**
- * 构建请求日志条目
- */
 function buildRequestEntry(
   urlStr: string,
   options: RequestInit | undefined,
   body: unknown,
   startTime: number,
-  detectedApiType: ApiProviderType | null,
+  providerName: string | null,
+  endpointType: EndpointType | null,
 ): RawLogEntry {
   const headers = normalizeHeaders(options?.headers);
   const safeHeaders = sanitizeHeaders(headers);
@@ -307,14 +239,15 @@ function buildRequestEntry(
   const { agentType, subAgentType } = parseAgentType(body, isMain);
   const model = (body as any)?.model || 'unknown';
   const clientType = identifyClient(headers);
-  // 基于请求内容判断是否为测试
   const isTest = isTestRequest(body);
 
   const requestId = `${startTime}_${Math.random().toString(36).substring(2, 11)}`;
 
-  dbg('拦截 %s %s apiType=%s agentType=%s subAgentType=%s clientType=%s model=%s stream=%s isTest=%s',
-    options?.method || 'GET', urlStr, detectedApiType ?? '-', agentType, subAgentType ?? '-',
-    clientType, model, (body as any)?.stream === true, isTest);
+  dbg('拦截 %s %s provider=%s endpoint=%s agentType=%s subAgentType=%s clientType=%s model=%s stream=%s isTest=%s',
+    options?.method || 'GET', urlStr,
+    providerName ?? '-', endpointType ?? '-',
+    agentType, subAgentType ?? '-', clientType, model,
+    (body as any)?.stream === true, isTest);
 
   return {
     id: requestId,
@@ -330,15 +263,14 @@ function buildRequestEntry(
     mainAgent: isMain,
     agentType,
     subAgentType,
-    apiType: detectedApiType || undefined,
+    apiType: endpointType || undefined,
     clientType,
     isTest,
+    providerName: providerName || undefined,
+    endpointType: endpointType || undefined,
   };
 }
 
-/**
- * 处理 Delta 存储（仅对主 Agent）
- */
 function processDeltaForMainAgent(entry: RawLogEntry, body: unknown): DeltaState {
   const defaultState: DeltaState = { originalMessagesLength: 0, originalTailFp: '' };
   if (!entry.mainAgent || !Array.isArray((body as any)?.messages)) {
@@ -364,9 +296,22 @@ export function setupInterceptor(): void {
     const urlStr = typeof url === 'string' ? url : (url instanceof URL ? url.href : String(url));
     const headers = normalizeHeaders(options?.headers);
 
-    // 检查是否需要拦截，同时获取 API 类型（避免重复检测）
-    const detectedApiType = checkIntercept(urlStr, headers);
-    if (detectedApiType === null) {
+    // 内部请求不拦截
+    const isInternal = headers[INTERNAL_HEADERS[0]] || headers[INTERNAL_HEADERS[1]];
+    if (isInternal) {
+      return originalFetch.call(this, url, options);
+    }
+
+    // 检查是否为代理转发请求（由 proxy.ts 发起）
+    const isProxyTrace = headers[PROXY_TRACE_HEADER] === 'true';
+
+    // 解析 /api/{name}/{rest} 获取 providerName + endpointType
+    const pathInfo = parseCustomPath(urlStr);
+    const providerName = pathInfo?.providerName || null;
+    const endpointType = pathInfo?.endpointType || null;
+
+    // 只拦截代理转发请求或显式包含 anthropic/openai 的 URL
+    if (!isProxyTrace && !urlStr.includes('anthropic') && !urlStr.includes('claude') && !urlStr.includes('openai')) {
       return originalFetch.call(this, url, options);
     }
 
@@ -377,7 +322,7 @@ export function setupInterceptor(): void {
 
     // 构建请求日志
     const body = parseRequestBody(options?.body as string | undefined);
-    const entry = buildRequestEntry(urlStr, options, body, startTime, detectedApiType);
+    const entry = buildRequestEntry(urlStr, options, body, startTime, providerName, endpointType);
     const deltaState = processDeltaForMainAgent(entry, body);
 
     // 主 Agent 检查日志轮转
@@ -400,7 +345,6 @@ export function setupInterceptor(): void {
         try {
           await handleNormalResponse(response, entry, deltaState);
         } catch {
-          // 非流式失败也要记录
           LogWriter.writeLogEntry(entry);
           commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);
         }
@@ -408,12 +352,10 @@ export function setupInterceptor(): void {
       }
     } catch (err) {
       entry.duration = Date.now() - startTime;
-
-      // EPIPE 是客户端断开，正常情况，静默处理
       const errno = (err as NodeJS.ErrnoException)?.code;
       if (errno === 'EPIPE') {
-        // 不记录日志，不抛出错误
-        return;
+        // 客户端断开，静默处理，返回空 Response（fetch 约定必须返回 Response）
+        return new Response(null, { status: 499, statusText: 'Client Closed Request' });
       }
 
       entry.error = err instanceof Error ? err.message : String(err);

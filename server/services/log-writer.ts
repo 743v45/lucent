@@ -54,6 +54,9 @@ function generateLogFilePath(): string {
 
 /**
  * 写入日志条目
+ *
+ * entry 可以携带任意 RawLogEntry 字段，包括 providerName（请求经过的供应商名）
+ * 和 endpointType（使用的端点协议），由调用方（proxy.ts）传入。
  */
 export function writeLogEntry(entry: RawLogEntry): void {
   if (!currentLogFile) {

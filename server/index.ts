@@ -11,7 +11,6 @@ import { createServer as createHttpServer } from 'node:http';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { dirname } from 'node:path';
-import open from 'open';
 import * as Config from './config.js';
 import * as LogWriter from './services/log-writer.js';
 import * as LogReader from './services/log-reader.js';
@@ -90,18 +89,25 @@ export async function startServer(): Promise<void> {
   const webPort = resolvedConfig.webPort;
   return new Promise<void>((resolve, reject) => {
     server.listen(webPort, host, () => {
-      console.log(`[Lucent] Web UI: http://${host}:${webPort}`);
-      console.log(`[Lucent] 代理端口: ${proxyPort}`);
-      console.log(`[Lucent] 日志目录: ${resolvedConfig.logDir}`);
-      console.log('[Lucent] ============================');
-      console.log('[Lucent] 接入方式 (设置环境变量):');
-      console.log(`[Lucent]   Anthropic:  export ANTHROPIC_BASE_URL=http://${host}:${proxyPort}`);
-      console.log(`[Lucent]   OpenAI:     export OPENAI_BASE_URL=http://${host}:${proxyPort}`);
-      console.log('[Lucent] ============================');
+      // 聚合启动信息
+      const lines: string[] = [
+        `Web UI:  http://${host}:${webPort}`,
+        `Proxy:   http://${host}:${proxyPort}`,
+        `Logs:    ${resolvedConfig.logDir}`,
+      ];
 
-      open(`http://${host}:${webPort}`).catch(err => {
-        dbg('无法自动打开浏览器: %s', err.message);
-      });
+      // 供应商接入指令
+      for (const p of resolvedConfig.providers) {
+        const cmds: string[] = [];
+        if (p.endpoints['anthropic-messages'])
+          cmds.push(`ANTHROPIC_BASE_URL=http://${host}:${proxyPort}/api/${p.name}`);
+        if (p.endpoints['openai-chat'] || p.endpoints['openai-responses'])
+          cmds.push(`OPENAI_BASE_URL=http://${host}:${proxyPort}/api/${p.name}/v1`);
+        if (cmds.length > 0)
+          lines.push(``, `${p.name}:`, ...cmds.map(c => `  export ${c}`));
+      }
+
+      console.log(`\n[Lucent]${lines.map(l => l ? ` ${l}` : '').join('\n')}\n`);
 
       resolve();
     });

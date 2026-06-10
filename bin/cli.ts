@@ -28,7 +28,7 @@ program
   .option('--proxy-port <number>', '代理服务器端口')
   .option('--host <host>', '服务器监听地址')
   .option('--log-dir <path>', '日志存储目录')
-  .option('--no-open', '不自动打开浏览器')
+  .option('--open', '启动后自动打开浏览器')
   .action((options) => {
     const serverPath = join(__dirname, '../server/index.js');
 
@@ -54,13 +54,13 @@ program
     // 等待服务器启动
     const openHost = options.host || DEFAULT_SERVER_HOST;
     const openPort = options.port || DEFAULT_WEB_PORT;
-    setTimeout(() => {
-      if (options.open !== false) {
+    if (options.open === true) {
+      setTimeout(() => {
         open(`http://${openHost}:${openPort}`).catch((err: { message: string }) => {
           console.warn('[Lucent] 无法自动打开浏览器:', err.message);
         });
-      }
-    }, 1000);
+      }, 1000);
+    }
 
     // 优雅退出
     process.on('SIGINT', () => {

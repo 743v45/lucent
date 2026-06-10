@@ -9,7 +9,6 @@
 
 import { Router } from 'express';
 import * as Config from '../config.js';
-import { serializeGroupSafe } from '../utils.js';
 
 export function createStatusRouter(options: {
   proxyEnabled: { value: boolean };
@@ -28,7 +27,7 @@ export function createStatusRouter(options: {
       webPort: config.webPort,
       proxyPort: config.proxyPort,
       logFile: options.getLogFile(),
-      groups: config.groups.map(serializeGroupSafe),
+      providers: config.providers,
     });
   });
 

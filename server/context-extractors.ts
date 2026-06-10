@@ -4,14 +4,11 @@
  * Provides extraction functions for different API formats to extract unified context data.
  */
 
-import { API_PATH_REGEX } from './constants.js';
-import type { ApiProviderType } from './types.js';
+import type { EndpointType } from './types.js';
 import createDebug from 'debug';
 const log = createDebug('lucent:context');
 
 // ==================== 类型定义 ====================
-
-// ApiProviderType 已移至 types.ts
 
 export interface ContentBlock {
   type: string;
@@ -38,35 +35,40 @@ export interface ExtractedContext {
 // ==================== API 类型检测 ====================
 
 /**
- * 根据 URL 检测 API 类型
- * 顺序很重要：responses 要在 messages 之前检查（如果 URL 同时包含）
+ * 从 URL 路径检测 endpointType
+ * - /v1/messages → anthropic-messages
+ * - /v1/chat/completions 或 /v1/completions → openai-chat
+ * - /v1/responses → openai-responses
  */
-export function detectApiType(url: string): ApiProviderType | null {
-  if (!url || typeof url !== 'string') {
+export function detectEndpointType(url: string): EndpointType | null {
+  if (!url || typeof url !== 'string') return null;
+
+  // /custom/{name}/{rest} 格式 → 从 rest 解析
+  const customMatch = /^\/custom\/[a-zA-Z0-9_-]+(\/.*)$/.exec(new URL(url, 'http://x').pathname);
+  if (customMatch) {
+    const rest = customMatch[1];
+    if (rest === '/v1/messages') return 'anthropic-messages';
+    if (rest === '/v1/chat/completions' || rest === '/v1/completions') return 'openai-chat';
+    if (rest === '/v1/responses') return 'openai-responses';
     return null;
   }
 
-  // OpenAI Responses API 要在 Anthropic Messages 之前检查
-  if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) { log('检测 API 类型: openai-responses, url=%s', url); return 'openai-responses'; }
-  if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) { log('检测 API 类型: anthropic-messages, url=%s', url); return 'anthropic-messages'; }
-  if (API_PATH_REGEX.OPENAI_CHAT.test(url)) { log('检测 API 类型: openai-chat, url=%s', url); return 'openai-chat'; }
+  // 老路径 → 直接检测（兼容历史日志）
+  if (url.includes('/v1/messages')) return 'anthropic-messages';
+  if (url.includes('/v1/chat/completions') || url.includes('/v1/completions')) return 'openai-chat';
+  if (url.includes('/v1/responses')) return 'openai-responses';
 
   return null;
 }
 
+// 兼容旧调用（detectApiType 已废弃，用 detectEndpointType）
+export const detectApiType = detectEndpointType;
+
 // ==================== Anthropic Messages API ====================
 
-/**
- * 从 Anthropic Messages API 请求体中提取 context
- * URL: /v1/messages
- * Body: { system?: string | ContentBlock[], messages: Message[], tools?: Tool[] }
- */
 export function extractAnthropicMessages(body: any): ExtractedContext | null {
-  if (!body || typeof body !== 'object') {
-    return null;
-  }
+  if (!body || typeof body !== 'object') return null;
 
-  // 提取 system prompt
   let systemPrompt: string | undefined;
   if (typeof body.system === 'string') {
     systemPrompt = body.system;
@@ -77,7 +79,6 @@ export function extractAnthropicMessages(body: any): ExtractedContext | null {
       .join('\n') || undefined;
   }
 
-  // 提取 messages
   const messages: NormalizedMessage[] = Array.isArray(body.messages)
     ? body.messages.map((msg: any) => ({
         role: msg.role || 'user',
@@ -85,7 +86,6 @@ export function extractAnthropicMessages(body: any): ExtractedContext | null {
       }))
     : [];
 
-  // 提取 tools
   const tools: NormalizedTool[] = Array.isArray(body.tools)
     ? body.tools.map((tool: any) => ({
         name: tool.name,
@@ -98,21 +98,12 @@ export function extractAnthropicMessages(body: any): ExtractedContext | null {
 
 // ==================== OpenAI Chat Completions API ====================
 
-/**
- * 从 OpenAI Chat Completions API 请求体中提取 context
- * URL: /v1/chat/completions
- * Body: { messages: Message[], tools?: Tool[] }
- * 注意：system prompt 在 messages 数组中 (role === 'system')
- */
 export function extractOpenAIChat(body: any): ExtractedContext | null {
-  if (!body || typeof body !== 'object') {
-    return null;
-  }
+  if (!body || typeof body !== 'object') return null;
 
   const rawMessages = Array.isArray(body.messages) ? body.messages : [];
   let systemPrompt: string | undefined;
 
-  // 分离 system message 和普通 messages
   const messages: NormalizedMessage[] = [];
   for (const msg of rawMessages) {
     if (msg.role === 'system') {
@@ -123,7 +114,7 @@ export function extractOpenAIChat(body: any): ExtractedContext | null {
             ? msg.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
             : undefined;
       }
-      continue; // system 不计入对话消息
+      continue;
     }
     messages.push({
       role: msg.role || 'user',
@@ -131,7 +122,6 @@ export function extractOpenAIChat(body: any): ExtractedContext | null {
     });
   }
 
-  // 提取 tools（OpenAI 格式：tools[].function）
   const tools: NormalizedTool[] = Array.isArray(body.tools)
     ? body.tools.map((t: any) => {
         if (t.function) {
@@ -146,22 +136,13 @@ export function extractOpenAIChat(body: any): ExtractedContext | null {
 
 // ==================== OpenAI Responses API ====================
 
-/**
- * 从 OpenAI Responses API 请求体中提取 context
- * URL: /v1/responses
- * Body: { instructions?: string, input: string | Array<{role: string, content: any}>, tools?: Tool[] }
- */
 export function extractOpenAIResponses(body: any): ExtractedContext | null {
-  if (!body || typeof body !== 'object') {
-    return null;
-  }
+  if (!body || typeof body !== 'object') return null;
 
-  // 提取 system prompt (instructions 字段)
   const systemPrompt = typeof body.instructions === 'string'
     ? body.instructions
     : undefined;
 
-  // 提取 messages (input 字段)
   let messages: NormalizedMessage[] = [];
   if (typeof body.input === 'string') {
     messages = [{ role: 'user', content: body.input }];
@@ -172,7 +153,6 @@ export function extractOpenAIResponses(body: any): ExtractedContext | null {
     }));
   }
 
-  // 提取 tools（Responses API 的 tools 直接有 name/description）
   const tools: NormalizedTool[] = Array.isArray(body.tools)
     ? body.tools.map((t: any) => ({
         name: t.name,
@@ -187,47 +167,33 @@ export function extractOpenAIResponses(body: any): ExtractedContext | null {
 
 /**
  * 从 API 请求体中提取统一的 context 数据
- * 支持自动检测 API 类型，也提供 fallback 逻辑
  */
 export function extractContext(body: any, url: string): ExtractedContext | null {
-  if (!body || typeof body !== 'object') {
-    return null;
-  }
+  if (!body || typeof body !== 'object') return null;
 
-  // 优先使用 URL 检测
-  const apiType = detectApiType(url);
+  const endpointType = detectEndpointType(url);
 
-  const extractors: Record<ApiProviderType, (body: any) => ExtractedContext | null> = {
+  const extractors: Record<EndpointType, (body: any) => ExtractedContext | null> = {
     'anthropic-messages': extractAnthropicMessages,
     'openai-chat': extractOpenAIChat,
     'openai-responses': extractOpenAIResponses,
   };
 
-  if (apiType && extractors[apiType]) {
-    const result = extractors[apiType](body);
+  if (endpointType && extractors[endpointType]) {
+    const result = extractors[endpointType](body);
     if (result) {
-      log('提取上下文: apiType=%s messages=%d tools=%d systemPromptLen=%d', apiType, result.messages.length, result.tools.length, result.systemPrompt?.length ?? 0);
+      log('提取上下文: endpointType=%s messages=%d tools=%d systemPromptLen=%d',
+        endpointType, result.messages.length, result.tools.length, result.systemPrompt?.length ?? 0);
     }
     return result;
   }
 
-  // Fallback：尝试通过 body 字段判断
-  log('URL 检测失败，尝试 body fallback: url=%s', url);
-  // 如果 body.system 存在 → Anthropic
-  if (body.system !== undefined) {
-    return extractAnthropicMessages(body);
-  }
-
-  // 如果 body.messages 有 role=system → OpenAI Chat
+  // Fallback：通过 body 字段判断
+  if (body.system !== undefined) return extractAnthropicMessages(body);
   if (Array.isArray(body.messages) && body.messages.some((m: any) => m.role === 'system')) {
     return extractOpenAIChat(body);
   }
+  if (body.instructions !== undefined) return extractOpenAIResponses(body);
 
-  // 如果 body.instructions 存在 → OpenAI Responses
-  if (body.instructions !== undefined) {
-    return extractOpenAIResponses(body);
-  }
-
-  // 无法识别，返回 null
   return null;
 }

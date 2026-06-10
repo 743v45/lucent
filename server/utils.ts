@@ -45,30 +45,3 @@ export function sanitizeHeaders(headers: Record<string, string>): Record<string,
   return safe;
 }
 
-/**
- * 序列化 profile 为脱敏格式（用于 API 返回）
- */
-export function serializeProfileSafe(profile: { id: string; name: string; upstreamBaseUrl: string; apiKey: string }) {
-  return {
-    id: profile.id,
-    name: profile.name,
-    upstreamBaseUrl: profile.upstreamBaseUrl,
-    apiKeySet: profile.apiKey.length > 0,
-    apiKeyPreview: maskApiKey(profile.apiKey),
-  };
-}
-
-/**
- * 序列化 group 为脱敏格式
- */
-export function serializeGroupSafe(group: {
-  apiType: string;
-  activeProfileId: string;
-  profiles: Array<{ id: string; name: string; upstreamBaseUrl: string; apiKey: string }>;
-}) {
-  return {
-    apiType: group.apiType,
-    activeProfileId: group.activeProfileId,
-    profiles: group.profiles.map(serializeProfileSafe),
-  };
-}

@@ -79,6 +79,8 @@ export function normalizeLogEntry(raw: any): LogEntry {
     context: raw.context,
     error: raw.error,
     isTest: raw.isTest,
+    providerName: raw.providerName,
+    endpointType: raw.endpointType,
   };
 }
 
