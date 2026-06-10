@@ -11,7 +11,8 @@
 import { createServer } from 'node:http';
 import { readFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { getConfig } from './config.js';
+import { getConfig, getActiveProfileForApiType } from './config.js';
+import { detectApiType } from './context-extractors.js';
 import { DEFAULT_PROXY_PORT, DEFAULT_SERVER_HOST, PROXY_TRACE_HEADER, DEFAULT_UPSTREAM_URLS, CLAUDE_SETTINGS_DIR, MAX_REQUEST_BODY_SIZE } from './constants.js';
 import createDebug from 'debug';
 const log = createDebug('lucent:proxy');
@@ -140,7 +141,18 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         // 转换 incoming headers
         let headers: Record<string, string> = { ...req.headers } as Record<string, string>;
         delete headers.host; // 让 fetch 设置 host
+
+        // Debug: 显示接收到的鉴权信息
+        const downstreamAuth = headers['authorization'];
+        const downstreamApiKey = headers['x-api-key'];
+        log('📥 下游鉴权: authorization=%s, x-api-key=%s',
+          downstreamAuth ? (downstreamAuth.slice(0, 20) + '...') : '(none)',
+          downstreamApiKey ? (downstreamApiKey.slice(0, 8) + '...') : '(none)');
+
         delete headers.authorization; // 上游不认 OAuth token，只保留 x-api-key
+
+        log('🔧 删除 authorization 后的鉴权: x-api-key=%s',
+          headers['x-api-key'] ? (headers['x-api-key'].slice(0, 8) + '...') : '(none)');
 
         // 应用请求头转换
         headers = forceIdentityAcceptEncoding(headers);
@@ -185,7 +197,39 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         const cleanReq = reqUrl.startsWith('/') ? reqUrl.slice(1) : reqUrl;
         const fullUrl = `${cleanBase}/${cleanReq}`;
 
-        log('代理请求: %s %s -> %s', req.method, req.url, fullUrl);
+        // Debug: 检测 API 类型并显示配置的鉴权信息
+        const apiType = detectApiType(fullUrl);
+        if (apiType) {
+          const activeProfile = getActiveProfileForApiType(apiType);
+          const hasApiKey = activeProfile?.apiKey ? activeProfile.apiKey.length > 0 : false;
+          log('🔧 配置鉴权: apiType=%s, profile=%s, hasApiKey=%s',
+            apiType,
+            activeProfile?.name || 'none',
+            hasApiKey ? `yes(${activeProfile?.apiKey?.slice(0, 8)}...)` : 'no');
+
+          // 根据上游 API 要求设置鉴权头
+          if (hasApiKey && activeProfile?.apiKey) {
+            if (apiType === 'anthropic-messages') {
+              headers['x-api-key'] = activeProfile.apiKey;
+            } else {
+              headers['authorization'] = `Bearer ${activeProfile.apiKey}`;
+            }
+            log('🔐 应用配置鉴权: %s',
+              apiType === 'anthropic-messages'
+                ? `x-api-key=${activeProfile.apiKey.slice(0, 8)}...`
+                : `authorization=Bearer ${activeProfile.apiKey.slice(0, 8)}...`);
+          }
+        } else {
+          log('⚠️  无法检测 API 类型: url=%s', fullUrl);
+        }
+
+        // Debug: 显示最终发送到上游的鉴权
+        const finalAuth = (fetchOptions.headers as Record<string, string>)['authorization'];
+        const finalApiKey = (fetchOptions.headers as Record<string, string>)['x-api-key'];
+        log('📤 发送到上游鉴权: authorization=%s, x-api-key=%s',
+          finalAuth ? (finalAuth.slice(0, 20) + '...') : '(none)',
+          finalApiKey ? (finalApiKey.slice(0, 8) + '...') : '(none)');
+        log('🔗 代理请求: %s %s -> %s', req.method, req.url, fullUrl);
 
         // 发起请求
         const response = await fetch(fullUrl, fetchOptions);
@@ -207,15 +251,18 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         if (!response.ok) {
           try {
             const errorText = await response.text();
-            log('上游错误响应: status=%d', response.status);
+            log('❌ 上游错误响应: status=%d body=%s', response.status, errorText);
+            log('❌ 上游鉴权失败可能原因: 未配置上游 apiKey 或 apiKey 无效');
             res.writeHead(response.status, responseHeaders);
             res.end(errorText);
             return;
           } catch (err) {
             // 读取 body 失败，回退到流式处理
-            log('读取错误 body 失败: %O', err);
+            log('⚠️ 读取错误 body 失败: %O', err);
           }
         }
+
+        log('✅ 上游响应成功: status=%d', response.status);
 
         res.writeHead(response.status, responseHeaders);
 
@@ -231,6 +278,11 @@ export async function startProxyServer(options?: { port?: number; host?: string 
           // pipeline 处理流错误
           pipeline(nodeStream, res, (err) => {
             if (err) {
+              // EPIPE 是客户端断开，正常情况，静默处理
+              if ((err as NodeJS.ErrnoException).code === 'EPIPE') {
+                log('客户端断开连接: %s', req.url);
+                return;
+              }
               log('Stream pipeline 错误: %s', err.message);
             }
           });

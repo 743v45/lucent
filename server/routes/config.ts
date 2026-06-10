@@ -166,6 +166,10 @@ export function createConfigRouter(): Router {
       if (!apiType || !upstreamBaseUrl) { res.status(400).json({ error: 'apiType and upstreamBaseUrl are required' }); return; }
 
       const startTime = Date.now();
+      const hasApiKey = apiKey && apiKey.length > 0;
+
+      dbg('🧪 测试连接: apiType=%s, baseUrl=%s, hasApiKey=%s',
+        apiType, upstreamBaseUrl, hasApiKey ? `yes(${apiKey.slice(0, 8)}...)` : 'no');
 
       let testUrl: string;
       let testBody: any;
@@ -193,20 +197,33 @@ export function createConfigRouter(): Router {
           return;
       }
 
+      // Debug: 显示发送的请求
+      dbg('📤 测试请求: url=%s', testUrl);
+      dbg('📤 测试请求头: x-api-key=%s, authorization=%s',
+        headers['x-api-key'] ? (headers['x-api-key'].slice(0, 8) + '...') : '(none)',
+        headers['authorization'] ? (headers['authorization'].slice(0, 20) + '...') : '(none)');
+
       const response = await fetch(testUrl, { method: 'POST', headers, body: JSON.stringify(testBody) });
       const duration = Date.now() - startTime;
 
+      dbg('📥 测试响应: status=%d, ok=%s, duration=%dms', response.status, response.ok, duration);
+
       if (response.ok) {
+        dbg('✅ 测试成功: 连接正常');
         res.json({ ok: true, status: response.status, duration, message: '连接正常' });
       } else if (response.status === 401) {
+        dbg('⚠️ 测试失败: API Key 无效');
         res.json({ ok: false, status: response.status, duration, message: '连接正常，但 API Key 无效' });
       } else if (response.status === 404) {
+        dbg('⚠️ 测试失败: 路径不存在');
         res.json({ ok: false, status: response.status, duration, message: '路径不存在，请检查上游地址' });
       } else {
+        dbg('⚠️ 测试失败: status=%d %s', response.status, response.statusText);
         res.json({ ok: false, status: response.status, duration, message: `错误: ${response.statusText}` });
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
+      dbg('❌ 测试失败: %s', msg);
       res.json({ ok: false, duration: 0, message: `连接失败: ${msg}` });
     }
   });
