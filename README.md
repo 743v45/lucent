@@ -5,7 +5,7 @@
 </p>
 
 <p align="center">
-  <strong>AI Agent 代理服务器</strong> — 拦截并可视化 OpenAI / Claude API 通信
+  <strong>AI Agent 中转代理</strong> — 透明拦截、记录、可视化 OpenAI / Claude API 通信
 </p>
 
 <p align="center">
@@ -13,6 +13,25 @@
 </p>
 
 ---
+
+## 设计思路
+
+AgentProxy 是一个 **API 中转站**，位于 AI 客户端和上游 API 之间，零侵入地拦截所有通信：
+
+```
+Claude Code / Cursor / 其他客户端
+            │
+            ▼
+    ┌───────────────┐
+    │  AgentProxy   │  ← 中转代理 (端口 7048)
+    │  拦截 · 记录   │
+    └───────┬───────┘
+            │ 转发到上游
+            ▼
+   Anthropic / OpenAI API
+```
+
+**核心理念：** 客户端只需将 API Base URL 指向本地代理端口，即可获得完整的通信可视化能力，无需修改任何业务代码。
 
 ## 功能特性
 
@@ -103,6 +122,10 @@ npm run build   # 构建生产版本
   ]
 }
 ```
+
+## 参考
+
+本项目参考了 [cc-viewer](https://github.com/weiesky/cc-viewer) 的功能交互与页面排版设计。
 
 ## License
 
