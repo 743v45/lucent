@@ -235,6 +235,13 @@ export type EndpointType = 'openai-chat' | 'openai-responses' | 'anthropic-messa
 /** 所有支持的端点协议类型 */
 export const ENDPOINT_TYPES: EndpointType[] = ['anthropic-messages', 'openai-chat', 'openai-responses'];
 
+/** 端点协议类型的友好名称 */
+export const ENDPOINT_LABELS: Record<EndpointType, string> = {
+  'openai-chat': 'OpenAI Chat',
+  'openai-responses': 'OpenAI Responses',
+  'anthropic-messages': 'Anthropic Messages',
+};
+
 /** 类型守卫：判断字符串是否为合法的 EndpointType */
 export function isEndpointType(s: string): s is EndpointType {
   return (ENDPOINT_TYPES as string[]).includes(s);

@@ -1,9 +1,12 @@
 import { useState, useEffect, useRef } from 'react';
 import { Empty, Select, Spin, Typography } from 'antd';
 import type { LogEntry, AgentType, Provider } from '../../types';
+import { ENDPOINT_LABELS } from '../../types';
 import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, getStatusColor } from '../../constants';
 import { ClientIcon } from '../common/ClientIcon';
 import { ProviderIcon } from '../common/ProviderIcon';
+import { ProtocolIcon } from '../common/ProtocolIcon';
+import { Tooltip } from 'antd';
 
 const { Text } = Typography;
 
@@ -33,12 +36,6 @@ const shortenModel = (model: string): string => {
 };
 
 /** 来源字符串：`glm · anthropic-messages`；历史日志 fallback `-` */
-const formatSource = (log: LogEntry): string => {
-  if (log.providerName && log.endpointType) {
-    return `${log.providerName} · ${log.endpointType}`;
-  }
-  return '-';
-};
 
 export function LogListPanel({
   logs,
@@ -245,13 +242,14 @@ export function LogListPanel({
                 {/* 行2：客户端图标 + 来源 + 请求地址 + 耗时 + 状态码 */}
                 <div className="flex items-center gap-2 text-[13px] leading-[1.3]">
                   <ClientIcon clientType={log.clientType} />
-                  <span
-                    className="shrink-0 text-text-secondary font-[510] truncate max-w-[180px] flex items-center gap-1"
-                    title={formatSource(log)}
-                  >
-                    {log.providerName && <ProviderIcon providerName={log.providerName} size={14} />}
-                    {formatSource(log)}
-                  </span>
+                  <Tooltip title={log.providerName ? `供应商: ${log.providerName}` : '未知供应商'}>
+                    <ProviderIcon providerName={log.providerName || ''} size={14} />
+                  </Tooltip>
+                  {log.endpointType && (
+                    <Tooltip title={`协议: ${ENDPOINT_LABELS[log.endpointType] ?? log.endpointType}`}>
+                      <ProtocolIcon type={log.endpointType} size={14} />
+                    </Tooltip>
+                  )}
                   <span
                     className="text-text-quaternary truncate flex-1 min-w-0"
                     title={log.request.url}

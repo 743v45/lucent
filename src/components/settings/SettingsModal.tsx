@@ -21,7 +21,7 @@ import {
   testProviderEndpoint,
 } from '../../utils/api';
 import type { Provider, EndpointType, ProviderPreset } from '../../types';
-import { ENDPOINT_TYPES, isValidProviderName } from '../../types';
+import { ENDPOINT_TYPES, ENDPOINT_LABELS, isValidProviderName } from '../../types';
 import { SETTINGS_MODAL_WIDTH, DEFAULT_PROXY_PORT } from '../../constants';
 import { PROVIDER_PRESETS, PRESET_NAMES, getPresetByName } from '../../constants/presets';
 import { getProtocolColor } from '../../constants/protocol-colors';
@@ -32,12 +32,6 @@ interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
 }
-
-const ENDPOINT_LABELS: Record<EndpointType, string> = {
-  'openai-chat': 'OpenAI Chat',
-  'openai-responses': 'OpenAI Responses',
-  'anthropic-messages': 'Anthropic Messages',
-};
 
 /** 校验是否为合法 URL（空值也合法，表示未配置） */
 function isValidUrl(v: string | null): boolean {

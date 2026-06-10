@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import type { LogEntry, TabType, SSERawBody, SSERawLine } from '../../types';
+import { ENDPOINT_LABELS } from '../../types';
 import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, getStatusColor } from '../../constants';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import ReactMarkdown from 'react-markdown';
@@ -10,6 +11,8 @@ import { extractFromSSELines, extractedToResponseBody } from '../../utils/sse-ex
 import 'react-json-view-lite/dist/index.css';
 import './DetailPanel.css';
 import { ProviderIcon } from '../common/ProviderIcon';
+import { ProtocolIcon } from '../common/ProtocolIcon';
+import { Tooltip } from 'antd';
 
 
 // ==================== Chevron Icon ====================
@@ -272,11 +275,13 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
             </span>
           </div>
           <div className="flex items-center gap-2 text-sm text-text-tertiary truncate" title={log.request.url}>
-            {log.providerName && log.endpointType && (
-              <span className="shrink-0 text-text-secondary font-[510] flex items-center gap-1">
-                <ProviderIcon providerName={log.providerName} size={14} />
-                {`${log.providerName} · ${log.endpointType}`}
-              </span>
+            <Tooltip title={log.providerName ? `供应商: ${log.providerName}` : '未知供应商'}>
+              <ProviderIcon providerName={log.providerName || ''} size={14} />
+            </Tooltip>
+            {log.endpointType && (
+              <Tooltip title={`协议: ${ENDPOINT_LABELS[log.endpointType] ?? log.endpointType}`}>
+                <ProtocolIcon type={log.endpointType} size={14} />
+              </Tooltip>
             )}
             <span className="truncate">{log.request.url}</span>
           </div>
