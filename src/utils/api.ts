@@ -215,7 +215,7 @@ export async function updateProfile(
   profileId: string,
   updates: UpdateProfileData
 ): Promise<ProxyConfig> {
-  return request(`/config/${encodeURIComponent(apiType)}/${encodeURIComponent(profileId)}`, {
+  return request(`/config/${encodeURIComponent(apiType)}/profiles/${encodeURIComponent(profileId)}`, {
     method: 'PUT',
     body: JSON.stringify(updates),
   });
@@ -255,7 +255,7 @@ export async function renameProfile(
   profileId: string,
   newName: string
 ): Promise<ProxyConfig> {
-  return request(`/config/${encodeURIComponent(apiType)}/${encodeURIComponent(profileId)}/rename`, {
+  return request(`/config/${encodeURIComponent(apiType)}/profiles/${encodeURIComponent(profileId)}/rename`, {
     method: 'PUT',
     body: JSON.stringify({ newName }),
   });

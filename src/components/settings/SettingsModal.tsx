@@ -119,7 +119,13 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         apiKey: values.apiKey,
       });
       message.success('保存成功');
+      // 保持当前选中状态，只更新配置数据
+      const currentApiType = selectedApiType;
+      const currentProfileId = selectedProfileId;
       await loadConfig();
+      // 恢复之前的选中状态
+      setSelectedApiType(currentApiType);
+      setSelectedProfileId(currentProfileId);
     } catch {
       message.error('请检查输入');
     } finally {
@@ -221,8 +227,13 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
     try {
       await renameProfile(selectedApiType, selectedProfileId, nameInput.trim());
-      setSelectedProfileId(nameInput.trim());
+      // 保持当前选中状态，只更新配置数据
+      const currentApiType = selectedApiType;
+      const currentProfileId = selectedProfileId;
       await loadConfig();
+      // 恢复之前的选中状态
+      setSelectedApiType(currentApiType);
+      setSelectedProfileId(currentProfileId);
       message.success('已重命名');
     } catch {
       message.error('重命名失败');
