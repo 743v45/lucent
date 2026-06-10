@@ -19,9 +19,9 @@
 - 📡 **代理转发** — 透明拦截 OpenAI / Claude API 请求与响应
 - 📝 **完整记录** — Request、Response、KV-Cache-Text、Context 全量捕获
 - 🏷️ **Agent 识别** — 自动区分主 Agent（MainAgent）和子 Agent（SubAgent）
-- ⚡ **实时推送** — SSE 流式更新，新日志即时呈现
+- ⚡ **SSE 就绪** — SSE 推送端点已搭建，支持流式数据通道
 - 🌐 **Web UI** — 纯浏览器访问，无需安装桌面客户端
-- 🎨 **深色主题** — 护眼配色，长时间使用不疲劳
+- 🎨 **深色 UI** — Linear 风格暗色设计，长时间使用不疲劳
 
 ## 快速开始
 
@@ -39,6 +39,7 @@ npm start
 
 ```bash
 agentproxy start            # 启动服务器
+agentproxy stop             # 停止服务器
 agentproxy status           # 查看状态
 agentproxy logs             # 查看日志
 agentproxy start -p 8080    # 指定端口启动
@@ -50,8 +51,8 @@ agentproxy start --no-open  # 不自动打开浏览器
 | 区域 | 功能 |
 |------|------|
 | 左侧日志列表 | 显示所有通信记录，包含 Agent 类型、耗时、状态码 |
-| 右侧详情面板 | 展示选中记录的完整 Request / Response / Context 等信息 |
-| 顶部导航栏 | 应用标题 + 操作按钮（刷新、关于、设置） |
+| 右侧详情面板 | 展示 Request / Response / KV-Cache / Context / Meta 五个 Tab |
+| 顶部导航栏 | 应用标题 + 操作按钮（刷新、使用说明、配置） |
 
 ## 项目结构
 
@@ -62,6 +63,8 @@ agentproxy/
 ├── src/              # React 前端 (Vite + TypeScript + Ant Design)
 │   ├── components/   # UI 组件 (日志列表、详情面板等)
 │   ├── contexts/     # React Context 状态管理
+│   ├── hooks/        # 自定义 Hooks (useLogs, useProxyStatus 等)
+│   ├── utils/        # 工具函数 (API 请求、SSE 提取等)
 │   └── types.ts      # 类型定义
 ├── dist/             # 构建输出
 └── package.json
@@ -90,10 +93,14 @@ npm run build   # 构建生产版本
 
 ```json
 {
-  "proxy": {
-    "enabled": false,
-    "port": 7048
-  }
+  "proxyPort": 7048,
+  "webPort": 7049,
+  "groups": [
+    {
+      "name": "anthropic-messages",
+      "match": "/v1/messages"
+    }
+  ]
 }
 ```
 
