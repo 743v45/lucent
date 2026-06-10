@@ -1,25 +1,18 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import type { LogEntry, TabType, ApiProviderType, SSERawBody, SSERawLine } from '../../types';
-import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, API_PATH_REGEX, getStatusColor } from '../../constants';
+import type { LogEntry, TabType, SSERawBody, SSERawLine } from '../../types';
+import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, getStatusColor } from '../../constants';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { ProviderIcon } from '../common/ProviderIcon';
 import { extractFromSSELines, extractedToResponseBody } from '../../utils/sse-extractor';
 import 'react-json-view-lite/dist/index.css';
 import './DetailPanel.css';
+import { ProviderIcon } from '../common/ProviderIcon';
+
 
 // ==================== Chevron Icon ====================
-
-/** 从 URL 检测 API 类型 */
-const detectApiType = (url: string): ApiProviderType | null => {
-  if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) return 'openai-responses';
-  if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) return 'anthropic-messages';
-  if (API_PATH_REGEX.OPENAI_CHAT.test(url)) return 'openai-chat';
-  return null;
-};
 
 function ChevronIcon({ expanded }: { expanded: boolean }) {
   return (
@@ -149,17 +142,17 @@ function InlineTokenStats({ log }: { log: LogEntry }) {
     <div className="shrink-0 flex items-center gap-4 font-mono text-sm">
       <div className="rounded-lg bg-bg-surface/50 px-3 py-2 space-y-1">
         <div className="flex items-center gap-3">
-          <span className="text-text-quaternary">input: <span className="text-text-primary">{formatTokenValue(inputTokens)}</span></span>
-          <span className="text-text-quaternary">output: <span className="text-text-primary">{formatTokenValue(outputTokens)}</span></span>
+          <span className="text-text-quaternary">input: <span className="text-text-primary tabular-nums">{formatTokenValue(inputTokens)}</span></span>
+          <span className="text-text-quaternary">output: <span className="text-text-primary tabular-nums">{formatTokenValue(outputTokens)}</span></span>
         </div>
         <div className="flex items-center gap-3">
-          <span className="text-text-quaternary">create: <span className="text-text-primary">{formatTokenValue(cacheCreate)}</span></span>
-          <span className="text-text-quaternary">read: <span className="text-text-primary">{formatTokenValue(cacheRead)}</span></span>
+          <span className="text-text-quaternary">create: <span className="text-text-primary tabular-nums">{formatTokenValue(cacheCreate)}</span></span>
+          <span className="text-text-quaternary">read: <span className="text-text-primary tabular-nums">{formatTokenValue(cacheRead)}</span></span>
         </div>
       </div>
-      {hasHitRate && (
-        <span className={`font-[510] text-base ${hitRate > 70 ? 'text-success' : hitRate > 30 ? 'text-warning' : 'text-error'}`}>{hitRate.toFixed(1)}%</span>
-      )}
+      <span className={`font-[510] text-base ${hasHitRate ? (hitRate > 70 ? 'text-success' : hitRate > 30 ? 'text-warning' : 'text-error') : 'text-text-quaternary'}`}>
+        {hasHitRate ? `${hitRate.toFixed(1)}%` : ' '}
+      </span>
     </div>
   );
 }
@@ -279,10 +272,12 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
             </span>
           </div>
           <div className="flex items-center gap-2 text-sm text-text-tertiary truncate" title={log.request.url}>
-            {(() => {
-              const apiType = log.apiType || detectApiType(log.request.url);
-              return apiType ? <ProviderIcon type={apiType} size={14} /> : null;
-            })()}
+            {log.providerName && log.endpointType && (
+              <span className="shrink-0 text-text-secondary font-[510] flex items-center gap-1">
+                <ProviderIcon providerName={log.providerName} size={14} />
+                {`${log.providerName} · ${log.endpointType}`}
+              </span>
+            )}
             <span className="truncate">{log.request.url}</span>
           </div>
         </div>
@@ -1137,6 +1132,17 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
             description="API 服务提供商，决定请求转发的目标端点"
           />
           <MetaRow
+            label="供应商"
+            value={log.providerName || '-'}
+            valuePrefix={log.providerName ? <ProviderIcon providerName={log.providerName} size={14} /> : undefined}
+            description="请求实际经过的供应商名称（来自配置中的 provider.name），可追踪请求路径"
+          />
+          <MetaRow
+            label="端点协议"
+            value={log.endpointType || '-'}
+            description="请求使用的端点协议：openai-chat、openai-responses 或 anthropic-messages"
+          />
+          <MetaRow
             label="耗时"
             value={`${log.duration}ms`}
             description="从请求发出到收到完整响应的总耗时（含网络传输）"
@@ -1205,12 +1211,14 @@ function MetaRow({
   value,
   mono = false,
   valueClassName = '',
+  valuePrefix,
   description,
 }: {
   label: string;
   value: string;
   mono?: boolean;
   valueClassName?: string;
+  valuePrefix?: React.ReactNode;
   description?: string;
 }) {
   return (
@@ -1236,8 +1244,9 @@ function MetaRow({
         )}
       </span>
       <span
-        className={`text-text-primary ${mono ? 'font-mono text-sm' : ''} ${valueClassName}`}
+        className={`text-text-primary flex items-center gap-1 ${mono ? 'font-mono text-sm' : ''} ${valueClassName}`}
       >
+        {valuePrefix}
         {value}
       </span>
     </div>

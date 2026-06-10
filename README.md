@@ -52,56 +52,46 @@ npm start
 
 ## 使用方法
 
-### 第一步：配置上游 API
+### 第一步：配置供应商
 
-打开 Web UI → 右上角 ⚙️ 配置，填入你的上游 API 地址和密钥。
+打开 Web UI → 右上角 ⚙️ 设置 → 点击「新增供应商」：
 
-等同于编辑 `~/.lucent/config.json`：
+1. **命名**：给供应商一个名字（如 `glm`、`deepseek`、`claude`），只允许字母、数字、下划线、短横线
+2. **填 API Key**：供应商的认证密钥
+3. **填端点 URL**：按供应商支持的协议填写对应地址（可只填一个）：
+   - **Anthropic Messages**：如 `https://api.anthropic.com`（Claude 系列）
+   - **OpenAI Chat**：如 `https://api.openai.com` 或 `https://api.deepseek.com`
+   - **OpenAI Responses**：OpenAI 新 Responses API（如支持则填写）
 
-```json
-{
-  "proxyPort": 7048,
-  "webPort": 7049,
-  "groups": [
-    {
-      "apiType": "anthropic-messages",
-      "profiles": [
-        {
-          "name": "Claude 官方",
-          "upstreamBaseUrl": "https://api.anthropic.com",
-          "apiKey": "sk-ant-xxx"
-        }
-      ],
-      "activeProfileId": "1"
-    },
-    {
-      "apiType": "openai-chat",
-      "profiles": [
-        {
-          "name": "OpenAI",
-          "upstreamBaseUrl": "https://api.openai.com",
-          "apiKey": "sk-xxx"
-        }
-      ],
-      "activeProfileId": "1"
-    }
-  ]
-}
-```
+> 💡 **提示**：未配置的协议端点访问时会返回 404。比如只填了 Anthropic Messages，访问 `/custom/glm/v1/chat/completions` 会报错。
 
-### 第二步：让客户端流量经过代理
+### 第二步：接入下游客户端
 
-启动客户端前，设置环境变量将 API 请求指向本地代理端口：
+启动 AI 客户端时，将 Base URL 指向本地代理的 `/custom/{供应商名}` 路径：
 
 ```bash
-# Anthropic API
-export ANTHROPIC_BASE_URL=http://127.0.0.1:7048
+# Claude Code（Anthropic Messages 协议）
+export ANTHROPIC_BASE_URL=http://127.0.0.1:7048/custom/glm
 
-# OpenAI API
-export OPENAI_BASE_URL=http://127.0.0.1:7048
+# Codex / OpenAI 客户端（OpenAI Chat 协议）
+export OPENAI_BASE_URL=http://127.0.0.1:7048/custom/glm/v1
+
+# OpenAI Responses 协议
+export OPENAI_BASE_URL=http://127.0.0.1:7048/custom/glm
 ```
 
-设置完成后正常启动你的 AI 客户端，所有 API 通信会自动被 Lucent 拦截并记录。
+> 📌 **注意**：OpenAI Chat 协议的路径要加 `/v1`（因为标准路径是 `/v1/chat/completions`）。
+
+### 示例：GLM 同时支持两种协议
+
+假设你配置了一个名为 `glm` 的供应商：
+
+| 协议 | 端点 URL | 接入地址 |
+|------|----------|----------|
+| Anthropic Messages | `https://open.bigmodel.cn/api/paas/v4` | `http://127.0.0.1:7048/custom/glm` |
+| OpenAI Chat | `https://open.bigmodel.cn/api/paas/v4` | `http://127.0.0.1:7048/custom/glm/v1` |
+
+Claude Code 用 `ANTHROPIC_BASE_URL=http://127.0.0.1:7048/custom/glm`，Codex 用 `OPENAI_BASE_URL=http://127.0.0.1:7048/custom/glm/v1`，两者都能正常工作。
 
 ## CLI 命令
 
@@ -111,7 +101,7 @@ lucent stop             # 停止服务器
 lucent status           # 查看状态
 lucent logs             # 查看日志
 lucent start -p 8080    # 指定端口启动
-lucent start --no-open  # 不自动打开浏览器
+lucent start --open     # 启动后自动打开浏览器
 ```
 
 ## 界面说明

@@ -1,10 +1,9 @@
 import { useState, useEffect, useRef } from 'react';
-import { Empty, Spin, Typography } from 'antd';
-import type { LogEntry, AgentType, ApiProviderType } from '../../types';
-import { API_PATH_REGEX, getStatusColor } from '../../constants';
-import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD } from '../../constants';
-import { ProviderIcon } from '../common/ProviderIcon';
+import { Empty, Select, Spin, Typography } from 'antd';
+import type { LogEntry, AgentType, Provider } from '../../types';
+import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, getStatusColor } from '../../constants';
 import { ClientIcon } from '../common/ClientIcon';
+import { ProviderIcon } from '../common/ProviderIcon';
 
 const { Text } = Typography;
 
@@ -17,6 +16,9 @@ interface LogListPanelProps {
   hasMore: boolean;
   onLoadMore: () => void;
   width: number;
+  providers?: Provider[];
+  providerFilter?: string;
+  onProviderFilterChange?: (name: string) => void;
 }
 
 /** 截断模型名，保留关键信息 */
@@ -30,12 +32,12 @@ const shortenModel = (model: string): string => {
     .replace(/^gpt-3\.5-turbo.*$/, 'gpt-3.5-turbo');
 };
 
-/** 从 URL 检测 API 类型 */
-const detectApiType = (url: string): ApiProviderType | null => {
-  if (API_PATH_REGEX.OPENAI_RESPONSES.test(url)) return 'openai-responses';
-  if (API_PATH_REGEX.ANTHROPIC_MESSAGES.test(url)) return 'anthropic-messages';
-  if (API_PATH_REGEX.OPENAI_CHAT.test(url)) return 'openai-chat';
-  return null;
+/** 来源字符串：`glm · anthropic-messages`；历史日志 fallback `-` */
+const formatSource = (log: LogEntry): string => {
+  if (log.providerName && log.endpointType) {
+    return `${log.providerName} · ${log.endpointType}`;
+  }
+  return '-';
 };
 
 export function LogListPanel({
@@ -47,6 +49,9 @@ export function LogListPanel({
   hasMore,
   onLoadMore,
   width,
+  providers,
+  providerFilter,
+  onProviderFilterChange,
 }: LogListPanelProps): JSX.Element {
   // MainAgent: 金色加灰 #C9A227, SubAgent: 橙色加灰 #B87A4A
   const getAgentTypeTag = (agentType: AgentType): { tag: JSX.Element; color: string } => {
@@ -145,13 +150,35 @@ export function LogListPanel({
       style={{ width }}
     >
       {/* Header */}
-      <div className="px-4 py-3 border-b border-border-subtle flex items-center justify-between">
-        <Text className="text-text-primary text-[15px] font-[510]">
+      <div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
+        <Text className="text-text-primary text-[15px] font-[510] shrink-0">
           通信记录
         </Text>
-        <Text className="text-text-quaternary text-sm">
-          {logs.length} 条
-        </Text>
+        <div className="ml-auto flex items-center gap-2">
+          {providers && onProviderFilterChange && (
+            <Select
+              size="small"
+              className="min-w-[120px]"
+              value={providerFilter ?? 'all'}
+              onChange={(v) => onProviderFilterChange(v)}
+              options={[
+                { value: 'all', label: '全部供应商' },
+                ...providers.map((p) => ({
+                  value: p.name,
+                  label: (
+                    <span className="flex items-center gap-1.5">
+                      {p.name && <ProviderIcon providerName={p.name} size={14} />}
+                      {p.name}
+                    </span>
+                  ),
+                })),
+              ]}
+            />
+          )}
+          <Text className="text-text-quaternary text-sm shrink-0">
+            {logs.length} 条
+          </Text>
+        </div>
       </div>
 
       {loading ? (
@@ -215,13 +242,16 @@ export function LogListPanel({
                   <TimeWithTooltip timestamp={log.timestamp} />
                 </div>
 
-                {/* 行2：客户端图标 + 协议图标 + 请求地址 + 耗时 + 状态码 */}
+                {/* 行2：客户端图标 + 来源 + 请求地址 + 耗时 + 状态码 */}
                 <div className="flex items-center gap-2 text-[13px] leading-[1.3]">
                   <ClientIcon clientType={log.clientType} />
-                  {(() => {
-                    const apiType = log.apiType || detectApiType(log.request.url);
-                    return apiType ? <ProviderIcon type={apiType} size={14} className="text-text-secondary" /> : null;
-                  })()}
+                  <span
+                    className="shrink-0 text-text-secondary font-[510] truncate max-w-[180px] flex items-center gap-1"
+                    title={formatSource(log)}
+                  >
+                    {log.providerName && <ProviderIcon providerName={log.providerName} size={14} />}
+                    {formatSource(log)}
+                  </span>
                   <span
                     className="text-text-quaternary truncate flex-1 min-w-0"
                     title={log.request.url}
