@@ -45,14 +45,63 @@ Claude Code / Cursor / 其他客户端
 ## 快速开始
 
 ```bash
-# 安装依赖
 npm install
-
-# 启动服务器
 npm start
-
-# 浏览器打开 http://localhost:7049
+# 浏览器自动打开 http://localhost:7049
 ```
+
+## 使用方法
+
+### 第一步：配置上游 API
+
+打开 Web UI → 右上角 ⚙️ 配置，填入你的上游 API 地址和密钥。
+
+等同于编辑 `~/.lucent/config.json`：
+
+```json
+{
+  "proxyPort": 7048,
+  "webPort": 7049,
+  "groups": [
+    {
+      "apiType": "anthropic-messages",
+      "profiles": [
+        {
+          "name": "Claude 官方",
+          "upstreamBaseUrl": "https://api.anthropic.com",
+          "apiKey": "sk-ant-xxx"
+        }
+      ],
+      "activeProfileId": "1"
+    },
+    {
+      "apiType": "openai-chat",
+      "profiles": [
+        {
+          "name": "OpenAI",
+          "upstreamBaseUrl": "https://api.openai.com",
+          "apiKey": "sk-xxx"
+        }
+      ],
+      "activeProfileId": "1"
+    }
+  ]
+}
+```
+
+### 第二步：让客户端流量经过代理
+
+启动客户端前，设置环境变量将 API 请求指向本地代理端口：
+
+```bash
+# Anthropic API
+export ANTHROPIC_BASE_URL=http://127.0.0.1:7048
+
+# OpenAI API
+export OPENAI_BASE_URL=http://127.0.0.1:7048
+```
+
+设置完成后正常启动你的 AI 客户端，所有 API 通信会自动被 Lucent 拦截并记录。
 
 ## CLI 命令
 
@@ -104,23 +153,6 @@ lucent/
 npm install     # 安装依赖
 npm run dev     # 启动开发服务器 (HMR)
 npm run build   # 构建生产版本
-```
-
-## 配置
-
-配置文件：`~/.lucent/config.json`
-
-```json
-{
-  "proxyPort": 7048,
-  "webPort": 7049,
-  "groups": [
-    {
-      "name": "anthropic-messages",
-      "match": "/v1/messages"
-    }
-  ]
-}
 ```
 
 ## 参考
