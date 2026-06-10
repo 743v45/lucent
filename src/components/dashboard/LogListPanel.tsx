@@ -248,9 +248,11 @@ export function LogListPanel({
                 <div className="flex items-center gap-2 text-sm leading-[1.3]">
                   {agentTag}
                   {log.isTest && (
-                    <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-600 font-[510]">
-                      hi
-                    </span>
+                    <Tooltip title="测试请求">
+                      <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-600 font-[510]">
+                        hi
+                      </span>
+                    </Tooltip>
                   )}
                   <span
                     className={`truncate flex-1 min-w-0 font-[510] ${agentColor}`}
@@ -272,11 +274,11 @@ export function LogListPanel({
                 <div className="flex items-center gap-2 text-[13px] leading-[1.3]">
                   <ClientIcon clientType={log.clientType} />
                   <Tooltip title={log.providerName ? `供应商: ${log.providerName}` : '未知供应商'}>
-                    <ProviderIcon providerName={log.providerName || ''} size={14} />
+                    <span><ProviderIcon providerName={log.providerName || ''} size={14} /></span>
                   </Tooltip>
                   {log.endpointType && (
                     <Tooltip title={`协议: ${ENDPOINT_LABELS[log.endpointType] ?? log.endpointType}`}>
-                      <ProtocolIcon type={log.endpointType} size={14} />
+                      <span><ProtocolIcon type={log.endpointType} size={14} /></span>
                     </Tooltip>
                   )}
                   <span
