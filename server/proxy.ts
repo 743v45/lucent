@@ -3,7 +3,7 @@
  *
  * 功能：
  * - 接收客户端请求
- * - 按 /api/{name}/{rest} 路径解析供应商 + 端点
+ * - 按 /{name}/{rest} 或 /custom/{name}/{rest} 路径解析供应商 + 端点
  * - 转发到真实 API (OpenAI/Claude)
  * - 支持 SSE 流式响应
  * - 处理鉴权头注入
@@ -24,11 +24,13 @@ const log = createDebug('lucent:proxy');
 // ==================== 路径解析 ====================
 
 /**
- * 匹配 /api/{name}/{rest} 路径
- * - name: provider name（只允许 [a-zA-Z0-9_-]+）
- * - rest: 剩余路径（如 /v1/messages）
+ * 匹配两种代理路径：
+ * - /{name}/{rest}      预设供应商
+ * - /custom/{name}/{rest} 自定义供应商
+ * name: provider name（只允许 [a-zA-Z0-9_-]+）
+ * rest: 剩余路径（如 /v1/messages）
  */
-const CUSTOM_PATH_REGEX = /^\/api\/([a-zA-Z0-9_-]+)(\/.*)$/;
+const PATH_REGEX = /^\/(?:custom\/)?([a-zA-Z0-9_-]+)(\/.*)$/;
 
 /**
  * 从 rest 子路径推断 endpointType
@@ -99,14 +101,9 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         const reqUrl = req.url ?? '/';
 
         // 1. 解析路径
-        const match = CUSTOM_PATH_REGEX.exec(reqUrl);
+        const match = PATH_REGEX.exec(reqUrl);
         if (!match) {
-          // 老路径裸 /v1/messages 等 → 404 + 提示
-          if (reqUrl.startsWith('/v1/')) {
-            sendJsonError(res, 404, `请改用 /api/{name}${reqUrl}，例如 /api/anthropic/v1/messages`);
-            return;
-          }
-          sendJsonError(res, 404, `路径格式错误，必须为 /api/{name}/{rest}`);
+          sendJsonError(res, 404, `路径格式错误，必须为 /{name}/{rest} 或 /custom/{name}/{rest}`);
           return;
         }
 
@@ -141,8 +138,10 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         headers = forceIdentityAcceptEncoding(headers);
         headers = stripContentLengthHeader(headers);
 
-        // 标记代理转发
+        // 标记代理转发 + 传递路由信息给拦截器
         headers[PROXY_TRACE_HEADER] = 'true';
+        headers['x-lucent-provider'] = providerName;
+        headers['x-lucent-endpoint'] = endpointType;
 
         log('🧩 路由解析: provider=%s endpointType=%s rest=%s baseUrl=%s',
           providerName, endpointType, rest, baseUrl);

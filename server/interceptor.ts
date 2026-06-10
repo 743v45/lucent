@@ -30,34 +30,6 @@ import createDebug from 'debug';
 const dbg = createDebug('lucent:interceptor');
 const dbgSse = createDebug('lucent:interceptor:sse');
 
-// ==================== 路径解析 ====================
-
-/** 匹配 /api/{name}/{rest} */
-const CUSTOM_PATH_REGEX = /^\/api\/([a-zA-Z0-9_-]+)(\/.*)$/;
-
-/** 从 rest 推断 endpointType */
-function inferEndpointTypeFromRest(rest: string): EndpointType | null {
-  if (rest === '/v1/messages') return 'anthropic-messages';
-  if (rest === '/v1/chat/completions' || rest === '/v1/completions') return 'openai-chat';
-  if (rest === '/v1/responses') return 'openai-responses';
-  return null;
-}
-
-/** 从完整 URL 解析 providerName + endpointType */
-function parseCustomPath(url: string): { providerName: string; endpointType: EndpointType } | null {
-  try {
-    const u = new URL(url);
-    const match = CUSTOM_PATH_REGEX.exec(u.pathname);
-    if (!match) return null;
-    const [, providerName, rest] = match;
-    const endpointType = inferEndpointTypeFromRest(rest);
-    if (!endpointType) return null;
-    return { providerName, endpointType };
-  } catch {
-    return null;
-  }
-}
-
 // ==================== 状态 ====================
 
 let interceptorInstalled = false;
@@ -305,19 +277,21 @@ export function setupInterceptor(): void {
     // 检查是否为代理转发请求（由 proxy.ts 发起）
     const isProxyTrace = headers[PROXY_TRACE_HEADER] === 'true';
 
-    // 解析 /api/{name}/{rest} 获取 providerName + endpointType
-    const pathInfo = parseCustomPath(urlStr);
-    const providerName = pathInfo?.providerName || null;
-    const endpointType = pathInfo?.endpointType || null;
+    // 从代理 header 读取 providerName + endpointType（proxy.ts 注入）
+    const providerName = headers['x-lucent-provider'] || null;
+    const endpointType = (headers['x-lucent-endpoint'] as EndpointType) || null;
 
     // 只拦截代理转发请求或显式包含 anthropic/openai 的 URL
     if (!isProxyTrace && !urlStr.includes('anthropic') && !urlStr.includes('claude') && !urlStr.includes('openai')) {
       return originalFetch.call(this, url, options);
     }
 
-    // 清理代理标记 header
-    if (headers[PROXY_TRACE_HEADER] && options?.headers) {
-      delete (options.headers as Record<string, unknown>)[PROXY_TRACE_HEADER];
+    // 清理代理标记 header（不发送给上游）
+    if (options?.headers) {
+      const h = options.headers as Record<string, unknown>;
+      delete h[PROXY_TRACE_HEADER];
+      delete h['x-lucent-provider'];
+      delete h['x-lucent-endpoint'];
     }
 
     // 构建请求日志

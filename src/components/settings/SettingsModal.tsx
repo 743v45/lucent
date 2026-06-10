@@ -277,9 +277,13 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  const handleCopyAccessUrl = (name: string) => {
-    const url = `http://127.0.0.1:${proxyPort}/api/${name}`;
-    navigator.clipboard.writeText(url).then(() => {
+  const getAccessUrl = (p: Provider) => {
+    const prefix = p.presetName ? '' : 'custom/';
+    return `http://127.0.0.1:${proxyPort}/${prefix}${p.name}`;
+  };
+
+  const handleCopyAccessUrl = (p: Provider) => {
+    navigator.clipboard.writeText(getAccessUrl(p)).then(() => {
       message.success('已复制接入地址');
     }).catch(() => {
       message.error('复制失败');
@@ -467,13 +471,13 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           <div className="flex items-center gap-2 text-[15px]">
             <span className="text-text-secondary w-[160px] shrink-0">下游接入地址</span>
             <code className="text-text-primary font-mono bg-bg-input px-2 py-1 rounded">
-              http://127.0.0.1:{proxyPort}/api/{p.name}
+              {getAccessUrl(p)}
             </code>
             <Button
               type="text"
               size="small"
               icon={<CopyOutlined />}
-              onClick={() => handleCopyAccessUrl(p.name)}
+              onClick={() => handleCopyAccessUrl(p)}
               className="!text-text-quaternary hover:!text-text-primary"
             />
           </div>

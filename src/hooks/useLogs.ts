@@ -80,7 +80,7 @@ export function useLogs() {
     }
   }, [loadingMore, hasMore]);
 
-  // 添加新日志（WebSocket 推送）— 带 ID 去重
+  // 添加新日志（SSE 推送等）— 带 ID 去重
   const addLog = (log: LogEntry) => {
     setLogs(prev => {
       if (prev.some(item => item.id === log.id)) return prev;

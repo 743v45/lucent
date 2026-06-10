@@ -98,11 +98,12 @@ export async function startServer(): Promise<void> {
 
       // 供应商接入指令
       for (const p of resolvedConfig.providers) {
+        const prefix = p.presetName ? '' : 'custom/';
         const cmds: string[] = [];
         if (p.endpoints['anthropic-messages'])
-          cmds.push(`ANTHROPIC_BASE_URL=http://${host}:${proxyPort}/api/${p.name}`);
+          cmds.push(`ANTHROPIC_BASE_URL=http://${host}:${proxyPort}/${prefix}${p.name}`);
         if (p.endpoints['openai-chat'] || p.endpoints['openai-responses'])
-          cmds.push(`OPENAI_BASE_URL=http://${host}:${proxyPort}/api/${p.name}/v1`);
+          cmds.push(`OPENAI_BASE_URL=http://${host}:${proxyPort}/${prefix}${p.name}/v1`);
         if (cmds.length > 0)
           lines.push(``, `${p.name}:`, ...cmds.map(c => `  export ${c}`));
       }
