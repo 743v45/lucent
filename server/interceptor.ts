@@ -72,6 +72,11 @@ function isMainAgentRequest(body: any): boolean {
 function parseAgentType(body: any, isMain: boolean): { agentType: 'main' | 'sub'; subAgentType?: 'plan' | 'search' | 'bash' | 'workflow' | 'unknown' } {
   if (isMain) return { agentType: 'main' };
 
+  // body 可能为 null（比如压缩请求体）
+  if (!body || !body.messages) {
+    return { agentType: 'sub', subAgentType: 'unknown' };
+  }
+
   const messages = body.messages || [];
   const firstMessage = messages[0] as any;
   const content = firstMessage?.content;
@@ -266,6 +271,27 @@ function normalizeHeaders(rawHeaders: HeadersInit | undefined): Record<string, s
 }
 
 /**
+ * 判断是否为测试请求（content 为 "hi" 变体）
+ */
+function isTestRequest(body: unknown): boolean {
+  if (!body || typeof body !== 'object') return false;
+  const messages = (body as any).messages;
+  if (!Array.isArray(messages)) return false;
+
+  // 找第一条 user message
+  const firstUserMsg = messages.find((m: any) => m.role === 'user');
+  if (!firstUserMsg) return false;
+
+  const content = firstUserMsg.content;
+  if (typeof content !== 'string') return false;
+
+  // 判断是否为 "hi" 变体（忽略大小写，允许标点）
+  const trimmed = content.trim().toLowerCase();
+  // 匹配 "hi", "hi!", "hi?", "hi." 等变体
+  return /^hi[!?.?\s]*$/.test(trimmed);
+}
+
+/**
  * 构建请求日志条目
  */
 function buildRequestEntry(
@@ -281,12 +307,14 @@ function buildRequestEntry(
   const { agentType, subAgentType } = parseAgentType(body, isMain);
   const model = (body as any)?.model || 'unknown';
   const clientType = identifyClient(headers);
+  // 基于请求内容判断是否为测试
+  const isTest = isTestRequest(body);
 
   const requestId = `${startTime}_${Math.random().toString(36).substring(2, 11)}`;
 
-  dbg('拦截 %s %s apiType=%s agentType=%s subAgentType=%s clientType=%s model=%s stream=%s',
+  dbg('拦截 %s %s apiType=%s agentType=%s subAgentType=%s clientType=%s model=%s stream=%s isTest=%s',
     options?.method || 'GET', urlStr, detectedApiType ?? '-', agentType, subAgentType ?? '-',
-    clientType, model, (body as any)?.stream === true);
+    clientType, model, (body as any)?.stream === true, isTest);
 
   return {
     id: requestId,
@@ -304,6 +332,7 @@ function buildRequestEntry(
     subAgentType,
     apiType: detectedApiType || undefined,
     clientType,
+    isTest,
   };
 }
 
@@ -379,6 +408,14 @@ export function setupInterceptor(): void {
       }
     } catch (err) {
       entry.duration = Date.now() - startTime;
+
+      // EPIPE 是客户端断开，正常情况，静默处理
+      const errno = (err as NodeJS.ErrnoException)?.code;
+      if (errno === 'EPIPE') {
+        // 不记录日志，不抛出错误
+        return;
+      }
+
       entry.error = err instanceof Error ? err.message : String(err);
       LogWriter.writeLogEntry(entry);
       throw err;

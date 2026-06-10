@@ -18,6 +18,7 @@ export interface LogEntry {
   kvCache?: KVCacheInfo;
   context?: ContextData;
   error?: string;
+  isTest?: boolean;
 }
 
 export type AgentType = 'main' | 'sub';

@@ -191,9 +191,14 @@ export function LogListPanel({
                   }
                 `}
               >
-                {/* 行1：Agent类型 tag + 模型名 + SSE/JSON + 时间 */}
+                {/* 行1：Agent类型 tag + 模型名 + SSE/JSON + 时间 + 测试标记 */}
                 <div className="flex items-center gap-2 text-sm leading-[1.3]">
                   {agentTag}
+                  {log.isTest && (
+                    <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-600 font-[510]">
+                      hi
+                    </span>
+                  )}
                   <span
                     className={`truncate flex-1 min-w-0 font-[510] ${agentColor}`}
                     title={log.metadata.model}

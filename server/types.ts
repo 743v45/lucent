@@ -120,6 +120,7 @@ export interface RawLogEntry {
   subAgentType?: SubAgentType;
   apiType?: ApiProviderType;
   clientType?: ClientType;
+  isTest?: boolean;
   _deltaFormat?: number;
   _totalMessageCount?: number;
   _conversationId?: string;

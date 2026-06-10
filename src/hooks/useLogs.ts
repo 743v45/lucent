@@ -40,6 +40,7 @@ export function useLogs() {
     kvCache: log.kvCache as LogEntry['kvCache'],
     context: log.context as LogEntry['context'],
     error: log.error,
+    isTest: log.isTest,
   });
 
   // 初始加载（最新的 PAGE_SIZE 条）

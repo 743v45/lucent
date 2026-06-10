@@ -78,6 +78,7 @@ export function normalizeLogEntry(raw: any): LogEntry {
     kvCache: raw.kvCache,
     context: raw.context,
     error: raw.error,
+    isTest: raw.isTest,
   };
 }
 
