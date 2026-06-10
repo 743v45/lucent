@@ -1,524 +1,657 @@
-import { useState, useEffect } from 'react';
-import { Modal, Form, Input, Button, Space, message, Divider, Tooltip, Collapse, Dropdown } from 'antd';
-import type { MenuProps } from 'antd';
+import { useState, useEffect, useRef } from 'react';
+import { Modal, Input, Button, message, Empty, Tooltip } from 'antd';
 import {
   PlusOutlined,
-  SaveOutlined,
   CheckCircleOutlined,
+  CheckOutlined,
   CopyOutlined,
   EditOutlined,
   DeleteOutlined,
-  ThunderboltOutlined,
   ExclamationCircleOutlined,
   CloseOutlined,
+  ArrowLeftOutlined,
 } from '@ant-design/icons';
-import { ProviderIcon } from '../common/ProviderIcon';
 import {
-  getProxyConfig,
-  getProfileFull,
-  updateProfile,
-  createProfile,
-  setActiveProfile,
-  renameProfile,
-  deleteProfile,
-  testConnection,
+  listProviders,
+  getProviderFull,
+  createProvider,
+  updateProvider,
+  deleteProvider,
+  renameProvider,
+  testProviderEndpoint,
 } from '../../utils/api';
-import type { ProxyConfig, ApiProviderType, SafeProxyProfile } from '../../types';
-import { API_TYPE_LABELS } from '../../types';
-import { DEFAULT_PROXY_PORT, DEFAULT_UPSTREAM_URLS, ENV_VAR_NAMES, SETTINGS_MODAL_WIDTH, DEFAULT_PROFILE_NAME } from '../../constants';
+import type { Provider, EndpointType, ProviderPreset } from '../../types';
+import { ENDPOINT_TYPES, isValidProviderName } from '../../types';
+import { SETTINGS_MODAL_WIDTH, DEFAULT_PROXY_PORT } from '../../constants';
+import { PROVIDER_PRESETS, PRESET_NAMES, getPresetByName } from '../../constants/presets';
+import { getProtocolColor } from '../../constants/protocol-colors';
+import { ProviderIcon } from '../common/ProviderIcon';
+import { ProtocolIcon } from '../common/ProtocolIcon';
 
 interface SettingsModalProps {
   open: boolean;
   onClose: () => void;
 }
 
+const ENDPOINT_LABELS: Record<EndpointType, string> = {
+  'openai-chat': 'OpenAI Chat',
+  'openai-responses': 'OpenAI Responses',
+  'anthropic-messages': 'Anthropic Messages',
+};
+
+/** 校验是否为合法 URL（空值也合法，表示未配置） */
+function isValidUrl(v: string | null): boolean {
+  if (!v) return true;
+  try { const u = new URL(v); return u.protocol === 'http:' || u.protocol === 'https:'; }
+  catch { return false; }
+}
+
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
-  const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState<{ ok: boolean; duration: number; message: string } | null>(null);
-  const [config, setConfig] = useState<ProxyConfig | null>(null);
-  const [selectedApiType, setSelectedApiType] = useState<ApiProviderType>('anthropic-messages');
-  const [selectedProfileId, setSelectedProfileId] = useState<string>('');
-  const [editingName, setEditingName] = useState(false);
+  const [providers, setProviders] = useState<Provider[]>([]);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [testingMap, setTestingMap] = useState<Record<EndpointType, boolean>>({} as Record<EndpointType, boolean>);
+  const [testResults, setTestResults] = useState<Record<string, Record<EndpointType, { ok: boolean; duration: number; message: string } | null>>>({});
+
+  // 编辑状态
+  const [editingName, setEditingName] = useState<string | null>(null);
   const [nameInput, setNameInput] = useState('');
-  const [activeGroups, setActiveGroups] = useState<string[]>(['anthropic-messages']);
-  const [form] = Form.useForm();
+  const [formData, setFormData] = useState<Record<string, { endpoints: Record<EndpointType, string | null> }>>({});
+  // 已失焦的字段集合，用于失焦后才显示校验红框
+  const [blurredFields, setBlurredFields] = useState<Set<string>>(new Set());
+  // 预设面板状态
+  const [showPresetPanel, setShowPresetPanel] = useState(false);
+  const [customNameInput, setCustomNameInput] = useState('');
+  const [showCustomInput, setShowCustomInput] = useState(false);
+
+  // ref 始终指向最新 formData，避免 handleAutoSave 闭包读取旧值
+  const formDataRef = useRef(formData);
+  formDataRef.current = formData;
+
+  const proxyPort = DEFAULT_PROXY_PORT; // TODO: 从 status API 获取动态值
 
   useEffect(() => {
-    if (open) loadConfig();
+    if (open) loadProviders();
   }, [open]);
 
-  const loadConfig = async () => {
+  const loadProviders = async () => {
+    setLoading(true);
     try {
-      const data = await getProxyConfig();
-      setConfig(data);
-
-      // Auto-select the first group's active profile
-      if (data.groups.length > 0) {
-        const firstGroup = data.groups[0];
-        setSelectedApiType(firstGroup.apiType);
-        setSelectedProfileId(firstGroup.activeProfileId);
-        setActiveGroups([firstGroup.apiType]);
+      const list = await listProviders();
+      setProviders(list);
+      // 初始化 formData
+      const data: Record<string, { endpoints: Record<EndpointType, string | null> }> = {};
+      for (const p of list) {
+        const full = await getProviderFull(p.name);
+        data[p.name] = { endpoints: full.endpoints };
       }
+      setFormData(data);
+      setTestResults({});
     } catch {
-      message.error('加载配置失败');
-    }
-  };
-
-  useEffect(() => {
-    if (selectedApiType && selectedProfileId) loadProfileForm();
-  }, [selectedApiType, selectedProfileId]);
-
-  const loadProfileForm = async () => {
-    try {
-      const profile = await getProfileFull(selectedApiType, selectedProfileId);
-      form.setFieldsValue({
-        upstreamBaseUrl: profile.upstreamBaseUrl,
-        apiKey: profile.apiKey,
-      });
-      setTestResult(null);
-    } catch {
-      message.error('加载配置详情失败');
-    }
-  };
-
-  const handleSelectProfile = (apiType: ApiProviderType, profileId: string) => {
-    setSelectedApiType(apiType);
-    setSelectedProfileId(profileId);
-    setEditingName(false);
-    // 切换分组时折叠其他分组，只展开当前分组
-    setActiveGroups([apiType]);
-  };
-
-  const handleGroupChange = (keys: string | string[]) => {
-    const activeKeys = Array.isArray(keys) ? keys : [keys];
-    // 手风琴模式：只保留最后点击的一个分组
-    if (activeKeys.length > 0) {
-      setActiveGroups([activeKeys[activeKeys.length - 1]]);
-    } else {
-      setActiveGroups([]);
-    }
-  };
-
-  const handleActivate = async () => {
-    try {
-      await setActiveProfile(selectedApiType, selectedProfileId);
-      message.success('已启用');
-      await loadConfig();
-    } catch {
-      message.error('启用失败');
-    }
-  };
-
-  const handleSave = async () => {
-    try {
-      const values = await form.validateFields();
-      setSaving(true);
-      await updateProfile(selectedApiType, selectedProfileId, {
-        upstreamBaseUrl: values.upstreamBaseUrl,
-        apiKey: values.apiKey,
-      });
-      message.success('保存成功');
-      // 保持当前选中状态，只更新配置数据
-      const currentApiType = selectedApiType;
-      const currentProfileId = selectedProfileId;
-      await loadConfig();
-      // 恢复之前的选中状态
-      setSelectedApiType(currentApiType);
-      setSelectedProfileId(currentProfileId);
-    } catch {
-      message.error('请检查输入');
+      message.error('加载供应商列表失败');
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
   };
 
-  const handleTest = async () => {
+  const handleExpand = (name: string) => {
+    setExpanded(expanded === name ? null : name);
+  };
+
+  const handleClose = () => {
+    setExpanded(null);
+    onClose();
+  };
+
+  const handleCreate = () => {
+    setShowPresetPanel(true);
+  };
+
+  const handleCreateFromPreset = async (preset: ProviderPreset) => {
     try {
-      const values = await form.getFieldsValue(['upstreamBaseUrl', 'apiKey']);
-      setTesting(true);
-      setTestResult(null);
-      const result = await testConnection(selectedApiType, values.upstreamBaseUrl, values.apiKey);
-      setTestResult(result);
+      setLoading(true);
+      const created = await createProvider({
+        name: preset.name,
+        presetName: preset.name,
+        endpoints: { ...preset.endpoints },
+      });
+      setProviders(prev => [...prev, created]);
+      setFormData(prev => ({
+        ...prev,
+        [created.name]: { endpoints: created.endpoints },
+      }));
+      setExpanded(created.name);
+      setShowPresetPanel(false);
+      message.success(`已添加 ${preset.label}`);
+    } catch (e) {
+      message.error((e as Error).message || '创建失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleCreateCustom = async () => {
+    const name = customNameInput.trim();
+    if (!name || !isValidProviderName(name)) {
+      message.error('名称格式错误：只允许 [a-zA-Z0-9_-]{1,32}');
+      return;
+    }
+    if (PRESET_NAMES.has(name)) {
+      message.error(`"${name}" 是系统保留名，请选择预设或使用其他名称`);
+      return;
+    }
+    if (providers.some(p => p.name === name)) {
+      message.error(`名称 "${name}" 已被占用`);
+      return;
+    }
+    try {
+      setLoading(true);
+      const created = await createProvider({
+        name,
+        endpoints: {
+          'openai-chat': null,
+          'openai-responses': null,
+          'anthropic-messages': null,
+        },
+      });
+      setProviders(prev => [...prev, created]);
+      setFormData(prev => ({
+        ...prev,
+        [created.name]: { endpoints: created.endpoints },
+      }));
+      setExpanded(created.name);
+      setShowPresetPanel(false);
+      setCustomNameInput('');
+      message.success(`已创建 ${name}`);
+    } catch (e) {
+      message.error((e as Error).message || '创建失败');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDelete = async (name: string) => {
+    if (!window.confirm(`确定要删除供应商「${name}」吗？此操作不可恢复。`)) return;
+    try {
+      await deleteProvider(name);
+      setProviders(providers.filter(p => p.name !== name));
+      setFormData(prev => {
+        const next = { ...prev };
+        delete next[name];
+        return next;
+      });
+      if (expanded === name) setExpanded(null);
+      message.success('已删除');
+    } catch (e) {
+      message.error((e as Error).message || '删除失败');
+    }
+  };
+
+  const handleRenameStart = (name: string) => {
+    setEditingName(name);
+    setNameInput(name);
+  };
+
+  const handleRenameCommit = async (oldName: string) => {
+    const newName = nameInput.trim();
+    if (!newName || newName === oldName) {
+      setEditingName(null);
+      return;
+    }
+    if (!isValidProviderName(newName)) {
+      message.error('名称格式错误：只允许 [a-zA-Z0-9_-]{1,32}');
+      return;
+    }
+    if (PRESET_NAMES.has(newName)) {
+      message.error(`"${newName}" 是系统保留名，不可使用`);
+      return;
+    }
+    if (providers.some(p => p.name === newName)) {
+      message.error(`名称 "${newName}" 已被占用`);
+      return;
+    }
+    try {
+      const renamed = await renameProvider(oldName, newName);
+      setProviders(providers.map(p => (p.name === oldName ? renamed : p)));
+      setFormData(prev => {
+        const data = prev[oldName];
+        const next = { ...prev };
+        delete next[oldName];
+        next[newName] = data;
+        return next;
+      });
+      setTestResults(prev => {
+        const results = prev[oldName];
+        const next = { ...prev };
+        delete next[oldName];
+        if (results) next[newName] = results;
+        return next;
+      });
+      if (expanded === oldName) setExpanded(newName);
+      setEditingName(null);
+      message.success('已重命名');
+    } catch (e) {
+      message.error((e as Error).message || '重命名失败');
+    }
+  };
+
+  /** 自动保存（失焦时触发，静默） */
+  const handleAutoSave = async (name: string) => {
+    const data = formDataRef.current[name];
+    if (!data) return;
+    // URL 有无效值时不保存，给用户提示
+    const invalidEt = ENDPOINT_TYPES.find(et => !isValidUrl(data.endpoints[et]));
+    if (invalidEt) {
+      message.warning(`${ENDPOINT_LABELS[invalidEt]} URL 格式无效，未保存`);
+      return;
+    }
+    try {
+      const updated = await updateProvider(name, { endpoints: data.endpoints });
+      setProviders(prev => prev.map(p => (p.name === name ? updated : p)));
+    } catch (e) {
+      message.error((e as Error).message || '保存失败');
+    }
+  };
+
+  const handleTest = async (name: string, endpointType: EndpointType) => {
+    setTestingMap(prev => ({ ...prev, [endpointType]: true }));
+    try {
+      const result = await testProviderEndpoint(name, endpointType);
+      setTestResults(prev => ({
+        ...prev,
+        [name]: { ...prev[name], [endpointType]: result },
+      }));
       if (result.ok) {
-        message.success(`连接正常 (${result.duration}ms)`);
+        message.success(`${ENDPOINT_LABELS[endpointType]} 连接正常 (${result.duration}ms)`);
       } else {
         message.warning(result.message);
       }
-    } catch {
-      setTestResult({ ok: false, duration: 0, message: '连接失败' });
+    } catch (e) {
+      setTestResults(prev => ({
+        ...prev,
+        [name]: { ...prev[name], [endpointType]: { ok: false, duration: 0, message: (e as Error).message } },
+      }));
+      message.error('测试失败');
     } finally {
-      setTesting(false);
+      setTestingMap(prev => ({ ...prev, [endpointType]: false }));
     }
   };
 
-  const handleCreate = async (apiType: ApiProviderType) => {
-    try {
-      const group = config?.groups.find(g => g.apiType === apiType);
-      if (!group) return;
-
-      const existing = group.profiles.map(p => p.name);
-      let name = DEFAULT_PROFILE_NAME;
-      let i = 2;
-      while (existing.includes(name)) {
-        name = `default ${i}`;
-        i++;
-      }
-
-      await createProfile(apiType, {
-        name,
-        upstreamBaseUrl: getDefaultBaseUrl(apiType),
-        apiKey: '',
-      });
-
-      // 重新加载配置
-      const newConfig = await getProxyConfig();
-      setConfig(newConfig);
-
-      // 找到新创建的 profile（最后一个）
-      const newGroup = newConfig.groups.find(g => g.apiType === apiType);
-      const newProfile = newGroup?.profiles[newGroup.profiles.length - 1];
-      if (newProfile) {
-        setSelectedApiType(apiType);
-        setSelectedProfileId(newProfile.id);
-        setActiveGroups([apiType]); // 展开该分组，折叠其他
-      }
-
-      message.success(`已创建 ${name}`);
-    } catch {
-      message.error('创建失败');
-    }
-  };
-
-  const addProxyMenuItems: MenuProps['items'] = [
-    {
-      key: 'anthropic-messages',
-      label: (
-        <div className="flex items-center gap-2 text-text-primary">
-          <ProviderIcon type="anthropic-messages" size={16} />
-          <span>Anthropic Messages</span>
-        </div>
-      ),
-    },
-    {
-      key: 'openai-chat',
-      label: (
-        <div className="flex items-center gap-2 text-text-primary">
-          <ProviderIcon type="openai-chat" size={16} />
-          <span>OpenAI Chat</span>
-        </div>
-      ),
-    },
-    {
-      key: 'openai-responses',
-      label: (
-        <div className="flex items-center gap-2 text-text-primary">
-          <ProviderIcon type="openai-responses" size={16} />
-          <span>OpenAI Responses</span>
-        </div>
-      ),
-    },
-  ];
-
-  const handleRename = async () => {
-    if (!nameInput.trim() || nameInput === getCurrentProfileName()) {
-      setEditingName(false);
-      return;
-    }
-    try {
-      await renameProfile(selectedApiType, selectedProfileId, nameInput.trim());
-      // 保持当前选中状态，只更新配置数据
-      const currentApiType = selectedApiType;
-      const currentProfileId = selectedProfileId;
-      await loadConfig();
-      // 恢复之前的选中状态
-      setSelectedApiType(currentApiType);
-      setSelectedProfileId(currentProfileId);
-      message.success('已重命名');
-    } catch {
-      message.error('重命名失败');
-    } finally {
-      setEditingName(false);
-    }
-  };
-
-  const handleDelete = async () => {
-    const group = config?.groups.find(g => g.apiType === selectedApiType);
-    if (!group || group.profiles.length <= 1) {
-      message.warning('至少保留一个代理配置');
-      return;
-    }
-    if (!window.confirm(`确定要删除「${getCurrentProfileName()}」吗？`)) return;
-
-    try {
-      await deleteProfile(selectedApiType, selectedProfileId);
-      message.success('已删除');
-      await loadConfig();
-    } catch {
-      message.error('删除失败');
-    }
-  };
-
-  const handleCopyEnv = () => {
-    const port = config?.proxyPort ?? DEFAULT_PROXY_PORT;
-    const envVar = getEnvVarName(selectedApiType);
-    const envCmd = `export ${envVar}=http://127.0.0.1:${port}`;
-    navigator.clipboard.writeText(envCmd).then(() => {
-      message.success('已复制到剪贴板');
+  const handleCopyAccessUrl = (name: string) => {
+    const url = `http://127.0.0.1:${proxyPort}/api/${name}`;
+    navigator.clipboard.writeText(url).then(() => {
+      message.success('已复制接入地址');
     }).catch(() => {
       message.error('复制失败');
     });
   };
 
-  const getCurrentProfileName = () => {
-    const group = config?.groups.find(g => g.apiType === selectedApiType);
-    return group?.profiles.find(p => p.id === selectedProfileId)?.name ?? '';
+  const updateFormData = (name: string, field: EndpointType, value: string | null) => {
+    setFormData(prev => {
+      const current = prev[name] || { endpoints: {} as Record<EndpointType, string | null> };
+      return { ...prev, [name]: { ...current, endpoints: { ...current.endpoints, [field]: value } } };
+    });
   };
 
-  const isActive = () => {
-    const group = config?.groups.find(g => g.apiType === selectedApiType);
-    return selectedProfileId === group?.activeProfileId;
-  };
+  const providerNames = new Set(providers.map(p => p.name));
 
-  const getDefaultBaseUrl = (apiType: ApiProviderType): string => {
-    return DEFAULT_UPSTREAM_URLS[apiType];
-  };
+  const renderPresetPanel = () => (
+    <div className="h-full flex flex-col">
+      {/* 标题栏 */}
+      <div className="flex items-center gap-2 pb-3">
+        <Button
+          type="text"
+          size="small"
+          icon={<ArrowLeftOutlined />}
+          onClick={() => { setShowPresetPanel(false); setShowCustomInput(false); setCustomNameInput(''); }}
+        />
+        <span className="text-[15px] font-[510] text-text-primary">选择供应商</span>
+      </div>
 
-  const getEnvVarName = (apiType: ApiProviderType): string => {
-    return ENV_VAR_NAMES[apiType];
-  };
+      {/* 预设网格 */}
+      <div className="flex-1 overflow-y-auto">
+        {(['official', 'community'] as const).map(category => {
+          const items = PROVIDER_PRESETS.filter(p => p.category === category);
+          if (items.length === 0) return null;
+          return (
+            <div key={category} className="mb-4">
+              <div className="text-[11px] font-[510] uppercase tracking-wide text-text-quaternary px-1 mb-2">
+                {category === 'official' ? '官方' : '社区'}
+              </div>
+              <div className="grid grid-cols-3 gap-2">
+                {items.map(preset => {
+                  const alreadyAdded = providerNames.has(preset.name);
+                  return (
+                    <div
+                      key={preset.name}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-md border border-border-subtle transition-colors ${
+                        alreadyAdded
+                          ? 'opacity-50 cursor-default bg-bg-surface/30'
+                          : 'cursor-pointer bg-bg-surface/50 hover:bg-bg-elevated hover:border-brand-accent/40'
+                      }`}
+                      onClick={alreadyAdded ? undefined : () => handleCreateFromPreset(preset)}
+                    >
+                      <ProviderIcon providerName={preset.name} size={20} avatar />
+                      <span className="text-[13px] text-text-primary truncate">{preset.label}</span>
+                      {alreadyAdded && (
+                        <CheckOutlined className="text-xs text-success ml-auto" />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
 
-  const renderProfileItem = (profile: SafeProxyProfile, apiType: ApiProviderType) => {
-    const group = config?.groups.find(g => g.apiType === apiType);
-    const isActiveProfile = profile.id === group?.activeProfileId;
-    const isSelected = selectedApiType === apiType && selectedProfileId === profile.id;
+        {/* 底部：自定义供应商 */}
+        <div className="mt-4 pt-3 border-t border-border-subtle">
+          {!showCustomInput ? (
+            <Button
+              type="dashed"
+              block
+              onClick={() => setShowCustomInput(true)}
+            >
+              自定义供应商
+            </Button>
+          ) : (
+            <div className="flex items-center gap-2">
+              <Input
+                size="small"
+                value={customNameInput}
+                onChange={e => setCustomNameInput(e.target.value)}
+                onPressEnter={handleCreateCustom}
+                placeholder="输入自定义名称"
+                className="flex-1"
+                autoFocus
+              />
+              <Button
+                size="small"
+                type="primary"
+                onClick={handleCreateCustom}
+                loading={loading}
+              >
+                确认
+              </Button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  const renderProviderCard = (p: Provider) => {
+    const isExpanded = expanded === p.name;
+    const isEditing = editingName === p.name;
+    const data = formData[p.name] || { endpoints: {} as Record<EndpointType, string | null> };
+    const preset = getPresetByName(p.name);
+    // 已配置的 endpoint 列表（按 ENDPOINT_TYPES 顺序）
+    const configuredEndpoints = ENDPOINT_TYPES.filter(et => data.endpoints[et]);
 
     return (
       <div
-        key={profile.id}
-        onClick={() => handleSelectProfile(apiType, profile.id)}
-        className={`flex items-center gap-2 px-3 py-2 mb-1 rounded-md cursor-pointer text-[15px] transition-colors ${
-          isSelected
-            ? 'bg-bg-elevated border-l-2 border-l-brand-accent'
-            : 'border-l-2 border-l-transparent hover:bg-bg-surface'
+        key={p.name}
+        className={`relative flex flex-col items-center gap-1.5 p-3 rounded-md border transition-colors cursor-pointer ${
+          isExpanded
+            ? 'bg-bg-elevated border-brand-accent/50'
+            : 'bg-bg-surface/50 border-border-subtle hover:bg-bg-elevated hover:border-brand-accent/40'
         }`}
+        onClick={() => handleExpand(p.name)}
       >
-        {isActiveProfile && (
-          <span className="text-success text-[13px] [&_.anticon]:!text-success">
-            <CheckCircleOutlined />
+        {/* 删除按钮 */}
+        <Button
+          type="text"
+          size="small"
+          icon={<DeleteOutlined />}
+          danger
+          onClick={e => { e.stopPropagation(); handleDelete(p.name); }}
+          className="!absolute !top-1 !right-1 !text-error/60 hover:!text-error !p-0 !w-5 !h-5"
+        />
+
+        <ProviderIcon providerName={p.name} size={24} avatar />
+        {isEditing ? (
+          <Input
+            size="small"
+            value={nameInput}
+            onChange={e => setNameInput(e.target.value)}
+            onPressEnter={() => handleRenameCommit(p.name)}
+            onBlur={() => handleRenameCommit(p.name)}
+            className="!w-[100px]"
+            autoFocus
+            onClick={e => e.stopPropagation()}
+          />
+        ) : preset ? (
+          <span className="text-[12px] font-[510] text-text-primary truncate max-w-full">{preset.label}</span>
+        ) : (
+          <span
+            className="text-[12px] font-[510] text-text-primary truncate max-w-full flex items-center gap-1"
+            onClick={e => { e.stopPropagation(); handleRenameStart(p.name); }}
+            title="点击重命名"
+          >
+            {p.name}
+            <EditOutlined className="text-[10px] text-text-quaternary" />
           </span>
         )}
-        <span className={`flex-1 truncate ${isSelected ? 'font-[510] text-text-primary' : 'text-text-secondary'}`}>
-          {profile.name}
-        </span>
-        <ProviderIcon type={apiType} size={18} className="text-text-secondary" />
+        {configuredEndpoints.length > 0 && (
+          <div className="flex items-center gap-1.5 mt-0.5">
+            {configuredEndpoints.map(et => {
+              // 被修改过：preset 存在且当前值 !== 默认值
+              const modified = !!preset && preset.endpoints[et] !== null && data.endpoints[et] !== preset.endpoints[et];
+              return (
+                <span key={et} className="relative inline-flex">
+                  <ProtocolIcon type={et} size={12} />
+                  {modified && (
+                    <span
+                      className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-warning ring-1 ring-bg-elevated"
+                      title="URL 已被修改过"
+                    />
+                  )}
+                </span>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   };
 
-  const renderGroupHeader = (apiType: ApiProviderType) => {
+  const renderExpandedEditor = (p: Provider) => {
+    const data = formData[p.name] || { endpoints: {} as Record<EndpointType, string | null> };
+    const results = testResults[p.name] || {};
+    const preset = getPresetByName(p.name);
+
     return (
-      <div className="flex items-center gap-2 text-[15px] font-[510]">
-        <ProviderIcon type={apiType} size={18} className="text-text-secondary" />
-        <span className="text-text-primary">{API_TYPE_LABELS[apiType]}</span>
+      <div key={`${p.name}-editor`} className="flex flex-col gap-2">
+        {/* 下游块 */}
+        <div className="p-3">
+          <div className="flex items-center gap-2 text-[15px]">
+            <span className="text-text-secondary w-[160px] shrink-0">下游接入地址</span>
+            <code className="text-text-primary font-mono bg-bg-input px-2 py-1 rounded">
+              http://127.0.0.1:{proxyPort}/api/{p.name}
+            </code>
+            <Button
+              type="text"
+              size="small"
+              icon={<CopyOutlined />}
+              onClick={() => handleCopyAccessUrl(p.name)}
+              className="!text-text-quaternary hover:!text-text-primary"
+            />
+          </div>
+        </div>
+
+        {/* 上游块：灰底 */}
+        <div className="p-3 rounded-md border border-border-subtle bg-bg-surface/30">
+          <div className="flex items-center gap-2 text-[15px] mb-2">
+            <span className="text-text-secondary">上游接入地址</span>
+          </div>
+
+          {/* 三个 Endpoint */}
+          <div className="space-y-2">
+            {ENDPOINT_TYPES.map(et => {
+              const val = data.endpoints[et];
+              const result = results[et];
+              const isTesting = testingMap[et];
+              const defaultUrl = preset?.endpoints[et];
+              const showReset = preset && defaultUrl !== null && val !== defaultUrl && val !== null;
+              const hasUrlError = blurredFields.has(p.name + '.' + et) && val && !isValidUrl(val);
+              return (
+                <div key={et}>
+                  <div className="flex items-center gap-2">
+                  <span className={`inline-flex items-center gap-1.5 text-[13px] font-[510] shrink-0 w-[160px] ${getProtocolColor(et).text}`}>
+                    <ProtocolIcon type={et} size={12} noColor />
+                    {ENDPOINT_LABELS[et]}
+                  </span>
+                  <Input
+                    value={val ?? ''}
+                    onChange={e => updateFormData(p.name, et, e.target.value || null)}
+                    onBlur={() => {
+                      setBlurredFields(prev => new Set(prev).add(p.name + '.' + et));
+                      handleAutoSave(p.name);
+                    }}
+                    placeholder={val === null ? '不支持（留空）' : '输入上游 URL'}
+                    status={hasUrlError ? "error" : undefined}
+                    className="flex-1"
+                  />
+                  {showReset && defaultUrl && (
+                    <Tooltip
+                      title={
+                        <div className="text-[12px]">
+                          <div>默认值:</div>
+                          <div className="font-mono">{defaultUrl}</div>
+                          <div className="mt-1 opacity-70">点击还原</div>
+                        </div>
+                      }
+                    >
+                      <span
+                        className="text-xs text-warning cursor-pointer hover:text-warning/80 select-none"
+                        onClick={() => updateFormData(p.name, et, defaultUrl)}
+                      >
+                        ●
+                      </span>
+                    </Tooltip>
+                  )}
+                  {val && (
+                    <Button
+                      size="small"
+                      loading={isTesting}
+                      onClick={() => handleTest(p.name, et)}
+                    >
+                      测试
+                    </Button>
+                  )}
+                  {result && (
+                    <div className={`flex items-center gap-1 text-xs ${
+                      result.ok ? 'text-success' : 'text-warning'
+                    }`}>
+                      {result.ok ? <CheckCircleOutlined /> : <ExclamationCircleOutlined />}
+                      <span>{result.ok ? `${result.duration}ms` : result.message.slice(0, 20)}</span>
+                      <Button
+                        type="text"
+                        size="small"
+                        icon={<CloseOutlined />}
+                        onClick={() => setTestResults(prev => ({
+                          ...prev,
+                          [p.name]: { ...prev[p.name], [et]: null },
+                        }))}
+                        className="!text-current hover:!opacity-70"
+                      />
+                    </div>
+                  )}
+                  </div>
+                  {hasUrlError && (
+                    <div className="ml-[168px] text-[12px] text-error mt-0.5">
+                      请输入有效的 HTTP(S) URL
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
       </div>
     );
+  };
+
+  // 把 providers 按 category 分桶
+  const groupedProviders = (() => {
+    const official: Provider[] = [];
+    const community: Provider[] = [];
+    const custom: Provider[] = [];
+    for (const p of providers) {
+      const preset = getPresetByName(p.name);
+      if (!preset) custom.push(p);
+      else if (preset.category === 'official') official.push(p);
+      else community.push(p);
+    }
+    return { official, community, custom };
+  })();
+
+  const renderGroupedProviderList = () => {
+    const groups: { key: 'official' | 'community' | 'custom'; label: string; items: Provider[] }[] = [
+      { key: 'official', label: '官方', items: groupedProviders.official },
+      { key: 'community', label: '社区', items: groupedProviders.community },
+      { key: 'custom', label: '我的', items: groupedProviders.custom },
+    ];
+    return groups.map((g, idx) => {
+      if (g.items.length === 0) return null;
+      const expandedInGroup = g.items.find(p => p.name === expanded);
+      return (
+        <div key={g.key} className={idx === 0 ? '' : 'mt-4 pt-3 border-t border-border-subtle'}>
+          <div className="text-[11px] font-[510] uppercase tracking-wide text-text-quaternary px-1 mb-2">
+            {g.label}
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {g.items.map(p => renderProviderCard(p))}
+          </div>
+          {expandedInGroup && (
+            <div className="mt-2">{renderExpandedEditor(expandedInGroup)}</div>
+          )}
+        </div>
+      );
+    });
   };
 
   return (
     <Modal
-      title={<span className="text-text-primary text-[17px] font-[510]">代理配置</span>}
+      title={<span className="text-text-primary text-[17px] font-[510]">供应商配置</span>}
       open={open}
-      onCancel={onClose}
+      onCancel={handleClose}
       width={SETTINGS_MODAL_WIDTH}
       footer={null}
       destroyOnHidden
     >
-      {/* 左右结构 */}
-      <div className="flex h-[420px]">
-        {/* 左侧：分组可折叠代理列表 */}
-        <div className="w-[260px] border-r border-border-subtle pr-4 pt-2 flex flex-col">
-          <div className="flex-1 overflow-y-auto">
-            <Collapse
-              activeKey={activeGroups}
-              onChange={handleGroupChange}
-              className="!bg-transparent !border-0 [&_.ant-collapse-header]:!bg-bg-surface/50 [&_.ant-collapse-content]:!bg-bg-surface/30 [&_.ant-collapse-content-box]:!p-0 !text-text-primary"
-              expandIconPosition="end"
-              items={config?.groups.map(group => ({
-                key: group.apiType,
-                label: renderGroupHeader(group.apiType),
-                children: (
-                  <div className="px-2 pb-2">
-                    {group.profiles.map(p => renderProfileItem(p, group.apiType))}
-                  </div>
-                ),
-              }))}
-            />
-          </div>
-
-          <Dropdown
-            menu={{
-              items: addProxyMenuItems,
-              onClick: ({ key }) => handleCreate(key as ApiProviderType),
-              className: '!bg-bg-surface !border-border-subtle',
-            }}
-            placement="topLeft"
-            rootClassName="[&_.ant-dropdown-menu]:!bg-bg-surface [&_.ant-dropdown-menu-item]:!text-text-primary [&_.ant-dropdown-menu-item:hover]:!bg-bg-elevated"
-          >
-            <Button
-              type="dashed"
-              icon={<PlusOutlined />}
-              block
-              size="small"
-              className="mt-2"
-            >
-              添加代理
-            </Button>
-          </Dropdown>
-        </div>
-
-        {/* 右侧：配置编辑 */}
-        <div className="flex-1 pl-4 pt-2 pb-2 flex flex-col">
-          <div className="flex-1 overflow-y-auto border border-border-subtle rounded-lg bg-bg-surface/50 p-4">
-          {/* 标题行：名称 + 使用按钮 */}
-          <div className="flex items-center mb-4">
-            {editingName ? (
-              <Input
-                size="small"
-                value={nameInput}
-                onChange={e => setNameInput(e.target.value)}
-                onPressEnter={handleRename}
-                onBlur={handleRename}
-                className="!w-[160px] !mr-2"
-                autoFocus
-              />
-            ) : (
-              <span
-                className="text-lg font-[510] text-text-primary cursor-pointer flex items-center gap-1 hover:text-brand-accent transition-colors"
-                onClick={() => { setEditingName(true); setNameInput(getCurrentProfileName()); }}
-                title="点击重命名"
-              >
-                {getCurrentProfileName()}
-                <EditOutlined className="text-[13px] text-text-quaternary" />
-              </span>
-            )}
-
-            <div className="flex-1" />
-
-            {!isActive() && (
-              <Button
-                type="primary"
-                icon={<ThunderboltOutlined />}
-                onClick={handleActivate}
-                size="small"
-              >
-                使用
-              </Button>
-            )}
-            {isActive() && (
-              <span className="text-sm text-success flex items-center gap-1">
-                <CheckCircleOutlined className="text-success" />
-                使用中
-              </span>
-            )}
-          </div>
-
-          <Form form={form} layout="vertical">
-            <Form.Item
-              label="上游地址"
-              name="upstreamBaseUrl"
-              rules={[{ required: true, message: '请输入上游地址' }]}
-              className="mb-4"
-            >
-              <Input placeholder={getDefaultBaseUrl(selectedApiType)} />
-            </Form.Item>
-
-            <Form.Item
-              label={
-                <span>
-                  API Key{' '}
-                  <Tooltip title="上游 API 的认证密钥。留空则使用 Claude CLI 自身配置的密钥">
-                    <ExclamationCircleOutlined className="text-text-quaternary text-xs" />
-                  </Tooltip>
-                </span>
-              }
-              name="apiKey"
-              className="mb-4"
-            >
-              <Input.Password
-                placeholder="sk-ant-...（留空使用 Claude 配置的 key）"
-                className="!bg-black [&_.ant-input]:!bg-black [&_.ant-input]:!text-white [&_.ant-input-suffix]:!text-white/50"
-              />
-            </Form.Item>
-
-            <Form.Item className="mb-2 flex justify-end">
-              <Space>
-                <Button onClick={handleTest} loading={testing}>
-                  测试连接
-                </Button>
-                <Button type="primary" icon={<SaveOutlined />} onClick={handleSave} loading={saving}>
-                  保存
-                </Button>
-              </Space>
-            </Form.Item>
-
-            {testResult && (
-              <div className={`px-3 py-2 rounded-lg text-[15px] mb-4 border flex items-center justify-between ${
-                testResult.ok
-                  ? 'bg-success/10 border-success/20 text-success'
-                  : 'bg-warning/10 border-warning/20 text-warning'
-              }`}>
-                <span>
-                  {testResult.ok ? '✅' : '⚠️'} {testResult.message}
-                  {testResult.duration > 0 && (
-                    <span className="ml-2 text-text-quaternary">{testResult.duration}ms</span>
-                  )}
-                </span>
-                <Button
-                  type="text"
-                  size="small"
-                  icon={<CloseOutlined />}
-                  onClick={() => setTestResult(null)}
-                  className="!text-current hover:!opacity-70"
-                />
-              </div>
-            )}
-          </Form>
-
-          <Divider className="!my-3 !border-border-subtle" />
-
-          {/* 使用方式 */}
-          <div>
-            <span className="text-[17px] font-[510] text-text-secondary">使用方式</span>
-            <div className="mt-2 px-4 py-2 bg-bg-input rounded-lg border border-border-subtle flex items-center justify-between">
-              <code className="text-sm text-text-secondary font-mono">
-                export {getEnvVarName(selectedApiType)}=http://127.0.0.1:{config?.proxyPort ?? DEFAULT_PROXY_PORT}
-              </code>
-              <Button
-                type="text"
-                size="small"
-                icon={<CopyOutlined />}
-                onClick={handleCopyEnv}
-                className="!text-text-quaternary hover:!text-text-primary"
-              />
+      <div className="h-[420px] flex flex-col">
+        {showPresetPanel ? (
+          renderPresetPanel()
+        ) : (
+          <>
+            {/* 列表区 */}
+            <div className="flex-1 overflow-y-auto pt-2">
+              {loading ? (
+                <div className="flex items-center justify-center h-full text-text-secondary">
+                  加载中...
+                </div>
+              ) : providers.length === 0 ? (
+                <Empty description="暂无供应商" className="my-10" />
+              ) : (
+                renderGroupedProviderList()
+              )}
             </div>
-          </div>
 
-          <Divider className="!my-3 !border-border-subtle" />
-
-          {/* 删除 */}
-          <Button
-            type="text"
-            danger
-            icon={<DeleteOutlined />}
-            onClick={handleDelete}
-            size="small"
-            className="!text-error/60 hover:!text-error"
-          >
-            删除此代理配置
-          </Button>
-          </div>
-        </div>
+            {/* 底部新增按钮 */}
+            <div className="pt-2 border-t border-border-subtle">
+              <Button
+                type="dashed"
+                icon={<PlusOutlined />}
+                block
+                onClick={handleCreate}
+                loading={loading}
+              >
+                新增供应商
+              </Button>
+            </div>
+          </>
+        )}
       </div>
     </Modal>
   );

@@ -4,8 +4,6 @@
  * 中管理所有硬编码值
  */
 
-import type { ApiProviderType } from './types';
-
 // ==================== API 路径 ====================
 export const API_BASE_PATH = '/api';
 
@@ -30,34 +28,6 @@ export const THEME_PRIMARY_COLOR = '#5e6ad2';
 // ==================== 超时/延迟 ====================
 export const DATE_HOVER_DELAY_MS = 1000;
 export const COPIED_FEEDBACK_DURATION_MS = 1500;
-
-// ==================== 默认上游 URL ====================
-export const DEFAULT_UPSTREAM_URLS: Record<ApiProviderType, string> = {
-  'anthropic-messages': 'https://api.anthropic.com',
-  'openai-chat': 'https://api.openai.com',
-  'openai-responses': 'https://api.openai.com',
-};
-
-// ==================== 环境变量名 ====================
-export const ENV_VAR_NAMES: Record<ApiProviderType, string> = {
-  'anthropic-messages': 'ANTHROPIC_BASE_URL',
-  'openai-chat': 'OPENAI_BASE_URL',
-  'openai-responses': 'OPENAI_BASE_URL',
-};
-
-// ==================== 代理拦截的 API 路径 ====================
-export const API_INTERCEPT_PATHS: Record<ApiProviderType, string> = {
-  'anthropic-messages': '/v1/messages',
-  'openai-chat': '/v1/chat/completions',
-  'openai-responses': '/v1/responses',
-};
-
-// ==================== API 路径正则匹配 ====================
-export const API_PATH_REGEX = {
-  ANTHROPIC_MESSAGES: /\/v1\/messages|\/api\/v1\/messages/,
-  OPENAI_CHAT: /\/v1\/(chat\/completions|completions)/,
-  OPENAI_RESPONSES: /\/v1\/responses/,
-} as const;
 
 // ==================== 默认值 ====================
 export const DEFAULT_PROFILE_NAME = 'default';

@@ -2,38 +2,18 @@
  * Lucent 配置管理模块
  *
  * 配置文件: ~/.lucent/config.json
- * 支持多 API 类型分组，每个 group 多 profile 切换，运行时可修改，内存缓存 + 磁盘持久化
+ * 多供应商 + 多端点结构，运行时可修改，内存缓存 + 磁盘持久化
  */
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
-import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_UPSTREAM_URLS, API_KEY_MASK_PREFIX, API_KEY_MASK_SUFFIX, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS } from './constants.js';
-import type { ApiProviderType } from './types.js';
+import { randomUUID } from 'node:crypto';
+import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS } from './constants.js';
+import { ENDPOINT_TYPES, isEndpointType, isValidProviderName, PRESET_NAMES } from './types.js';
+import type { EndpointType, Provider } from './types.js';
 import createDebug from 'debug';
 const log = createDebug('lucent:config');
 
 // ==================== 类型定义 ====================
-
-// ApiProviderType 已移至 types.ts，此处重新导出以保持向后兼容
-export type { ApiProviderType };
-
-/**
- * 代理配置 profile
- */
-export interface ProxyProfile {
-  id: string;            // 简单递增 ID，如 '1', '2', '3'
-  name: string;
-  upstreamBaseUrl: string;
-  apiKey: string;
-}
-
-/**
- * 代理分组（按 API 类型分组）
- */
-export interface ProxyGroup {
-  apiType: ApiProviderType;
-  profiles: ProxyProfile[];
-  activeProfileId: string;
-}
 
 /**
  * 全局代理配置
@@ -42,7 +22,7 @@ export interface ProxyConfig {
   host: string;          // 服务器监听地址，默认 127.0.0.1
   proxyPort: number;     // 代理端口，默认 7048
   webPort: number;       // Web UI 端口，默认 7049
-  groups: ProxyGroup[];
+  providers: Provider[];
   // 可选的服务器配置（环境变量优先）
   logDir?: string;
   logRetentionDays?: number;
@@ -62,55 +42,32 @@ export interface ResolvedConfig {
   logRetentionDays: number;
   maxLogFileSize: number;
   maxLogFiles: number;
-  groups: ProxyGroup[];
+  providers: Provider[];
 }
 
-// 旧格式（用于数据迁移）
-interface LegacyConfig {
-  upstreamBaseUrl: string;
-  proxyPort: number;
-  apiKey: string;
+// ==================== 默认配置 ====================
+
+/**
+ * 构造默认配置（含一个 anthropic 种子 provider）
+ */
+function buildDefaultConfig(): ProxyConfig {
+  return {
+    host: DEFAULT_SERVER_HOST,
+    proxyPort: DEFAULT_PROXY_PORT,
+    webPort: DEFAULT_WEB_PORT,
+    providers: [
+      {
+        id: randomUUID(),
+        name: 'anthropic',
+        endpoints: {
+          'openai-chat': null,
+          'openai-responses': null,
+          'anthropic-messages': 'https://api.anthropic.com',
+        },
+      },
+    ],
+  };
 }
-
-// 中间格式（当前版本的格式）
-interface MiddleFormatConfig {
-  proxyPort: number;
-  profiles: Array<{
-    name: string;
-    upstreamBaseUrl: string;
-    apiKey: string;
-    provider?: 'anthropic' | 'openai';
-  }>;
-  activeProfile: string;
-}
-
-// ==================== 常量 ====================
-
-
-const DEFAULT_GROUPS: ProxyGroup[] = [
-  {
-    apiType: 'anthropic-messages',
-    profiles: [{ id: '1', name: 'Claude 官方', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['anthropic-messages'], apiKey: '' }],
-    activeProfileId: '1',
-  },
-  {
-    apiType: 'openai-chat',
-    profiles: [{ id: '1', name: 'OpenAI Chat', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-chat'], apiKey: '' }],
-    activeProfileId: '1',
-  },
-  {
-    apiType: 'openai-responses',
-    profiles: [{ id: '1', name: 'OpenAI Responses', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-responses'], apiKey: '' }],
-    activeProfileId: '1',
-  },
-];
-
-const DEFAULT_CONFIG: ProxyConfig = {
-  host: DEFAULT_SERVER_HOST,
-  proxyPort: DEFAULT_PROXY_PORT,
-  webPort: DEFAULT_WEB_PORT,
-  groups: DEFAULT_GROUPS,
-};
 
 // ==================== 内存缓存 ====================
 
@@ -125,168 +82,85 @@ function ensureDir(): void {
 }
 
 /**
- * 检测是否为旧格式配置（最早的格式）
+ * 校验单个 provider 的合法性（不包括跨 provider 的 name 唯一性）
  */
-function isLegacyConfig(data: unknown): data is LegacyConfig {
-  return (
-    typeof data === 'object' &&
-    data !== null &&
-    !('profiles' in data) &&
-    'upstreamBaseUrl' in data
-  );
+function validateProvider(p: unknown, index: number): asserts p is Provider {
+  if (!p || typeof p !== 'object') {
+    throw new Error(`Provider[${index}] is not an object`);
+  }
+  const prov = p as Record<string, unknown>;
+  if (typeof prov.id !== 'string' || prov.id.length === 0) {
+    throw new Error(`Provider[${index}].id must be a non-empty string`);
+  }
+  if (typeof prov.name !== 'string' || !isValidProviderName(prov.name)) {
+    throw new Error(`Provider[${index}].name must match [a-zA-Z0-9_-]{1,32}, got: ${JSON.stringify(prov.name)}`);
+  }
+  // presetName 校验
+  if (prov.presetName !== undefined && prov.presetName !== null) {
+    if (typeof prov.presetName !== 'string' || !PRESET_NAMES.has(prov.presetName)) {
+      throw new Error(`Provider[${index}].presetName is not a valid preset name: ${JSON.stringify(prov.presetName)}`);
+    }
+    if (prov.name !== prov.presetName) {
+      throw new Error(`Provider[${index}].name must equal presetName when presetName is set, got name=${JSON.stringify(prov.name)}, presetName=${JSON.stringify(prov.presetName)}`);
+    }
+  }
+  if (!prov.endpoints || typeof prov.endpoints !== 'object') {
+    throw new Error(`Provider[${index}].endpoints must be an object`);
+  }
+  const endpoints = prov.endpoints as Record<string, unknown>;
+  // 三个 endpoint 键必须齐全（允许 null）
+  for (const key of ENDPOINT_TYPES) {
+    if (!(key in endpoints)) {
+      throw new Error(`Provider[${index}].endpoints missing key: ${key}`);
+    }
+    const v = endpoints[key];
+    if (v !== null && typeof v !== 'string') {
+      throw new Error(`Provider[${index}].endpoints.${key} must be string or null, got: ${typeof v}`);
+    }
+  }
+  // 不允许多余的键（必须严格三个）
+  for (const key of Object.keys(endpoints)) {
+    if (!isEndpointType(key)) {
+      throw new Error(`Provider[${index}].endpoints has unknown key: ${key}`);
+    }
+  }
 }
 
 /**
- * 旧格式迁移到新格式
+ * 校验 providers 数组：每个 provider 合法 + name 全局唯一
  */
-function migrateLegacyConfig(legacy: LegacyConfig): ProxyConfig {
-  // 旧格式默认当作 anthropic-messages 类型
-  return {
-    host: DEFAULT_SERVER_HOST,
-    proxyPort: legacy.proxyPort || DEFAULT_PROXY_PORT,
-    webPort: DEFAULT_WEB_PORT,
-    groups: [
-      {
-        apiType: 'anthropic-messages',
-        profiles: [{ id: '1', name: '默认', upstreamBaseUrl: legacy.upstreamBaseUrl, apiKey: legacy.apiKey ?? '' }],
-        activeProfileId: '1',
-      },
-      {
-        apiType: 'openai-chat',
-        profiles: [{ id: '1', name: 'OpenAI Chat', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-chat'], apiKey: '' }],
-        activeProfileId: '1',
-      },
-      {
-        apiType: 'openai-responses',
-        profiles: [{ id: '1', name: 'OpenAI Responses', upstreamBaseUrl: DEFAULT_UPSTREAM_URLS['openai-responses'], apiKey: '' }],
-        activeProfileId: '1',
-      },
-    ],
-  };
-}
-
-/**
- * 检测是否为旧的新格式配置（profiles 中包含 proxyPort）
- */
-function isOldNewFormat(data: unknown): data is { profiles: Array<{ proxyPort?: number }>; activeProfile?: string } {
-  return (
-    typeof data === 'object' &&
-    data !== null &&
-    'profiles' in data &&
-    Array.isArray(data.profiles) &&
-    data.profiles.length > 0 &&
-    'proxyPort' in data.profiles[0]
-  );
-}
-
-/**
- * 迁移旧的新格式配置（profiles 中有 proxyPort）到中间格式
- */
-function migrateOldNewFormat(old: { profiles: Array<{ proxyPort?: number; name?: string; upstreamBaseUrl?: string; apiKey?: string; provider?: 'anthropic' | 'openai' }>; activeProfile?: string }): MiddleFormatConfig {
-  // 从第一个 profile 中提取端口，或使用默认值
-  const proxyPort = old.profiles[0]?.proxyPort || DEFAULT_PROXY_PORT;
-
-  // 移除每个 profile 中的 proxyPort
-  const profiles: MiddleFormatConfig['profiles'] = old.profiles.map(({ proxyPort: _, ...rest }) => ({
-    name: rest.name || '默认',
-    upstreamBaseUrl: rest.upstreamBaseUrl || '',
-    apiKey: rest.apiKey || '',
-    provider: rest.provider,
-  }));
-
-  return {
-    proxyPort,
-    activeProfile: old.activeProfile || profiles[0]?.name || '默认',
-    profiles,
-  };
-}
-
-/**
- * 检测是否为中间格式（当前的扁平 profiles 格式）
- */
-function isMiddleFormat(data: unknown): data is MiddleFormatConfig {
-  return (
-    typeof data === 'object' &&
-    data !== null &&
-    'profiles' in data &&
-    'proxyPort' in data &&
-    !('groups' in data)
-  );
-}
-
-/**
- * 中间格式迁移到新的分组格式
- * 根据 provider 字段或 upstreamBaseUrl 判断 API 类型
- */
-function migrateMiddleFormat(middle: MiddleFormatConfig): ProxyConfig {
-  const groupsMap = new Map<ApiProviderType, ProxyGroup>();
-
-  // 初始化默认 groups
-  DEFAULT_GROUPS.forEach(g => {
-    groupsMap.set(g.apiType, { ...g, profiles: [] });
+function validateProviders(providers: unknown): asserts providers is Provider[] {
+  if (!Array.isArray(providers)) {
+    throw new Error('providers must be an array');
+  }
+  const names = new Set<string>();
+  providers.forEach((p, i) => {
+    validateProvider(p, i);
+    if (names.has(p.name)) {
+      throw new Error(`Duplicate provider name: ${p.name}`);
+    }
+    names.add(p.name);
   });
-
-  // 遍历 profiles，根据 provider 或 upstreamBaseUrl 分类
-  middle.profiles.forEach((profile, index) => {
-    const id = String(index + 1);
-    const newProfile: ProxyProfile = {
-      id,
-      name: profile.name,
-      upstreamBaseUrl: profile.upstreamBaseUrl,
-      apiKey: profile.apiKey,
-    };
-
-    // 判断 API 类型
-    let apiType: ApiProviderType;
-    if (profile.provider === 'anthropic' || profile.upstreamBaseUrl.includes('anthropic.com')) {
-      apiType = 'anthropic-messages';
-    } else if (profile.provider === 'openai' || profile.upstreamBaseUrl.includes('openai.com')) {
-      // 默认归入 openai-chat
-      apiType = 'openai-chat';
-    } else {
-      // 未知类型，默认归入 anthropic-messages
-      apiType = 'anthropic-messages';
-    }
-
-    const group = groupsMap.get(apiType);
-    if (group) {
-      group.profiles.push(newProfile);
-      // 如果这是激活的 profile，设置 activeProfileId
-      if (profile.name === middle.activeProfile && group.profiles.length === 1) {
-        group.activeProfileId = id;
-      }
-    }
-  });
-
-  // 确保每个 group 至少有一个默认 profile
-  groupsMap.forEach(group => {
-    if (group.profiles.length === 0) {
-      const defaultGroup = DEFAULT_GROUPS.find(g => g.apiType === group.apiType);
-      if (defaultGroup) {
-        group.profiles = [{ ...defaultGroup.profiles[0] }];
-      }
-    }
-    // 如果没有 activeProfileId 或对应的 profile 不存在，设置为第一个
-    if (!group.profiles.find(p => p.id === group.activeProfileId)) {
-      group.activeProfileId = group.profiles[0]?.id || '1';
-    }
-  });
-
-  return {
-    host: DEFAULT_SERVER_HOST,
-    proxyPort: middle.proxyPort || DEFAULT_PROXY_PORT,
-    webPort: DEFAULT_WEB_PORT,
-    groups: Array.from(groupsMap.values()),
-  };
 }
 
 /**
- * 生成下一个 profile ID
+ * 校验完整的 ProxyConfig 结构（不允许字段缺失）
  */
-function generateNextProfileId(profiles: ProxyProfile[]): string {
-  if (profiles.length === 0) return '1';
-  const maxId = Math.max(...profiles.map(p => parseInt(p.id, 10) || 0));
-  return String(maxId + 1);
+function validateConfig(cfg: unknown): asserts cfg is ProxyConfig {
+  if (!cfg || typeof cfg !== 'object') {
+    throw new Error('config must be an object');
+  }
+  const c = cfg as Record<string, unknown>;
+  if (typeof c.host !== 'string' || c.host.length === 0) {
+    throw new Error('config.host must be a non-empty string');
+  }
+  if (typeof c.proxyPort !== 'number' || !Number.isInteger(c.proxyPort)) {
+    throw new Error('config.proxyPort must be an integer');
+  }
+  if (typeof c.webPort !== 'number' || !Number.isInteger(c.webPort)) {
+    throw new Error('config.webPort must be an integer');
+  }
+  validateProviders(c.providers);
 }
 
 // ==================== 核心 API ====================
@@ -314,13 +188,12 @@ export function resolveEffectiveConfig(): ResolvedConfig {
     logRetentionDays:    parseEnvNumber('LUCENT_LOG_RETENTION_DAYS', raw.logRetentionDays ?? LOG_RETENTION_DAYS),
     maxLogFileSize:      parseEnvNumber('LUCENT_MAX_LOG_FILE_SIZE',  raw.maxLogFileSize   ?? MAX_LOG_FILE_SIZE),
     maxLogFiles:         parseEnvNumber('LUCENT_MAX_LOG_FILES',      raw.maxLogFiles      ?? MAX_LOG_FILES),
-    groups:              raw.groups,
+    providers:           raw.providers,
   };
 }
 
 /**
  * 环境变量覆盖 host（CLI --host 选项通过 LUCENT_HOST 传递）
- * @deprecated 使用 resolveEffectiveConfig() 代替
  */
 function applyHostOverride(config: ProxyConfig): void {
   if (!config.host) {
@@ -332,55 +205,43 @@ function applyHostOverride(config: ProxyConfig): void {
 }
 
 /**
+ * 写入默认配置到磁盘并缓存
+ */
+function initDefaultConfig(): ProxyConfig {
+  const def = buildDefaultConfig();
+  ensureDir();
+  writeFileSync(CONFIG_PATH, JSON.stringify(def, null, 2), 'utf-8');
+  cachedConfig = def;
+  applyHostOverride(cachedConfig);
+  log('初始化默认配置: providers=%d', def.providers.length);
+  return cachedConfig;
+}
+
+/**
  * 加载配置（从磁盘读取）
+ *
+ * 行为：
+ * - 文件不存在 → 创建默认配置并写盘
+ * - 文件存在但 JSON 解析失败或校验失败 → 创建默认配置并写盘（旧的不要了）
+ * - 文件合法 → 返回
  */
 export function loadConfig(): ProxyConfig {
-  try {
-    if (existsSync(CONFIG_PATH)) {
-      const raw = readFileSync(CONFIG_PATH, 'utf-8');
-      const parsed = JSON.parse(raw);
-
-      if (isLegacyConfig(parsed)) {
-        const migrated = migrateLegacyConfig(parsed);
-        saveConfig(migrated);
-        log('迁移旧格式配置 (legacy)');
-        cachedConfig = migrated;
-        applyHostOverride(cachedConfig);
-        return cachedConfig;
-      }
-
-      if (isOldNewFormat(parsed)) {
-        const middle = migrateOldNewFormat(parsed);
-        const migrated = migrateMiddleFormat(middle);
-        saveConfig(migrated);
-        log('迁移旧的新格式配置 (old-new)');
-        cachedConfig = migrated;
-        applyHostOverride(cachedConfig);
-        return cachedConfig;
-      }
-
-      if (isMiddleFormat(parsed)) {
-        const migrated = migrateMiddleFormat(parsed);
-        saveConfig(migrated);
-        log('迁移中间格式配置 (middle)');
-        cachedConfig = migrated;
-        applyHostOverride(cachedConfig);
-        return cachedConfig;
-      }
-
-      if ('groups' in parsed && 'proxyPort' in parsed) {
-        cachedConfig = parsed as ProxyConfig;
-        applyHostOverride(cachedConfig);
-        return cachedConfig;
-      }
-    }
-  } catch (error) {
-    log('加载配置失败，使用默认值: %O', error);
+  if (!existsSync(CONFIG_PATH)) {
+    log('配置文件不存在，初始化默认配置');
+    return initDefaultConfig();
   }
 
-  cachedConfig = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as ProxyConfig;
-  applyHostOverride(cachedConfig);
-  return cachedConfig;
+  try {
+    const raw = readFileSync(CONFIG_PATH, 'utf-8');
+    const parsed = JSON.parse(raw);
+    validateConfig(parsed);
+    cachedConfig = parsed;
+    applyHostOverride(cachedConfig);
+    return cachedConfig;
+  } catch (error) {
+    log('配置文件无效，重置为默认配置: %O', error);
+    return initDefaultConfig();
+  }
 }
 
 /**
@@ -395,157 +256,130 @@ export function getConfig(): ProxyConfig {
 
 /**
  * 保存配置（更新缓存 + 写磁盘）
+ *
+ * 写入前会做完整校验，校验失败会抛出 Error，不会写入坏数据。
  */
 export function saveConfig(config: ProxyConfig): ProxyConfig {
+  validateConfig(config);
   ensureDir();
   cachedConfig = config;
   writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
-  log('配置已保存: %d groups, host=%s, proxyPort=%d', config.groups.length, config.host, config.proxyPort);
+  log('配置已保存: %d providers, host=%s, proxyPort=%d', config.providers.length, config.host, config.proxyPort);
   return config;
 }
 
+// ==================== Provider 查找 ====================
+
 /**
- * 根据 API 类型获取分组
+ * 按 name 查找 provider（精确匹配）
  */
-export function getGroupByApiType(apiType: ApiProviderType): ProxyGroup | null {
-  const config = getConfig();
-  return config.groups.find(g => g.apiType === apiType) || null;
+export function findProviderByName(config: ProxyConfig, name: string): Provider | null {
+  return config.providers.find(p => p.name === name) || null;
 }
 
 /**
- * 获取指定 API 类型的激活 profile
+ * 按 id 查找 provider
  */
-export function getActiveProfileForApiType(apiType: ApiProviderType): ProxyProfile | null {
-  const group = getGroupByApiType(apiType);
-  if (!group) return null;
+export function findProviderById(config: ProxyConfig, id: string): Provider | null {
+  return config.providers.find(p => p.id === id) || null;
+}
 
-  const profile = group.profiles.find(p => p.id === group.activeProfileId);
-  if (profile) return profile;
+// ==================== Provider CRUD ====================
 
-  // activeProfileId 不存在但有 profiles，取第一个
-  if (group.profiles.length > 0) {
-    return group.profiles[0];
+/**
+ * 创建 Provider（自动生成 id）
+ *
+ * 失败抛 Error：name 非法 / name 已存在 / endpoints 非法。
+ */
+export function createProvider(input: Omit<Provider, 'id'>): Provider {
+  const config = getConfig();
+  if (!isValidProviderName(input.name)) {
+    throw new Error(`Invalid provider name: ${JSON.stringify(input.name)}`);
   }
-
-  return null;
-}
-
-/**
- * 切换指定 API 类型的激活 profile
- */
-export function setActiveProfile(apiType: ApiProviderType, profileId: string): ProxyConfig | null {
-  const config = getConfig();
-  const group = config.groups.find(g => g.apiType === apiType);
-  if (!group) return null;
-
-  const exists = group.profiles.some(p => p.id === profileId);
-  if (!exists) return null;
-
-  group.activeProfileId = profileId;
-  return saveConfig(config);
-}
-
-/**
- * 创建新 profile（指定 API 类型）
- */
-export function createProfile(apiType: ApiProviderType, profile: Omit<ProxyProfile, 'id'>): ProxyConfig | null {
-  const config = getConfig();
-  const group = config.groups.find(g => g.apiType === apiType);
-  if (!group) return null;
-
-  // 检查名称是否重复
-  const exists = group.profiles.some(p => p.name === profile.name);
-  if (exists) return null;
-
-  const newProfile: ProxyProfile = {
-    ...profile,
-    id: generateNextProfileId(group.profiles),
-  };
-
-  group.profiles.push(newProfile);
-  return saveConfig(config);
-}
-
-/**
- * 更新 profile（指定 API 类型）
- */
-export function updateProfile(apiType: ApiProviderType, profileId: string, updates: Partial<Omit<ProxyProfile, 'id'>>): ProxyConfig | null {
-  const config = getConfig();
-  const group = config.groups.find(g => g.apiType === apiType);
-  if (!group) return null;
-
-  const idx = group.profiles.findIndex(p => p.id === profileId);
-  if (idx === -1) return null;
-
-  // 不允许改 name 本身（如需改名用 renameProfile）
-  group.profiles[idx] = {
-    ...group.profiles[idx],
-    ...updates,
-    id: profileId, // 保持原 id 不变
-    name: group.profiles[idx].name, // 保持原 name 不变
-  };
-  return saveConfig(config);
-}
-
-/**
- * 重命名 profile（指定 API 类型）
- */
-export function renameProfile(apiType: ApiProviderType, profileId: string, newName: string): ProxyConfig | null {
-  const config = getConfig();
-  const group = config.groups.find(g => g.apiType === apiType);
-  if (!group) return null;
-
-  // 检查新名称是否重复
-  if (group.profiles.some(p => p.name === newName)) return null;
-
-  const idx = group.profiles.findIndex(p => p.id === profileId);
-  if (idx === -1) return null;
-
-  group.profiles[idx].name = newName;
-  return saveConfig(config);
-}
-
-/**
- * 删除 profile（指定 API 类型，不能删除最后一个）
- */
-export function deleteProfile(apiType: ApiProviderType, profileId: string): ProxyConfig | null {
-  const config = getConfig();
-  const group = config.groups.find(g => g.apiType === apiType);
-  if (!group) return null;
-
-  if (group.profiles.length <= 1) return null;
-
-  const filtered = group.profiles.filter(p => p.id !== profileId);
-  if (filtered.length < group.profiles.length) {
-    group.profiles = filtered;
-    if (group.activeProfileId === profileId) {
-      group.activeProfileId = group.profiles[0].id;
-    }
+  if (findProviderByName(config, input.name)) {
+    throw new Error(`Provider name already exists: ${input.name}`);
   }
-  return saveConfig(config);
+  // 预设名校验：无 presetName 但 name 是保留名 → 拒绝
+  if (!input.presetName && PRESET_NAMES.has(input.name)) {
+    throw new Error('Cannot use reserved preset name without presetName');
+  }
+  const newProvider: Provider = {
+    id: randomUUID(),
+    name: input.name,
+    ...(input.presetName ? { presetName: input.presetName } : {}),
+    endpoints: input.endpoints,
+  };
+  validateProvider(newProvider, config.providers.length);
+  config.providers.push(newProvider);
+  saveConfig(config);
+  return newProvider;
 }
 
 /**
- * 脱敏配置（用于 API 返回，不暴露完整 apiKey）
+ * 更新 Provider（按 id），仅允许更新 endpoints；改名走 renameProvider。
+ *
+ * 失败抛 Error：provider 不存在 / endpoints 非法。
  */
-export function getSafeConfig() {
+export function updateProvider(id: string, updates: { endpoints?: Record<EndpointType, string | null> }): Provider {
   const config = getConfig();
-  return {
-    host: config.host,
-    proxyPort: config.proxyPort,
-    webPort: config.webPort,
-    groups: config.groups.map(group => ({
-      apiType: group.apiType,
-      activeProfileId: group.activeProfileId,
-      profiles: group.profiles.map(p => ({
-        id: p.id,
-        name: p.name,
-        upstreamBaseUrl: p.upstreamBaseUrl,
-        apiKeySet: p.apiKey.length > 0,
-        apiKeyPreview: p.apiKey
-          ? p.apiKey.slice(0, API_KEY_MASK_PREFIX) + '****' + p.apiKey.slice(-API_KEY_MASK_SUFFIX)
-          : '',
-      })),
-    })),
+  const provider = findProviderById(config, id);
+  if (!provider) {
+    throw new Error(`Provider not found: ${id}`);
+  }
+  const merged: Provider = {
+    ...provider,
+    ...(updates.endpoints !== undefined ? { endpoints: updates.endpoints } : {}),
   };
+  // 校验合并后的 provider
+  validateProvider(merged, config.providers.indexOf(provider));
+  Object.assign(provider, merged);
+  saveConfig(config);
+  return provider;
+}
+
+/**
+ * 重命名 Provider（按 id）
+ *
+ * 失败抛 Error：provider 不存在 / 新名称非法 / 新名称已被占用。
+ */
+export function renameProvider(id: string, newName: string): Provider {
+  const config = getConfig();
+  if (!isValidProviderName(newName)) {
+    throw new Error(`Invalid provider name: ${JSON.stringify(newName)}`);
+  }
+  if (PRESET_NAMES.has(newName)) {
+    throw new Error('Cannot rename to a reserved preset name');
+  }
+  const provider = findProviderById(config, id);
+  if (!provider) {
+    throw new Error(`Provider not found: ${id}`);
+  }
+  if (provider.name === newName) {
+    return provider; // 没改
+  }
+  const conflict = findProviderByName(config, newName);
+  if (conflict) {
+    throw new Error(`Provider name already exists: ${newName}`);
+  }
+  provider.name = newName;
+  saveConfig(config);
+  return provider;
+}
+
+/**
+ * 删除 Provider（按 id）；不能删除最后一个。
+ *
+ * 失败抛 Error：provider 不存在 / 只剩一个不能删。
+ */
+export function deleteProvider(id: string): void {
+  const config = getConfig();
+  if (config.providers.length <= 1) {
+    throw new Error('Cannot delete the last provider');
+  }
+  const idx = config.providers.findIndex(p => p.id === id);
+  if (idx === -1) {
+    throw new Error(`Provider not found: ${id}`);
+  }
+  config.providers.splice(idx, 1);
+  saveConfig(config);
 }

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { LogListPanel } from './components/dashboard/LogListPanel';
 import { DetailPanel } from './components/viewer/DetailPanel';
 import { SettingsContext } from './contexts/SettingsContext';
@@ -6,7 +6,7 @@ import { SettingsModal } from './components/settings/SettingsModal';
 import { UsageGuide } from './components/common/UsageGuide';
 import { useLogs } from './hooks/useLogs';
 import { ArrowPathIcon, Cog6ToothIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
-import type { TabType } from './types';
+import type { TabType, Provider } from './types';
 import {
   URL_PARAM_LOG_ID,
   URL_PARAM_TAB,
@@ -17,6 +17,10 @@ import {
   DEFAULT_THEME,
   DEFAULT_ACTIVE_TAB,
 } from './constants';
+import { getProxyStatus } from './utils/api';
+
+const PROVIDER_FILTER_STORAGE_KEY = 'lucent.providerFilter';
+const PROVIDER_FILTER_ALL = 'all';
 
 function App(): JSX.Element {
   // 读取初始 URL 参数
@@ -53,7 +57,42 @@ function App(): JSX.Element {
     updateUrl(selectedLogId, tab);
   }, [selectedLogId, updateUrl]);
 
-  const { logs, loading: logsLoading, loadingMore, hasMore, loadLogs, loadMore } = useLogs();
+  const { logs: allLogs, loading: logsLoading, loadingMore, hasMore, loadLogs, loadMore } = useLogs();
+
+  // 按供应商筛选（客户端）
+  const [providerFilter, setProviderFilter] = useState<string>(() => {
+    return localStorage.getItem(PROVIDER_FILTER_STORAGE_KEY) || PROVIDER_FILTER_ALL;
+  });
+  const logs = useMemo(() => {
+    if (providerFilter === PROVIDER_FILTER_ALL) return allLogs;
+    return allLogs.filter((l) => l.providerName === providerFilter);
+  }, [allLogs, providerFilter]);
+
+  const handleProviderFilterChange = useCallback((name: string) => {
+    setProviderFilter(name);
+    localStorage.setItem(PROVIDER_FILTER_STORAGE_KEY, name);
+  }, []);
+
+  // 从代理状态拉取 providers 列表（用于筛选下拉）
+  const [providers, setProviders] = useState<Provider[]>([]);
+  useEffect(() => {
+    let cancelled = false;
+    const loadProviders = async () => {
+      try {
+        const status = await getProxyStatus();
+        const list = (status as { providers?: Provider[] }).providers;
+        if (!cancelled && Array.isArray(list)) {
+          setProviders(list);
+        }
+      } catch {
+        // 静默失败：筛选下拉为空即不显示
+      }
+    };
+    loadProviders();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const selectedLog = logs.find(log => log.id === selectedLogId);
 
@@ -156,6 +195,9 @@ function App(): JSX.Element {
             hasMore={hasMore}
             onLoadMore={loadMore}
             width={sidebarWidth}
+            providers={providers}
+            providerFilter={providerFilter}
+            onProviderFilterChange={handleProviderFilterChange}
           />
           {/* 拖拽分割栏 */}
           <div

@@ -23,9 +23,10 @@ export const APP_DATA_DIR_NAME = '.lucent';  // 用户主目录下的应用数�
 export const LOG_SUBDIR = 'logs';
 export const CONFIG_FILE_NAME = 'config.json';
 
-export const LOG_DIR = join(homedir(), APP_DATA_DIR_NAME, LOG_SUBDIR);      // ~/~/.lucent/logs
-export const CONFIG_DIR = join(homedir(), APP_DATA_DIR_NAME);               // ~/.lucent
-export const CONFIG_PATH = join(CONFIG_DIR, CONFIG_FILE_NAME);              // ~/.lucent/config.json
+/** 配置目录（可通过 LUCENT_CONFIG_DIR 环境变量覆盖，用于 E2E 测试） */
+export const CONFIG_DIR = process.env.LUCENT_CONFIG_DIR || join(homedir(), APP_DATA_DIR_NAME);
+export const CONFIG_PATH = join(CONFIG_DIR, CONFIG_FILE_NAME);
+export const LOG_DIR = join(CONFIG_DIR, LOG_SUBDIR);
 
 // ==================== 请求体限制 ====================
 /** 代理转发的请求体最大体积（50MB）—— LLM API 请求通常在 KB~MB 级别，此限制防止 OOM */
@@ -54,14 +55,6 @@ export const LARGE_CONTEXT_MODEL_PATTERN = /opus|mythos|sonnet-4|claude-4/;
 export const API_KEY_MASK_THRESHOLD = 12;  // key 长度超过此值才进行脱敏
 export const API_KEY_MASK_PREFIX = 8;      // 保留前 8 位明文
 export const API_KEY_MASK_SUFFIX = 4;      // 保留末 4 位明文
-
-// ==================== 默认上游 URL ====================
-/** 各 API 类型对应的默认上游服务器地址，用户未配置 upstreamUrl 时使用 */
-export const DEFAULT_UPSTREAM_URLS = {
-  'anthropic-messages': 'https://api.anthropic.com',
-  'openai-chat': 'https://api.openai.com',
-  'openai-responses': 'https://api.openai.com',
-} as const;
 
 // ==================== 测试连接模型 ====================
 /** 各 API 类型用于「测试连接」功能的廉价模型 */
@@ -101,11 +94,3 @@ export const CHECKPOINT_KEY_CONTENT_LENGTH = 50;  // 检查点去重 key 的内�
 // ==================== Claude 配置目录 ====================
 /** Claude CLI 的配置目录路径，用于读取用户的 API key 等设置 */
 export const CLAUDE_SETTINGS_DIR = join(homedir(), '.claude');
-
-// ==================== API 路径正则 ====================
-/** 根据请求路径匹配对应的 API 协议类型 */
-export const API_PATH_REGEX = {
-  ANTHROPIC_MESSAGES: /\/v1\/messages|\/api\/v1\/messages/,
-  OPENAI_CHAT: /\/v1\/(chat\/completions|completions)/,
-  OPENAI_RESPONSES: /\/v1\/responses/,
-} as const;

@@ -2,7 +2,7 @@
  * API 工具函数
  */
 
-import type { ProxyConfig, CreateProfileData, UpdateProfileData, ProfileFull, ApiProviderType } from '../types';
+import type { Provider, EndpointType } from '../types';
 import { API_BASE_PATH } from '../constants';
 
 /**
@@ -39,6 +39,7 @@ export async function getProxyStatus(): Promise<{
   webPort: number;
   proxyPort: number;
   logFile: string | null;
+  providers?: import('../types').Provider[];
 }> {
   return request('/status');
 }
@@ -191,103 +192,83 @@ export async function getLogFiles(): Promise<
   return request('/log-files');
 }
 
-// ==================== 配置 API ====================
+// ==================== Provider API ====================
 
 /**
- * 获取代理配置（脱敏）
+ * 列出所有供应商
  */
-export async function getProxyConfig(): Promise<ProxyConfig> {
-  return request('/config');
+export async function listProviders(): Promise<Provider[]> {
+  const data = await request<{ providers: Provider[] }>('/providers');
+  return data.providers;
 }
 
 /**
- * 获取指定 group 下 profile 完整信息（含 apiKey）
+ * 获取指定供应商完整信息
  */
-export async function getProfileFull(apiType: ApiProviderType, profileId: string): Promise<ProfileFull> {
-  return request(`/config/${encodeURIComponent(apiType)}/${encodeURIComponent(profileId)}/full`);
+export async function getProviderFull(name: string): Promise<Provider> {
+  return request(`/providers/${encodeURIComponent(name)}/full`);
 }
 
 /**
- * 更新 profile
+ * 创建供应商
  */
-export async function updateProfile(
-  apiType: ApiProviderType,
-  profileId: string,
-  updates: UpdateProfileData
-): Promise<ProxyConfig> {
-  return request(`/config/${encodeURIComponent(apiType)}/profiles/${encodeURIComponent(profileId)}`, {
-    method: 'PUT',
-    body: JSON.stringify(updates),
-  });
-}
-
-/**
- * 创建 profile
- */
-export async function createProfile(
-  apiType: ApiProviderType,
-  profile: CreateProfileData
-): Promise<ProxyConfig> {
-  return request(`/config/${encodeURIComponent(apiType)}/profiles`, {
+export async function createProvider(input: {
+  name: string;
+  presetName?: string;
+  endpoints: Record<EndpointType, string | null>;
+}): Promise<Provider> {
+  return request('/providers', {
     method: 'POST',
-    body: JSON.stringify(profile),
+    body: JSON.stringify(input),
   });
 }
 
 /**
- * 设置活跃 profile
+ * 更新供应商（endpoints）
  */
-export async function setActiveProfile(
-  apiType: ApiProviderType,
-  profileId: string
-): Promise<ProxyConfig> {
-  return request(`/config/${encodeURIComponent(apiType)}/active`, {
-    method: 'POST',
-    body: JSON.stringify({ profileId }),
-  });
-}
-
-/**
- * 重命名 profile
- */
-export async function renameProfile(
-  apiType: ApiProviderType,
-  profileId: string,
-  newName: string
-): Promise<ProxyConfig> {
-  return request(`/config/${encodeURIComponent(apiType)}/profiles/${encodeURIComponent(profileId)}/rename`, {
+export async function updateProvider(
+  name: string,
+  patch: { endpoints?: Record<EndpointType, string | null> }
+): Promise<Provider> {
+  return request(`/providers/${encodeURIComponent(name)}`, {
     method: 'PUT',
-    body: JSON.stringify({ newName }),
+    body: JSON.stringify(patch),
   });
 }
 
 /**
- * 删除 profile
+ * 删除供应商
  */
-export async function deleteProfile(
-  apiType: ApiProviderType,
-  profileId: string
-): Promise<ProxyConfig> {
-  return request(`/config/${encodeURIComponent(apiType)}/profiles/${encodeURIComponent(profileId)}`, {
+export async function deleteProvider(name: string): Promise<void> {
+  await request(`/providers/${encodeURIComponent(name)}`, {
     method: 'DELETE',
   });
 }
 
 /**
- * 测试上游连接
+ * 重命名供应商
  */
-export async function testConnection(
-  apiType: ApiProviderType,
-  upstreamBaseUrl: string,
-  apiKey: string
+export async function renameProvider(name: string, newName: string): Promise<Provider> {
+  return request(`/providers/${encodeURIComponent(name)}/rename`, {
+    method: 'POST',
+    body: JSON.stringify({ newName }),
+  });
+}
+
+/**
+ * 测试供应商指定端点协议的连通性
+ */
+export async function testProviderEndpoint(
+  name: string,
+  endpointType: EndpointType
 ): Promise<{
   ok: boolean;
   status?: number;
   duration: number;
   message: string;
 }> {
-  return request('/config/test', {
+  return request(`/providers/${encodeURIComponent(name)}/test`, {
     method: 'POST',
-    body: JSON.stringify({ apiType, upstreamBaseUrl, apiKey }),
+    body: JSON.stringify({ endpointType }),
   });
 }

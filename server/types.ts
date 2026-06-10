@@ -4,9 +4,44 @@
  * 消除分散在 interceptor.ts、config.ts、context-extractors.ts 中的重复类型
  */
 
-// ==================== API 提供商 ====================
+// ==================== 端点协议类型 ====================
 
-export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses';
+export type EndpointType = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+
+/** 所有支持的端点协议类型 */
+export const ENDPOINT_TYPES: EndpointType[] = ['openai-chat', 'openai-responses', 'anthropic-messages'];
+
+/** 类型守卫：判断字符串是否为合法的 EndpointType */
+export function isEndpointType(s: string): s is EndpointType {
+  return (ENDPOINT_TYPES as string[]).includes(s);
+}
+
+/** 校验 provider name 是否合法（[a-zA-Z0-9_-]{1,32}） */
+const PROVIDER_NAME_REGEX = /^[a-zA-Z0-9_-]{1,32}$/;
+export function isValidProviderName(name: string): boolean {
+  return typeof name === 'string' && PROVIDER_NAME_REGEX.test(name);
+}
+
+// ==================== 供应商 ====================
+
+export interface Provider {
+  id: string;
+  /** 全局唯一，只允许 [a-zA-Z0-9_-]{1,32} */
+  name: string;
+  /** 预设供应商名（与前端 presets.ts 保持一致）；存在时 name 必须等于 presetName */
+  presetName?: string;
+  /** 每种协议对应的上游 URL；null = 该协议不支持 */
+  endpoints: Record<EndpointType, string | null>;
+}
+
+/** 预设供应商保留名集合（与前端 presets.ts 保持一致） */
+export const PRESET_NAMES: ReadonlySet<string> = new Set([
+  'anthropic', 'openai', 'gemini', 'deepseek', 'groq', 'mistral',
+  'together', 'fireworks', 'perplexity', 'cohere', 'zhipu', 'moonshot',
+  'qwen', 'baichuan', 'minimax', 'spark', 'doubao', 'stepfun',
+  'siliconcloud', 'openrouter', 'xai', 'cerebras', 'deepinfra',
+  'novita', 'sambanova', 'nvidia',
+]);
 
 // ==================== 客户端类型 ====================
 
@@ -36,7 +71,7 @@ export interface LogEntry {
   } | null;
   agentType: AgentType;
   subAgentType?: SubAgentType;
-  apiType?: ApiProviderType;
+  apiType?: EndpointType;
   clientType?: ClientType;
   duration: number;
   tokenUsage?: {
@@ -88,6 +123,12 @@ export interface LogEntry {
     };
   };
   error?: string;
+  /** 请求经过的供应商名称（来自配置中的 provider.name） */
+  providerName?: string;
+  /** 请求使用的端点协议（openai-chat / openai-responses / anthropic-messages） */
+  endpointType?: EndpointType;
+  /** 是否为测试请求（配置/连接测试） */
+  isTest?: boolean;
 }
 
 // ==================== 拦截器原始日志格式 ====================
@@ -118,7 +159,7 @@ export interface RawLogEntry {
   inProgress?: boolean;
   agentType?: AgentType;
   subAgentType?: SubAgentType;
-  apiType?: ApiProviderType;
+  apiType?: EndpointType;
   clientType?: ClientType;
   isTest?: boolean;
   _deltaFormat?: number;
@@ -127,6 +168,10 @@ export interface RawLogEntry {
   _isCheckpoint?: boolean;
   _inPlaceReplaceDetected?: boolean;
   error?: string;
+  /** 请求经过的供应商名称 */
+  providerName?: string;
+  /** 请求使用的端点协议 */
+  endpointType?: EndpointType;
   tokenUsage?: {
     inputTokens: number;
     outputTokens: number;
@@ -174,7 +219,7 @@ export interface ProxyStatus {
   webPort: number;
   proxyPort: number;
   logFile: string | null;
-  groups?: unknown[];
+  providers?: unknown[];
 }
 
 // ==================== 日志查询 ====================

@@ -7,7 +7,7 @@
 import type { Express } from 'express';
 import { createStatusRouter } from './status.js';
 import { createLogsRouter } from './logs.js';
-import { createConfigRouter } from './config.js';
+import { createProvidersRouter } from './providers.js';
 
 export interface RouteOptions {
   proxyEnabled: { value: boolean };
@@ -33,5 +33,5 @@ export function mountRoutes(app: Express, options: RouteOptions): void {
     onEnable: options.onLogsEnable,
   }));
 
-  app.use(createConfigRouter());
+  app.use(createProvidersRouter());
 }

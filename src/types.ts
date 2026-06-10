@@ -10,7 +10,7 @@ export interface LogEntry {
   response: ResponseData;
   agentType: AgentType;
   subAgentType?: SubAgentType;
-  apiType?: ApiProviderType;
+  apiType?: EndpointType;
   clientType?: ClientType;
   duration: number;
   tokenUsage?: TokenUsage;
@@ -19,6 +19,10 @@ export interface LogEntry {
   context?: ContextData;
   error?: string;
   isTest?: boolean;
+  /** 请求经过的供应商名称（来自配置中的 provider.name） */
+  providerName?: string;
+  /** 请求使用的端点协议（openai-chat / openai-responses / anthropic-messages） */
+  endpointType?: EndpointType;
 }
 
 export type AgentType = 'main' | 'sub';
@@ -144,6 +148,7 @@ export interface ProxyStatus {
   webPort: number;
   proxyPort: number;
   logFile: string | null;
+  providers?: Provider[];
 }
 
 // ==================== UI 状态 ====================
@@ -220,77 +225,68 @@ export interface ContextWindowInfo {
   remainingPercentage: number;
 }
 
+// ==================== 端点协议类型 ====================
+
+/**
+ * 端点协议类型
+ */
+export type EndpointType = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+
+/** 所有支持的端点协议类型 */
+export const ENDPOINT_TYPES: EndpointType[] = ['anthropic-messages', 'openai-chat', 'openai-responses'];
+
+/** 类型守卫：判断字符串是否为合法的 EndpointType */
+export function isEndpointType(s: string): s is EndpointType {
+  return (ENDPOINT_TYPES as string[]).includes(s);
+}
+
+/** 校验 provider name 是否合法（[a-zA-Z0-9_-]{1,32}） */
+const PROVIDER_NAME_REGEX = /^[a-zA-Z0-9_-]{1,32}$/;
+export function isValidProviderName(name: string): boolean {
+  return typeof name === 'string' && PROVIDER_NAME_REGEX.test(name);
+}
+
+// ==================== 供应商预设 ====================
+
+/**
+ * 供应商预设（品牌信息 + 默认端点）
+ */
+export interface ProviderPreset {
+  /** 唯一标识，如 'anthropic' */
+  name: string;
+  /** 显示名，如 'Anthropic' */
+  label: string;
+  /** @lobehub/icons/es/ 下的目录名 */
+  iconKey: string;
+  /** 分类：official = 原始 LLM 厂商；community = 聚合/代理/三方 */
+  category: 'official' | 'community';
+  /** 每种协议对应的默认端点 URL；null = 该协议不支持 */
+  endpoints: Record<EndpointType, string | null>;
+}
+
+// ==================== 供应商 ====================
+
+/**
+ * 供应商定义
+ */
+export interface Provider {
+  id: string;
+  /** 全局唯一，只允许 [a-zA-Z0-9_-]{1,32} */
+  name: string;
+  /** 匹配的预设名称，如 'anthropic'、'openai' */
+  presetName?: string;
+  /** 每种协议对应的上游 URL；null = 该协议不支持 */
+  endpoints: Record<EndpointType, string | null>;
+}
+
 // ==================== 代理配置 ====================
 
 /**
- * API 提供商类型
- */
-export type ApiProviderType = 'anthropic-messages' | 'openai-chat' | 'openai-responses';
-
-/**
- * API 类型标签映射
- */
-export const API_TYPE_LABELS: Record<ApiProviderType, string> = {
-  'anthropic-messages': 'Anthropic Messages',
-  'openai-chat': 'OpenAI Chat',
-  'openai-responses': 'OpenAI Responses',
-};
-
-/**
- * 代理配置 profile（完整信息，含 apiKey）
- */
-export interface ProxyProfile {
-  id: string;            // 简单递增 ID，如 '1', '2', '3'
-  name: string;
-  upstreamBaseUrl: string;
-  apiKey: string;
-}
-
-/**
- * API 返回的脱敏 profile
- */
-export interface SafeProxyProfile {
-  id: string;
-  name: string;
-  upstreamBaseUrl: string;
-  apiKeySet: boolean;
-  apiKeyPreview: string;
-}
-
-/**
- * 代理分组（按 API 类型分组）
- */
-export interface ProxyGroup {
-  apiType: ApiProviderType;
-  profiles: SafeProxyProfile[];
-  activeProfileId: string;
-}
-
-/**
- * 全局代理配置（脱敏）
+ * 全局代理配置
  */
 export interface ProxyConfig {
   host: string;          // 服务器监听地址，默认 127.0.0.1
   proxyPort: number;     // 代理端口，默认 7048
   webPort: number;       // Web UI 端口，默认 7049
-  groups: ProxyGroup[];
-}
-
-// 编辑时返回的完整 profile
-export interface ProfileFull {
-  id: string;
-  name: string;
-  upstreamBaseUrl: string;
-  apiKey: string;
-}
-
-export interface CreateProfileData {
-  name: string;
-  upstreamBaseUrl: string;
-  apiKey: string;
-}
-
-export interface UpdateProfileData {
-  upstreamBaseUrl?: string;
-  apiKey?: string;
+  providers: Provider[];
 }

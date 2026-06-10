@@ -41,6 +41,8 @@ export function useLogs() {
     context: log.context as LogEntry['context'],
     error: log.error,
     isTest: log.isTest,
+    providerName: log.providerName,
+    endpointType: log.endpointType as LogEntry['endpointType'],
   });
 
   // 初始加载（最新的 PAGE_SIZE 条）
