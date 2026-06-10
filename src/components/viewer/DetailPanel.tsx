@@ -276,11 +276,11 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
           </div>
           <div className="flex items-center gap-2 text-sm text-text-tertiary truncate" title={log.request.url}>
             <Tooltip title={log.providerName ? `供应商: ${log.providerName}` : '未知供应商'}>
-              <ProviderIcon providerName={log.providerName || ''} size={14} />
+              <span><ProviderIcon providerName={log.providerName || ''} size={14} /></span>
             </Tooltip>
             {log.endpointType && (
               <Tooltip title={`协议: ${ENDPOINT_LABELS[log.endpointType] ?? log.endpointType}`}>
-                <ProtocolIcon type={log.endpointType} size={14} />
+                <span><ProtocolIcon type={log.endpointType} size={14} /></span>
               </Tooltip>
             )}
             <span className="truncate">{log.request.url}</span>

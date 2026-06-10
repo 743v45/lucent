@@ -179,9 +179,14 @@ export function LogListPanel({
           {onEndpointFilterChange && (
             <Select
               size="small"
-              className="min-w-[120px]"
+              className="min-w-[100px]"
               value={endpointFilter ?? 'all'}
               onChange={(v) => onEndpointFilterChange(v)}
+              labelRender={(option) => {
+                if (option.value === 'all') return '全部协议';
+                const et = option.value as EndpointType;
+                return <ProtocolIcon type={et} size={14} />;
+              }}
               options={[
                 { value: 'all', label: '全部协议' },
                 ...ENDPOINT_TYPES.map((et) => ({
