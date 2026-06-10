@@ -836,6 +836,40 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
           </div>
         )}
 
+        {/* 消息分组 */}
+        {data.messages && data.messages.length > 0 && (
+          <ContextCollapsibleGroup
+            title="对话历史"
+            count={data.messages.length}
+            collapsed={collapsed.messages}
+            onToggle={() => toggleGroup('messages')}
+          >
+            {data.messages.map((msg, i) => {
+              const roleColor =
+                msg.role === 'user'
+                  ? 'text-brand-accent'
+                  : msg.tool_use_id
+                    ? 'text-tool'
+                    : 'text-success';
+              const roleLabel =
+                msg.role === 'user'
+                  ? 'user'
+                  : msg.tool_use_id
+                    ? 'tool'
+                    : msg.role;
+              return (
+                <ContextListItem
+                  key={i}
+                  label={`${roleLabel} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`}
+                  isSelected={selected?.type === 'message' && selected?.index === i}
+                  onClick={() => setSelected({ type: 'message', index: i })}
+                  color={roleColor}
+                />
+              );
+            })}
+          </ContextCollapsibleGroup>
+        )}
+
         {/* 系统提示词分组 */}
         {data.systemPrompt && (
           <ContextCollapsibleGroup
@@ -870,40 +904,6 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
                 color="text-brand-accent"
               />
             ))}
-          </ContextCollapsibleGroup>
-        )}
-
-        {/* 消息分组 */}
-        {data.messages && data.messages.length > 0 && (
-          <ContextCollapsibleGroup
-            title="对话历史"
-            count={data.messages.length}
-            collapsed={collapsed.messages}
-            onToggle={() => toggleGroup('messages')}
-          >
-            {data.messages.map((msg, i) => {
-              const roleColor =
-                msg.role === 'user'
-                  ? 'text-brand-accent'
-                  : msg.tool_use_id
-                    ? 'text-tool'
-                    : 'text-success';
-              const roleLabel =
-                msg.role === 'user'
-                  ? 'user'
-                  : msg.tool_use_id
-                    ? 'tool'
-                    : msg.role;
-              return (
-                <ContextListItem
-                  key={i}
-                  label={`${roleLabel} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`}
-                  isSelected={selected?.type === 'message' && selected?.index === i}
-                  onClick={() => setSelected({ type: 'message', index: i })}
-                  color={roleColor}
-                />
-              );
-            })}
           </ContextCollapsibleGroup>
         )}
       </div>
