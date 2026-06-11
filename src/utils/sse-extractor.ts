@@ -16,9 +16,9 @@ function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): voi
   // Anthropic 格式
   if (eventType === 'message_start') {
     acc.model = data.message?.model || acc.model;
-    acc.usage.input = data.message?.usage?.input_tokens || acc.usage.input;
-    acc.usage.cache_create = data.message?.usage?.cache_creation_input_tokens || acc.usage.cache_create;
-    acc.usage.cache_read = data.message?.usage?.cache_read_input_tokens || acc.usage.cache_read;
+    if (data.message?.usage?.input_tokens != null) acc.usage.input = data.message.usage.input_tokens;
+    if (data.message?.usage?.cache_creation_input_tokens != null) acc.usage.cache_create = data.message.usage.cache_creation_input_tokens;
+    if (data.message?.usage?.cache_read_input_tokens != null) acc.usage.cache_read = data.message.usage.cache_read_input_tokens;
   } else if (eventType === 'content_block_start') {
     const block = data.content_block;
     if (block?.type === 'tool_use') {
@@ -41,7 +41,10 @@ function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): voi
     }
   } else if (eventType === 'message_delta') {
     acc.stopReason = data.delta?.stop_reason || acc.stopReason;
-    acc.usage.output = data.usage?.output_tokens || acc.usage.output;
+    if (data.usage?.output_tokens != null) acc.usage.output = data.usage.output_tokens;
+    if (data.usage?.input_tokens != null) acc.usage.input = data.usage.input_tokens;
+    if (data.usage?.cache_read_input_tokens != null) acc.usage.cache_read = data.usage.cache_read_input_tokens;
+    if (data.usage?.cache_creation_input_tokens != null) acc.usage.cache_create = data.usage.cache_creation_input_tokens;
   }
 
   // OpenAI Chat 格式（无 event，直接看 data.choices）

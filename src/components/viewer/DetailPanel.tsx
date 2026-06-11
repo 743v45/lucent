@@ -93,12 +93,23 @@ function formatTokenValue(n: number | undefined): string {
  * 覆盖三种情况：tokenUsage 已有、非流式 JSON 响应、SSE 流式响应
  */
 function resolveTokenUsage(log: LogEntry) {
-  // 1. 服务端已映射好的 tokenUsage
-  if (log.tokenUsage?.input_tokens || log.tokenUsage?.output_tokens) {
-    return log.tokenUsage;
-  }
-
   const body = log.response?.body;
+
+  // 1. SSE 流式响应：从 SSE 原始行实时提取（source of truth）
+  if (body && typeof body === 'object' && (body as SSERawBody).type === 'sse_raw') {
+    const lines = (body as SSERawBody).lines;
+    if (lines?.length) {
+      const extracted = extractFromSSELines(lines);
+      if (extracted.usage.input > 0 || extracted.usage.output > 0) {
+        return {
+          input_tokens: extracted.usage.input,
+          output_tokens: extracted.usage.output,
+          cache_creation_tokens: extracted.usage.cache_create || undefined,
+          cache_read_tokens: extracted.usage.cache_read || undefined,
+        };
+      }
+    }
+  }
 
   // 2. 非流式 JSON 响应：从 response.body.usage 提取（Anthropic 字段名）
   if (body && typeof body === 'object' && body.type !== 'sse_raw') {
@@ -113,20 +124,9 @@ function resolveTokenUsage(log: LogEntry) {
     }
   }
 
-  // 3. SSE 流式响应：从 SSE 原始行提取
-  if (body && typeof body === 'object' && (body as SSERawBody).type === 'sse_raw') {
-    const lines = (body as SSERawBody).lines;
-    if (lines?.length) {
-      const extracted = extractFromSSELines(lines);
-      if (extracted.usage.input > 0 || extracted.usage.output > 0) {
-        return {
-          input_tokens: extracted.usage.input,
-          output_tokens: extracted.usage.output,
-          cache_creation_tokens: extracted.usage.cache_create || undefined,
-          cache_read_tokens: extracted.usage.cache_read || undefined,
-        };
-      }
-    }
+  // 3. 回退：服务端已映射好的 tokenUsage
+  if (log.tokenUsage?.input_tokens || log.tokenUsage?.output_tokens) {
+    return log.tokenUsage;
   }
 
   return undefined;
