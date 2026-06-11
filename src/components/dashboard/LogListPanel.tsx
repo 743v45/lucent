@@ -270,9 +270,8 @@ export function LogListPanel({
                   <TimeWithTooltip timestamp={log.timestamp} />
                 </div>
 
-                {/* 行2：客户端图标 + 来源 + 请求地址 + 耗时 + 状态码 */}
+                {/* 行2：供应商 + 协议 + 客户端图标 + 请求地址 + 耗时 + 状态码 */}
                 <div className="flex items-center gap-2 text-[13px] leading-[1.3]">
-                  <ClientIcon clientType={log.clientType} />
                   <Tooltip title={log.providerName ? `供应商: ${log.providerName}` : '未知供应商'}>
                     <span><ProviderIcon providerName={log.providerName || ''} size={14} /></span>
                   </Tooltip>
@@ -281,6 +280,7 @@ export function LogListPanel({
                       <span><ProtocolIcon type={log.endpointType} size={14} /></span>
                     </Tooltip>
                   )}
+                  <ClientIcon clientType={log.clientType} />
                   <span
                     className="text-text-quaternary truncate flex-1 min-w-0"
                     title={log.request.url}

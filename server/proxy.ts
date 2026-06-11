@@ -40,9 +40,10 @@ const PATH_REGEX = /^\/(?:custom\/)?([a-zA-Z0-9_-]+)(\/.*)$/;
  * - 其它 → null（不支持）
  */
 function inferEndpointType(rest: string): EndpointType | null {
-  if (rest === '/v1/messages') return 'anthropic-messages';
-  if (rest === '/v1/chat/completions' || rest === '/v1/completions') return 'openai-chat';
-  if (rest === '/v1/responses') return 'openai-responses';
+  const path = rest.split('?')[0];
+  if (path === '/v1/messages') return 'anthropic-messages';
+  if (path === '/v1/chat/completions' || path === '/v1/completions') return 'openai-chat';
+  if (path === '/v1/responses') return 'openai-responses';
   return null;
 }
 
@@ -97,9 +98,20 @@ export async function startProxyServer(options?: { port?: number; host?: string 
 
   return new Promise<ProxyServer>((resolve, reject) => {
     const server = createServer(async (req, res) => {
-      try {
-        const reqUrl = req.url ?? '/';
+      const reqUrl = req.url ?? '/';
+      const startTime = Date.now();
+      const clientIp = req.socket.remoteAddress;
 
+      // 响应写出时打印一条完整日志
+      const originalWriteHead = res.writeHead.bind(res);
+      // @ts-ignore
+      res.writeHead = (statusCode: number, ...args: any[]) => {
+        const duration = Date.now() - startTime;
+        console.log(`[Lucent Proxy] ${req.method} ${reqUrl} ${statusCode} ${duration}ms ip=${clientIp}`);
+        return originalWriteHead(statusCode, ...args);
+      };
+
+      try {
         // 1. 解析路径
         const match = PATH_REGEX.exec(reqUrl);
         if (!match) {
