@@ -9,9 +9,41 @@
  */
 
 import { EventSourceParserStream } from 'eventsource-parser/stream';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ExtractedInfo, RawLogEntry, SSERawLine } from './types.js';
 import createDebug from 'debug';
 const dbgSse = createDebug('lucent:interceptor:sse');
+
+// ==================== SSE Debug 开关 ====================
+
+const SSE_DEBUG_DIR = '/tmp/lucent-sse-debug';
+let sseDebugEnabled = !!process.env.LUCENT_SSE_DEBUG;
+
+export function setSseDebugEnabled(enabled: boolean): void {
+  sseDebugEnabled = enabled;
+}
+
+export function isSseDebugEnabled(): boolean {
+  return sseDebugEnabled;
+}
+
+function dumpSseDebug(entry: RawLogEntry, lines: SSERawLine[]): void {
+  if (!isSseDebugEnabled()) return;
+
+  mkdirSync(SSE_DEBUG_DIR, { recursive: true });
+
+  const filename = `${new Date().toISOString().replace(/[:.]/g, '-')}_${entry.id}.sse`;
+  const filePath = join(SSE_DEBUG_DIR, filename);
+
+  const content = lines.map(l => {
+    if (l.event) return `event: ${l.event}\ndata: ${l.data}\n`;
+    return `data: ${l.data}\n`;
+  }).join('\n');
+
+  writeFileSync(filePath, content, 'utf-8');
+  console.log(`[Lucent SSE Debug] id=${entry.id} ${entry.method} ${entry.url} → ${filePath} (${lines.length} events)`);
+}
 
 // ==================== SSE 事件提取（内部函数） ====================
 
@@ -23,9 +55,9 @@ export function extractFromEvent(eventType: string, data: any, acc: ExtractedInf
   // Anthropic 格式
   if (eventType === 'message_start') {
     acc.model = data.message?.model || acc.model;
-    acc.usage.input = data.message?.usage?.input_tokens || acc.usage.input;
-    acc.usage.cache_create = data.message?.usage?.cache_creation_input_tokens || acc.usage.cache_create;
-    acc.usage.cache_read = data.message?.usage?.cache_read_input_tokens || acc.usage.cache_read;
+    if (data.message?.usage?.input_tokens != null) acc.usage.input = data.message.usage.input_tokens;
+    if (data.message?.usage?.cache_creation_input_tokens != null) acc.usage.cache_create = data.message.usage.cache_creation_input_tokens;
+    if (data.message?.usage?.cache_read_input_tokens != null) acc.usage.cache_read = data.message.usage.cache_read_input_tokens;
   } else if (eventType === 'content_block_start') {
     const block = data.content_block;
     if (block?.type === 'tool_use') {
@@ -48,7 +80,10 @@ export function extractFromEvent(eventType: string, data: any, acc: ExtractedInf
     }
   } else if (eventType === 'message_delta') {
     acc.stopReason = data.delta?.stop_reason || acc.stopReason;
-    acc.usage.output = data.usage?.output_tokens || acc.usage.output;
+    if (data.usage?.output_tokens != null) acc.usage.output = data.usage.output_tokens;
+    if (data.usage?.input_tokens != null) acc.usage.input = data.usage.input_tokens;
+    if (data.usage?.cache_read_input_tokens != null) acc.usage.cache_read = data.usage.cache_read_input_tokens;
+    if (data.usage?.cache_creation_input_tokens != null) acc.usage.cache_create = data.usage.cache_creation_input_tokens;
   }
 
   // OpenAI Chat 格式（无 event，直接看 data.choices）
@@ -199,6 +234,7 @@ export async function collectSSELinesInBackground(
     onLogEntry(entry);
     onDeltaCommit();
 
+    dumpSseDebug(entry, lines);
     dbgSse('SSE 收集完成: lines=%d', lines.length);
   } catch (err) {
     dbgSse('SSE 收集失败: %O', err);

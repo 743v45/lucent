@@ -17,6 +17,7 @@ import * as LogReader from './services/log-reader.js';
 import { mountRoutes } from './routes/index.js';
 import { startProxyServer } from './proxy.js';
 import { setupInterceptor, drainPendingSSETasks } from './interceptor.js';
+import { isSseDebugEnabled } from './sse-extractor.js';
 import type { ProxyStatus } from './types.js';
 import type { ResolvedConfig } from './config.js';
 import createDebug from 'debug';
@@ -95,6 +96,10 @@ export async function startServer(): Promise<void> {
         `Proxy:   http://${host}:${proxyPort}`,
         `Logs:    ${resolvedConfig.logDir}`,
       ];
+
+      if (isSseDebugEnabled()) {
+        lines.push(`SSE Debug: ON → /tmp/lucent-sse-debug/`);
+      }
 
       // 供应商接入指令
       for (const p of resolvedConfig.providers) {
