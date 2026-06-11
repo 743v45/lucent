@@ -6,7 +6,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: 'Anthropic',
     iconKey: 'Anthropic',
     category: 'official',
-    endpoints: { 'openai-chat': null, 'openai-responses': null, 'anthropic-messages': 'https://api.anthropic.com' },
+    endpoints: { 'openai-chat': null, 'openai-responses': null, 'anthropic-messages': 'https://api.anthropic.com/v1' },
   },
   {
     name: 'openai',
@@ -76,7 +76,7 @@ export const PROVIDER_PRESETS: ProviderPreset[] = [
     label: '智谱 GLM',
     iconKey: 'Zhipu',
     category: 'official',
-    endpoints: { 'openai-chat': 'https://open.bigmodel.cn/api/paas/v4', 'openai-responses': null, 'anthropic-messages': 'https://open.bigmodel.cn/api/anthropic' },
+    endpoints: { 'openai-chat': 'https://open.bigmodel.cn/api/coding/paas/v4', 'openai-responses': null, 'anthropic-messages': 'https://open.bigmodel.cn/api/anthropic/v1' },
   },
   {
     name: 'moonshot',

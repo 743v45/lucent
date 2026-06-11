@@ -34,16 +34,18 @@ const PATH_REGEX = /^\/(?:custom\/)?([a-zA-Z0-9_-]+)(\/.*)$/;
 
 /**
  * 从 rest 子路径推断 endpointType
- * - /v1/messages → anthropic-messages
- * - /v1/chat/completions 或 /v1/completions → openai-chat
- * - /v1/responses → openai-responses
+ * - /v1/messages 或 /messages → anthropic-messages
+ * - /v1/chat/completions 或 /chat/completions → openai-chat
+ * - /v1/completions 或 /completions → openai-chat
+ * - /v1/responses 或 /responses → openai-responses
  * - 其它 → null（不支持）
  */
 function inferEndpointType(rest: string): EndpointType | null {
   const path = rest.split('?')[0];
-  if (path === '/v1/messages') return 'anthropic-messages';
-  if (path === '/v1/chat/completions' || path === '/v1/completions') return 'openai-chat';
-  if (path === '/v1/responses') return 'openai-responses';
+  const stripped = path.replace(/^\/v1(?=\/)/, '');
+  if (stripped === '/messages') return 'anthropic-messages';
+  if (stripped === '/chat/completions' || stripped === '/completions') return 'openai-chat';
+  if (stripped === '/responses') return 'openai-responses';
   return null;
 }
 
@@ -172,9 +174,10 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         }
         const body = Buffer.concat(buffers);
 
-        // 8. 拼接完整上游 URL
+        // 8. 拼接完整上游 URL（去掉 rest 中的 /v1 前缀，由 baseUrl 提供版本路径）
         const cleanBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-        const fullUrl = `${cleanBase}${rest}`;
+        const apiPath = rest.replace(/^\/v1(?=\/)/, '');
+        const fullUrl = `${cleanBase}${apiPath}`;
 
         log('🔗 代理转发: %s %s → %s', req.method, reqUrl, fullUrl);
 

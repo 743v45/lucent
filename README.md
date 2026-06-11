@@ -90,8 +90,8 @@ export OPENAI_BASE_URL=http://127.0.0.1:7048/custom/glm
 
 | 协议 | 端点 URL | 接入地址 |
 |------|----------|----------|
-| Anthropic Messages | `https://open.bigmodel.cn/api/paas/v4` | `http://127.0.0.1:7048/custom/glm` |
-| OpenAI Chat | `https://open.bigmodel.cn/api/paas/v4` | `http://127.0.0.1:7048/custom/glm/v1` |
+| Anthropic Messages | `https://open.bigmodel.cn/api/anthropic/v1` | `http://127.0.0.1:7048/custom/glm` |
+| OpenAI Chat | `https://open.bigmodel.cn/api/coding/paas/v4` | `http://127.0.0.1:7048/custom/glm/v1` |
 
 Claude Code 用 `ANTHROPIC_BASE_URL=http://127.0.0.1:7048/custom/glm`，Codex 用 `OPENAI_BASE_URL=http://127.0.0.1:7048/custom/glm/v1`，两者都能正常工作。
 
