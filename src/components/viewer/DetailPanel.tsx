@@ -738,7 +738,7 @@ interface CollapsedGroups {
 
 function ContextTab({ log }: ContextTabProps): JSX.Element {
   const data = log.context;
-  if (!data || (!data.messages?.length && !data.summary)) {
+  if (!data || (!data.messages?.length && !data.summary && data.systemPrompt === undefined && data.tools === undefined)) {
     return (
       <div className="flex items-center justify-center h-full">
         <span className="text-text-quaternary text-base">暂无上下文数据</span>
@@ -871,24 +871,26 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
         )}
 
         {/* 系统提示词分组 */}
-        {data.systemPrompt && (
+        {data.systemPrompt !== undefined && (
           <ContextCollapsibleGroup
             title="系统提示词"
-            count={1}
+            count={data.systemPrompt ? 1 : 0}
             collapsed={collapsed.systemPrompt}
             onToggle={() => toggleGroup('systemPrompt')}
           >
-            <ContextListItem
-              label="System"
-              isSelected={selected?.type === 'systemPrompt'}
-              onClick={() => setSelected({ type: 'systemPrompt' })}
-              color="text-warning"
-            />
+            {data.systemPrompt && (
+              <ContextListItem
+                label="System"
+                isSelected={selected?.type === 'systemPrompt'}
+                onClick={() => setSelected({ type: 'systemPrompt' })}
+                color="text-warning"
+              />
+            )}
           </ContextCollapsibleGroup>
         )}
 
         {/* 工具分组 */}
-        {data.tools && data.tools.length > 0 && (
+        {data.tools !== undefined && (
           <ContextCollapsibleGroup
             title="可用工具"
             count={data.tools.length}
