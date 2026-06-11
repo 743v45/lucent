@@ -308,7 +308,12 @@ export function setupInterceptor(): void {
       const response = await originalFetch.call(this, url, options);
       entry.duration = Date.now() - startTime;
 
-      if (entry.isStream) {
+      // 优先根据 response Content-Type 判断是否为流式响应，回退到 request.body.stream
+      const respCT = (response.headers.get('content-type') || '').toLowerCase();
+      const isStreamResponse = respCT.includes('text/event-stream')
+        || (!respCT.includes('application/json') && entry.isStream);
+
+      if (isStreamResponse) {
         try {
           return handleStreamingResponse(response, entry, deltaState);
         } catch {

@@ -3,6 +3,7 @@ import { Empty, Select, Spin, Typography } from 'antd';
 import type { LogEntry, AgentType, Provider, EndpointType } from '../../types';
 import { ENDPOINT_LABELS, ENDPOINT_TYPES } from '../../types';
 import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, getStatusColor } from '../../constants';
+import { resolveResponseType } from '../../utils/response-type';
 import { ClientIcon } from '../common/ClientIcon';
 import { ProviderIcon } from '../common/ProviderIcon';
 import { ProtocolIcon } from '../common/ProtocolIcon';
@@ -261,11 +262,11 @@ export function LogListPanel({
                     {shortenModel(log.metadata.model)}
                   </span>
                   <span className={`shrink-0 text-xs px-1 rounded border ${
-                    log.metadata.stream
+                    resolveResponseType(log.response?.headers['content-type'], log.metadata.stream) === 'sse'
                       ? 'text-brand-accent border-brand-accent/30'
                       : 'text-text-quaternary border-border-subtle'
                   }`}>
-                    {log.metadata.stream ? 'SSE' : 'JSON'}
+                    {resolveResponseType(log.response?.headers['content-type'], log.metadata.stream) === 'sse' ? 'SSE' : 'JSON'}
                   </span>
                   <TimeWithTooltip timestamp={log.timestamp} />
                 </div>

@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useMemo } from 'react';
 import type { LogEntry, TabType, SSERawBody, SSERawLine } from '../../types';
 import { ENDPOINT_LABELS } from '../../types';
 import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, getStatusColor } from '../../constants';
+import { resolveResponseType } from '../../utils/response-type';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -267,11 +268,11 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
               </>
             )}
             <span className={`text-xs px-1.5 py-0.5 rounded border ${
-              log.metadata.stream
+              resolveResponseType(log.response?.headers['content-type'], log.metadata.stream) === 'sse'
                 ? 'text-brand-accent border-brand-accent/30'
                 : 'text-text-quaternary border-border-subtle'
             }`}>
-              {log.metadata.stream ? 'SSE' : 'JSON'}
+              {resolveResponseType(log.response?.headers['content-type'], log.metadata.stream) === 'sse' ? 'SSE' : 'JSON'}
             </span>
           </div>
           <div className="flex items-center gap-2 text-sm text-text-tertiary truncate" title={log.request.url}>
