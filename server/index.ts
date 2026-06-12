@@ -19,6 +19,7 @@ import { startProxyServer } from './proxy.js';
 import { setupInterceptor, drainPendingSSETasks } from './interceptor.js';
 import { drainWriteQueue } from './services/log-writer.js';
 import { isSseDebugEnabled } from './sse-extractor.js';
+import './endpoint-handlers.js'; // 注册端点类型处理器
 import type { ProxyStatus } from './types.js';
 import type { ResolvedConfig } from './config.js';
 import createDebug from 'debug';

@@ -16,24 +16,19 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { writeFile, mkdir, rm, readdir, readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { writeFile, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { homedir } from 'node:os';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createTestEnv, cleanTestDir, removeTestDir, writeTestConfig, startBackend, stopBackend, readLatestLog, type TestEnv } from './e2e-helpers.js';
 
 const execAsync = promisify(exec);
 
 // ==================== 常量 ====================
 
-const CONFIG_DIR = join(homedir(), '.lucent-anthropic-e2e');
-const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
-const LOG_DIR = join(CONFIG_DIR, 'logs');
-const PROXY_PORT = 20048;
-const WEB_PORT = 20049;
+const testEnv = createTestEnv('anthropic-e2e');
+const { configDir: CONFIG_DIR, configPath: CONFIG_PATH, logDir: LOG_DIR, proxyPort: PROXY_PORT, webPort: WEB_PORT } = testEnv;
 
 // ==================== 类型定义 ====================
 
@@ -61,7 +56,6 @@ let mockServer: Server;
 let mockPort = 0;
 let capturedRequests: CapturedRequest[] = [];
 let responseMode: MockResponseMode = 'sse-text';
-let backendProcess: ChildProcess | null = null;
 
 // ==================== Anthropic Mock 响应构造 ====================
 
@@ -341,98 +335,6 @@ async function anthropicRequest(options?: {
   }
 }
 
-async function cleanTestDir(): Promise<void> {
-  if (existsSync(CONFIG_DIR)) {
-    await rm(CONFIG_DIR, { recursive: true, force: true });
-  }
-  await mkdir(CONFIG_DIR, { recursive: true });
-  await mkdir(LOG_DIR, { recursive: true });
-}
-
-async function writeTestConfig(): Promise<void> {
-  const config = {
-    host: '127.0.0.1',
-    proxyPort: PROXY_PORT,
-    webPort: WEB_PORT,
-    providers: [
-      {
-        id: 'provider-anthropic-e2e',
-        name: 'anthropic',
-        endpoints: {
-          'anthropic-messages': `http://127.0.0.1:${mockPort}`,
-          'openai-chat': null,
-          'openai-responses': null,
-        },
-      },
-    ],
-  };
-  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2));
-}
-
-async function readLatestLog(): Promise<Array<Record<string, unknown>> | null> {
-  const files = await readdir(LOG_DIR);
-  const jsonlFiles = files.filter(f => f.endsWith('.jsonl')).sort().reverse();
-  if (jsonlFiles.length === 0) return null;
-
-  const content = await readFile(join(LOG_DIR, jsonlFiles[0]), 'utf-8');
-  // LOG_ENTRY_SEPARATOR = '\n---\n'
-  return content.split(/\n---\n?/).filter(Boolean).map(line => {
-    try { return JSON.parse(line); } catch { return {}; }
-  });
-}
-
-async function startBackend(): Promise<void> {
-  // 仅杀掉本测试文件启动的残留进程（不用 pkill 避免杀其他测试的后端）
-  if (backendProcess) {
-    backendProcess.kill('SIGTERM');
-    await new Promise(resolve => setTimeout(resolve, 500));
-  }
-
-  return new Promise<void>((resolve, reject) => {
-    const proc = spawn('npx', ['tsx', 'server/index.ts'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        LUCENT_CONFIG_DIR: CONFIG_DIR,
-        LUCENT_HOST: '127.0.0.1',
-        LUCENT_PROXY_PORT: String(PROXY_PORT),
-        LUCENT_WEB_PORT: String(WEB_PORT),
-        LUCENT_LOG_DIR: LOG_DIR,
-      },
-    });
-
-    let output = '';
-    proc.stderr?.on('data', (data) => { output += data.toString(); });
-
-    const timeout = setTimeout(() => {
-      proc.kill();
-      reject(new Error(`Server startup timeout. Output: ${output}`));
-    }, 20000);
-
-    proc.stdout?.on('data', (data) => {
-      output += data.toString();
-      if (output.includes('Lucent') || output.includes('代理')) {
-        clearTimeout(timeout);
-        backendProcess = proc;
-        resolve();
-      }
-    });
-
-    proc.on('error', (err) => { clearTimeout(timeout); reject(err); });
-    proc.on('exit', (code) => {
-      if (code && code !== 0) { clearTimeout(timeout); reject(new Error(`Server exited: ${code}`)); }
-    });
-  });
-}
-
-async function stopBackend(): Promise<void> {
-  if (backendProcess) {
-    backendProcess.kill('SIGTERM');
-    await new Promise(resolve => setTimeout(resolve, 500));
-    backendProcess = null;
-  }
-}
-
 // ==================== 测试套件 ====================
 
 describe('Anthropic 供应商 E2E 测试', () => {
@@ -452,18 +354,33 @@ describe('Anthropic 供应商 E2E 测试', () => {
     });
 
     // 隔离配置 + 日志
-    await cleanTestDir();
-    await writeTestConfig();
+    await cleanTestDir(testEnv);
+    await writeTestConfig(testEnv, {
+      host: '127.0.0.1',
+      proxyPort: PROXY_PORT,
+      webPort: WEB_PORT,
+      providers: [
+        {
+          id: 'provider-anthropic-e2e',
+          name: 'anthropic',
+          endpoints: {
+            'anthropic-messages': `http://127.0.0.1:${mockPort}`,
+            'openai-chat': null,
+            'openai-responses': null,
+          },
+        },
+      ],
+    });
 
     // 启动后端
-    await startBackend();
+    await startBackend(testEnv);
     await new Promise(resolve => setTimeout(resolve, 2000));
   }, 30000);
 
   afterAll(async () => {
     await stopBackend();
     mockServer.close();
-    await cleanTestDir();
+    await cleanTestDir(testEnv);
   }, 10000);
 
   beforeEach(() => {
@@ -807,7 +724,7 @@ describe('Anthropic 供应商 E2E 测试', () => {
 
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      const logs = await readLatestLog();
+      const logs = await readLatestLog(LOG_DIR);
       expect(logs).not.toBeNull();
       expect(logs!.length).toBeGreaterThan(0);
 

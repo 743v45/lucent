@@ -12,6 +12,7 @@
 import { createServer } from 'node:http';
 import { getConfig, findProviderByName } from './config.js';
 import { type EndpointType } from './types.js';
+import { inferEndpointTypeFromPath } from './endpoint-registry.js';
 import {
   DEFAULT_PROXY_PORT,
   DEFAULT_SERVER_HOST,
@@ -43,10 +44,7 @@ const PATH_REGEX = /^\/(?:custom\/)?([a-zA-Z0-9_-]+)(\/.*)$/;
 function inferEndpointType(rest: string): EndpointType | null {
   const path = rest.split('?')[0];
   const stripped = path.replace(/^\/v1(?=\/)/, '');
-  if (stripped === '/messages') return 'anthropic-messages';
-  if (stripped === '/chat/completions' || stripped === '/completions') return 'openai-chat';
-  if (stripped === '/responses') return 'openai-responses';
-  return null;
+  return inferEndpointTypeFromPath(stripped);
 }
 
 // ==================== 请求头处理 ====================
