@@ -7,19 +7,14 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createServer } from 'node:http';
-import { readFile, writeFile, mkdir, rm } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { homedir } from 'node:os';
+import { readFile } from 'node:fs/promises';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, type TestEnv } from './e2e-helpers.js';
 
 // ==================== 常量 ====================
 
-const CONFIG_DIR = join(homedir(), '.lucent-config-reload-e2e');
-const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
-const PROXY_PORT = 17048;
-const WEB_PORT = 17049;
+const testEnv = createTestEnv('config-reload-e2e');
+const { configPath: CONFIG_PATH, logDir: LOG_DIR, proxyPort: PROXY_PORT, webPort: WEB_PORT } = testEnv;
 
 // ==================== 类型 ====================
 
@@ -33,7 +28,6 @@ interface MockServer {
 
 let mock1: MockServer;
 let mock2: MockServer;
-let backendProcess: ChildProcess | null = null;
 
 // ==================== Mock 服务器 ====================
 
@@ -102,77 +96,9 @@ async function proxyRequest(): Promise<{ ok: boolean }> {
   }
 }
 
-async function writeConfig(mockPort: number): Promise<void> {
-  const dir = CONFIG_DIR;
-  if (!existsSync(dir)) await mkdir(dir, { recursive: true });
-
-  await writeFile(CONFIG_PATH, JSON.stringify({
-    host: '127.0.0.1',
-    proxyPort: PROXY_PORT,
-    webPort: WEB_PORT,
-    providers: [
-      {
-        id: 'provider-glm',
-        name: 'glm',
-        endpoints: {
-          'anthropic-messages': `http://127.0.0.1:${mockPort}`,
-          'openai-chat': null,
-          'openai-responses': null,
-        },
-      },
-    ],
-  }, null, 2));
-}
-
 async function readConfig(): Promise<any> {
   const content = await readFile(CONFIG_PATH, 'utf-8');
   return JSON.parse(content);
-}
-
-async function cleanTestDir(): Promise<void> {
-  if (existsSync(CONFIG_DIR)) await rm(CONFIG_DIR, { recursive: true, force: true });
-  await mkdir(CONFIG_DIR, { recursive: true });
-}
-
-async function startBackend(): Promise<void> {
-  if (backendProcess) {
-    backendProcess.kill('SIGTERM');
-    await new Promise(r => setTimeout(r, 500));
-  }
-
-  return new Promise<void>((resolve, reject) => {
-    const proc = spawn('npx', ['tsx', 'server/index.ts'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        LUCENT_CONFIG_DIR: CONFIG_DIR,
-        LUCENT_HOST: '127.0.0.1',
-        LUCENT_PROXY_PORT: String(PROXY_PORT),
-        LUCENT_WEB_PORT: String(WEB_PORT),
-      },
-    });
-
-    let output = '';
-    proc.stderr?.on('data', (d) => { output += d.toString(); });
-
-    const timeout = setTimeout(() => { proc.kill(); reject(new Error(`Timeout: ${output}`)); }, 15000);
-
-    proc.stdout?.on('data', (d) => {
-      output += d.toString();
-      if (output.includes('Lucent')) { clearTimeout(timeout); backendProcess = proc; resolve(); }
-    });
-
-    proc.on('error', (err) => { clearTimeout(timeout); reject(err); });
-    proc.on('exit', (code) => { if (code && code !== 0) { clearTimeout(timeout); reject(new Error(`Exit: ${code}`)); } });
-  });
-}
-
-async function stopBackend(): Promise<void> {
-  if (backendProcess) {
-    backendProcess.kill('SIGTERM');
-    await new Promise(r => setTimeout(r, 500));
-    backendProcess = null;
-  }
 }
 
 // ==================== 测试套件 ====================
@@ -186,10 +112,25 @@ describe('配置动态更新 E2E 测试', () => {
     mock2.port = await startMock(mock2.server);
 
     // 初始配置: glm → mock1
-    await cleanTestDir();
-    await writeConfig(mock1.port);
+    await cleanTestDir(testEnv);
+    await writeTestConfig(testEnv, {
+      host: '127.0.0.1',
+      proxyPort: PROXY_PORT,
+      webPort: WEB_PORT,
+      providers: [
+        {
+          id: 'provider-glm',
+          name: 'glm',
+          endpoints: {
+            'anthropic-messages': `http://127.0.0.1:${mock1.port}`,
+            'openai-chat': null,
+            'openai-responses': null,
+          },
+        },
+      ],
+    });
 
-    await startBackend();
+    await startBackend(testEnv);
     await new Promise(r => setTimeout(r, 2000));
   }, 30000);
 
@@ -197,7 +138,7 @@ describe('配置动态更新 E2E 测试', () => {
     await stopBackend();
     mock1.server.close();
     mock2.server.close();
-    await cleanTestDir();
+    await cleanTestDir(testEnv);
   }, 10000);
 
   beforeEach(() => {

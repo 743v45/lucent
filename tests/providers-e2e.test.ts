@@ -12,24 +12,18 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { writeFile, mkdir, rm, readdir, readFile } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
 import { join } from 'node:path';
-import { spawn, type ChildProcess } from 'node:child_process';
-import { homedir } from 'node:os';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, readLatestLog, type TestEnv } from './e2e-helpers.js';
 
 const execAsync = promisify(exec);
 
 // ==================== 常量 ====================
 
-const CONFIG_DIR = join(homedir(), '.lucent-providers-e2e');
-const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
-const LOG_DIR = join(CONFIG_DIR, 'logs');
-const PROXY_PORT = 21048;
-const WEB_PORT = 21049;
+const testEnv = createTestEnv('providers-e2e');
+const { configDir: CONFIG_DIR, configPath: CONFIG_PATH, logDir: LOG_DIR, proxyPort: PROXY_PORT, webPort: WEB_PORT } = testEnv;
 
 /** 仅支持 openai-chat 的预设供应商 */
 const CHAT_ONLY_PROVIDERS = [
@@ -66,7 +60,6 @@ let mockServer: Server;
 let mockPort = 0;
 let captured: CapturedRequest[] = [];
 let mode: MockMode = 'chat-sse';
-let backendProcess: ChildProcess | null = null;
 
 // ==================== OpenAI Mock 响应 ====================
 
@@ -246,75 +239,6 @@ async function proxyFetch(
   }
 }
 
-async function cleanTestDir(): Promise<void> {
-  if (existsSync(CONFIG_DIR)) await rm(CONFIG_DIR, { recursive: true, force: true });
-  await mkdir(CONFIG_DIR, { recursive: true });
-  await mkdir(LOG_DIR, { recursive: true });
-}
-
-async function writeTestConfig(): Promise<void> {
-  const openaiBase = `http://127.0.0.1:${mockPort}`;
-  const providers = [
-    // OpenAI: 支持 chat + responses
-    {
-      id: 'provider-openai-e2e', name: 'openai',
-      endpoints: { 'openai-chat': openaiBase, 'openai-responses': openaiBase, 'anthropic-messages': null },
-    },
-    // 其余: 仅 openai-chat
-    ...CHAT_ONLY_PROVIDERS.map(name => ({
-      id: `provider-${name}-e2e`, name,
-      endpoints: { 'openai-chat': openaiBase, 'openai-responses': null, 'anthropic-messages': null },
-    })),
-  ];
-  await writeFile(CONFIG_PATH, JSON.stringify({
-    host: '127.0.0.1', proxyPort: PROXY_PORT, webPort: WEB_PORT, providers,
-  }, null, 2));
-}
-
-async function readLatestLog(): Promise<Array<Record<string, unknown>> | null> {
-  const files = await readdir(LOG_DIR);
-  const jsonl = files.filter(f => f.endsWith('.jsonl')).sort().reverse();
-  if (!jsonl.length) return null;
-  const content = await readFile(join(LOG_DIR, jsonl[0]), 'utf-8');
-  return content.split(/\n---\n?/).filter(Boolean).map(line => {
-    try { return JSON.parse(line); } catch { return {}; }
-  });
-}
-
-async function startBackend(): Promise<void> {
-  // 仅杀掉本测试文件启动的残留进程（不用 pkill 避免杀其他测试的后端）
-  if (backendProcess) {
-    backendProcess.kill('SIGTERM');
-    await new Promise(r => setTimeout(r, 500));
-  }
-  return new Promise<void>((resolve, reject) => {
-    const proc = spawn('npx', ['tsx', 'server/index.ts'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        LUCENT_CONFIG_DIR: CONFIG_DIR, LUCENT_HOST: '127.0.0.1',
-        LUCENT_PROXY_PORT: String(PROXY_PORT), LUCENT_WEB_PORT: String(WEB_PORT),
-        LUCENT_LOG_DIR: LOG_DIR,
-      },
-    });
-    let output = '';
-    proc.stderr?.on('data', (d) => { output += d.toString(); });
-    const timeout = setTimeout(() => { proc.kill(); reject(new Error(`Timeout: ${output}`)); }, 20000);
-    proc.stdout?.on('data', (d) => {
-      output += d.toString();
-      if (output.includes('Lucent') || output.includes('代理')) {
-        clearTimeout(timeout); backendProcess = proc; resolve();
-      }
-    });
-    proc.on('error', (err) => { clearTimeout(timeout); reject(err); });
-    proc.on('exit', (code) => { if (code && code !== 0) { clearTimeout(timeout); reject(new Error(`Exit: ${code}`)); } });
-  });
-}
-
-async function stopBackend(): Promise<void> {
-  if (backendProcess) { backendProcess.kill('SIGTERM'); await new Promise(r => setTimeout(r, 500)); backendProcess = null; }
-}
-
 // ==================== 测试套件 ====================
 
 describe('多供应商 E2E 测试', () => {
@@ -328,16 +252,31 @@ describe('多供应商 E2E 测试', () => {
       });
       mockServer.on('error', reject);
     });
-    await cleanTestDir();
-    await writeTestConfig();
-    await startBackend();
+    await cleanTestDir(testEnv);
+    const openaiBase = `http://127.0.0.1:${mockPort}`;
+    await writeTestConfig(testEnv, {
+      host: '127.0.0.1',
+      proxyPort: PROXY_PORT,
+      webPort: WEB_PORT,
+      providers: [
+        {
+          id: 'provider-openai-e2e', name: 'openai',
+          endpoints: { 'openai-chat': openaiBase, 'openai-responses': openaiBase, 'anthropic-messages': null },
+        },
+        ...CHAT_ONLY_PROVIDERS.map(name => ({
+          id: `provider-${name}-e2e`, name,
+          endpoints: { 'openai-chat': openaiBase, 'openai-responses': null, 'anthropic-messages': null },
+        })),
+      ],
+    });
+    await startBackend(testEnv);
     await new Promise(r => setTimeout(r, 2000));
   }, 30000);
 
   afterAll(async () => {
     await stopBackend();
     mockServer.close();
-    await cleanTestDir();
+    await cleanTestDir(testEnv);
   }, 10000);
 
   beforeEach(() => { captured.length = 0; mode = 'chat-sse'; });
@@ -604,7 +543,7 @@ describe('多供应商 E2E 测试', () => {
       await proxyFetch('openai', '/v1/chat/completions');
       await new Promise(r => setTimeout(r, 500));
 
-      const logs = await readLatestLog();
+      const logs = await readLatestLog(LOG_DIR);
       expect(logs).not.toBeNull();
       const last = (logs!).find((l: Record<string, unknown>) =>
         l.providerName === 'openai' && l.endpointType === 'openai-chat',
@@ -617,7 +556,7 @@ describe('多供应商 E2E 测试', () => {
       await proxyFetch('deepseek', '/v1/chat/completions');
       await new Promise(r => setTimeout(r, 500));
 
-      const logs = await readLatestLog();
+      const logs = await readLatestLog(LOG_DIR);
       expect(logs).not.toBeNull();
       const last = (logs!).find((l: Record<string, unknown>) =>
         l.providerName === 'deepseek' && l.endpointType === 'openai-chat',

@@ -13,20 +13,16 @@
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createServer, type Server } from 'node:http';
-import { readFile, writeFile, mkdir, rm, readdir } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
-import { join } from 'node:path';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { homedir } from 'node:os';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, readLatestLog, type TestEnv } from './e2e-helpers.js';
 
 // ==================== 常量 ====================
 
-const CONFIG_DIR = join(homedir(), '.lucent-e2e-test');
-const CONFIG_PATH = join(CONFIG_DIR, 'config.json');
-const LOG_DIR = join(CONFIG_DIR, 'logs');
-const PROXY_PORT = 18048;
-const WEB_PORT = 18049;
+const testEnv = createTestEnv('provider-e2e');
+const { configPath: CONFIG_PATH, logDir: LOG_DIR, proxyPort: PROXY_PORT, webPort: WEB_PORT } = testEnv;
 
 // ==================== 类型定义 ====================
 
@@ -56,7 +52,6 @@ interface ProxyConfig {
 
 let mockAnthropic: MockUpstream;
 let mockOpenAI: MockUpstream;
-let backendProcess: ChildProcess | null = null;
 
 // ==================== 工具函数 ====================
 
@@ -163,97 +158,10 @@ async function apiRequest(
   }
 }
 
-async function cleanTestDir(): Promise<void> {
-  if (existsSync(CONFIG_DIR)) await rm(CONFIG_DIR, { recursive: true, force: true });
-  await mkdir(CONFIG_DIR, { recursive: true });
-  await mkdir(LOG_DIR, { recursive: true });
-}
-
-async function writeTestConfig(config: ProxyConfig): Promise<void> {
-  await writeFile(CONFIG_PATH, JSON.stringify(config, null, 2));
-}
-
 async function readTestConfig(): Promise<ProxyConfig | null> {
   if (!existsSync(CONFIG_PATH)) return null;
   const content = await readFile(CONFIG_PATH, 'utf-8');
   return JSON.parse(content);
-}
-
-async function readLatestLog(): Promise<Array<{ providerName?: string; endpointType?: string }> | null> {
-  const files = await readdir(LOG_DIR);
-  const jsonlFiles = files.filter(f => f.endsWith('.jsonl')).sort().reverse();
-  if (jsonlFiles.length === 0) return null;
-
-  const content = await readFile(join(LOG_DIR, jsonlFiles[0]), 'utf-8');
-  // LOG_ENTRY_SEPARATOR = '\n---\n'
-  return content.split(/\n---\n?/).filter(Boolean).map(line => {
-    try {
-      const obj = JSON.parse(line);
-      return { providerName: obj.providerName, endpointType: obj.endpointType };
-    } catch {
-      return {};
-    }
-  });
-}
-
-async function startBackend(): Promise<void> {
-  if (backendProcess) {
-    backendProcess.kill('SIGTERM');
-    await new Promise(resolve => setTimeout(resolve, 500));
-  }
-
-  // 确保端口可用
-  for (const port of [PROXY_PORT, WEB_PORT]) {
-    try {
-      const { execSync } = await import('node:child_process');
-      execSync(`lsof -ti :${port} | xargs kill -9 2>/dev/null || true`, { stdio: 'ignore' });
-    } catch { /* ignore */ }
-  }
-  await new Promise(resolve => setTimeout(resolve, 300));
-
-  return new Promise<void>((resolve, reject) => {
-    const proc = spawn('npx', ['tsx', 'server/index.ts'], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-      env: {
-        ...process.env,
-        LUCENT_CONFIG_DIR: CONFIG_DIR,
-        LUCENT_HOST: '127.0.0.1',
-        LUCENT_PROXY_PORT: String(PROXY_PORT),
-        LUCENT_WEB_PORT: String(WEB_PORT),
-        LUCENT_LOG_DIR: LOG_DIR,
-      },
-    });
-
-    let output = '';
-    proc.stderr?.on('data', (data) => { output += data.toString(); });
-
-    const timeout = setTimeout(() => {
-      proc.kill();
-      reject(new Error(`Server startup timeout. Output: ${output}`));
-    }, 20000);
-
-    proc.stdout?.on('data', (data) => {
-      output += data.toString();
-      if (output.includes('Lucent') || output.includes('代理')) {
-        clearTimeout(timeout);
-        backendProcess = proc;
-        resolve();
-      }
-    });
-
-    proc.on('error', (err) => { clearTimeout(timeout); reject(err); });
-    proc.on('exit', (code) => {
-      if (code && code !== 0) { clearTimeout(timeout); reject(new Error(`Server exited with code ${code}`)); }
-    });
-  });
-}
-
-async function stopBackend(): Promise<void> {
-  if (backendProcess) {
-    backendProcess.kill('SIGTERM');
-    await new Promise(resolve => setTimeout(resolve, 500));
-    backendProcess = null;
-  }
 }
 
 // ==================== 测试套件 ====================
@@ -266,8 +174,8 @@ describe('Provider E2E 测试', () => {
     mockAnthropic.port = await startMockServer(mockAnthropic.server);
     mockOpenAI.port = await startMockServer(mockOpenAI.server);
 
-    await cleanTestDir();
-    await writeTestConfig({
+    await cleanTestDir(testEnv);
+    await writeTestConfig(testEnv, {
       host: '127.0.0.1',
       proxyPort: PROXY_PORT,
       webPort: WEB_PORT,
@@ -284,7 +192,7 @@ describe('Provider E2E 测试', () => {
       ],
     });
 
-    await startBackend();
+    await startBackend(testEnv);
     await new Promise(resolve => setTimeout(resolve, 2000));
   }, 30000);
 
@@ -292,7 +200,7 @@ describe('Provider E2E 测试', () => {
     await stopBackend();
     mockAnthropic.server.close();
     mockOpenAI.server.close();
-    await cleanTestDir();
+    await cleanTestDir(testEnv);
   }, 10000);
 
   beforeEach(() => {
@@ -451,7 +359,7 @@ describe('Provider E2E 测试', () => {
 
       await new Promise(resolve => setTimeout(resolve, 500));
 
-      const logs = await readLatestLog();
+      const logs = await readLatestLog(LOG_DIR);
       expect(logs).not.toBeNull();
       expect(logs!.length).toBeGreaterThan(0);
 
@@ -470,7 +378,7 @@ describe('首次启动:无配置时创建默认 anthropic 供应商', () => {
 
   beforeAll(async () => {
     await stopBackend();
-    await cleanTestDir();
+    await cleanTestDir(testEnv);
   }, 10000);
 
   afterAll(async () => {
@@ -478,7 +386,7 @@ describe('首次启动:无配置时创建默认 anthropic 供应商', () => {
       standaloneBackend.kill('SIGTERM');
       await new Promise(resolve => setTimeout(resolve, 500));
     }
-    await cleanTestDir();
+    await cleanTestDir(testEnv);
   }, 10000);
 
   it('启动后应创建默认 anthropic 供应商', async () => {
@@ -486,7 +394,7 @@ describe('首次启动:无配置时创建默认 anthropic 供应商', () => {
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
-        LUCENT_CONFIG_DIR: CONFIG_DIR,
+        LUCENT_CONFIG_DIR: testEnv.configDir,
         LUCENT_HOST: '127.0.0.1',
         LUCENT_PROXY_PORT: String(19048),
         LUCENT_WEB_PORT: String(19049),
