@@ -41,6 +41,16 @@ export const DEFAULT_LOG_QUERY_LIMIT = 100;         // 日志查询默认返回�
 export const LOG_ENTRY_SEPARATOR = '\n---\n';       // 日志条目之间的分隔符（写入时使用）
 export const LOG_SPLIT_REGEX = /\n---\n?/;          // 解析日志时用于拆分条目的正则
 
+/** 转义 JSON 字符串中可能与日志分隔符冲突的序列 */
+export function escapeLogContent(json: string): string {
+  return json.replace(/\n---\n/g, '\\n---\\n');
+}
+
+/** 反转义：将转义后的序列还原 */
+export function unescapeLogContent(text: string): string {
+  return text.replace(/\\n---\\n/g, '\n---\n');
+}
+
 // ==================== Delta 存储 ====================
 /** 每隔多少条 SSE delta 事件保存一次完整快照（用于上下文重建） */
 export const DELTA_CHECKPOINT_INTERVAL = 10;

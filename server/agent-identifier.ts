@@ -14,10 +14,10 @@ export interface AgentIdentification {
 }
 
 export interface TokenUsage {
-  inputTokens: number;
-  outputTokens: number;
-  cacheReadTokens?: number;
-  cacheWriteTokens?: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens?: number;
+  cache_creation_tokens?: number;
 }
 
 export interface ParsedRequest {
@@ -220,12 +220,12 @@ export function extractTokenUsage(responseBody: unknown): TokenUsage | undefined
   }
 
   const result = {
-    inputTokens: typeof usage.input_tokens === 'number' ? usage.input_tokens : 0,
-    outputTokens: typeof usage.output_tokens === 'number' ? usage.output_tokens : 0,
-    cacheReadTokens: typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : undefined,
-    cacheWriteTokens: typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : undefined,
+    input_tokens: typeof usage.input_tokens === 'number' ? usage.input_tokens : 0,
+    output_tokens: typeof usage.output_tokens === 'number' ? usage.output_tokens : 0,
+    cache_read_tokens: typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : undefined,
+    cache_creation_tokens: typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : undefined,
   };
-  log('Token 使用: input=%d output=%d cacheRead=%d cacheWrite=%d', result.inputTokens, result.outputTokens, result.cacheReadTokens ?? 0, result.cacheWriteTokens ?? 0);
+  log('Token 使用: input=%d output=%d cacheRead=%d cacheCreate=%d', result.input_tokens, result.output_tokens, result.cache_read_tokens ?? 0, result.cache_creation_tokens ?? 0);
   return result;
 }
 

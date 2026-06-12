@@ -179,9 +179,15 @@ export function extractFromSSELines(lines: SSERawLine[]): ExtractedInfo {
 
 // ==================== 后台收集原始 SSE 行 ====================
 
+/** SSE 后台收集超时时间（毫秒） */
+const SSE_COLLECT_TIMEOUT_MS = 60_000; // 1 分钟
+
 /**
  * 后台收集 SSE 原始行数据（不阻塞客户端响应）
  * 存储原始数据，展示时再调用 extractFromSSELines 提取
+ *
+ * 带超时保护：如果上游在 SSE_COLLECT_TIMEOUT_MS 内未关闭流，
+ * 写入已收集的部分数据并标记 truncated=true
  */
 export async function collectSSELinesInBackground(
   body: ReadableStream<Uint8Array>,
@@ -190,6 +196,7 @@ export async function collectSSELinesInBackground(
   onDeltaCommit: () => void,
 ): Promise<void> {
   const lines: SSERawLine[] = [];
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
     const eventStream = body
@@ -198,15 +205,27 @@ export async function collectSSELinesInBackground(
 
     const reader = eventStream.getReader();
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    // 超时保护：超时后写入部分数据
+    const timeoutPromise = new Promise<'timeout'>(resolve => {
+      timeoutId = setTimeout(() => resolve('timeout'), SSE_COLLECT_TIMEOUT_MS);
+    });
 
-      // 收集原始 SSE 行数据
-      lines.push({
-        event: value.event || '',
-        data: value.data || '',
-      });
+    const readPromise = (async () => {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) return 'done' as const;
+        lines.push({
+          event: value.event || '',
+          data: value.data || '',
+        });
+      }
+    })();
+
+    const result = await Promise.race([readPromise, timeoutPromise]);
+
+    if (result === 'timeout') {
+      dbgSse('SSE 收集超时: lines=%d id=%s', lines.length, entry.id);
+      try { reader.cancel(); } catch { /* ignore */ }
     }
 
     // 写入日志：存储原始 SSE 数据
@@ -217,6 +236,7 @@ export async function collectSSELinesInBackground(
       body: {
         type: 'sse_raw',
         lines,
+        ...(result === 'timeout' ? { truncated: true } : {}),
       },
     };
 
@@ -224,10 +244,10 @@ export async function collectSSELinesInBackground(
     const extracted = extractFromSSELines(lines);
     if (extracted.usage.input > 0 || extracted.usage.output > 0) {
       entry.tokenUsage = {
-        inputTokens: extracted.usage.input,
-        outputTokens: extracted.usage.output,
-        cacheReadTokens: extracted.usage.cache_read || undefined,
-        cacheWriteTokens: extracted.usage.cache_create || undefined,
+        input_tokens: extracted.usage.input,
+        output_tokens: extracted.usage.output,
+        cache_read_tokens: extracted.usage.cache_read || undefined,
+        cache_creation_tokens: extracted.usage.cache_create || undefined,
       };
     }
 
@@ -235,17 +255,24 @@ export async function collectSSELinesInBackground(
     onDeltaCommit();
 
     dumpSseDebug(entry, lines);
-    dbgSse('SSE 收集完成: lines=%d', lines.length);
+    dbgSse('SSE 收集完成: lines=%d truncated=%s', lines.length, result === 'timeout');
   } catch (err) {
     dbgSse('SSE 收集失败: %O', err);
     entry.response = {
       status: entry.response?.status || 200,
       statusText: entry.response?.statusText || 'OK',
       headers: entry.response?.headers || {},
-      body: { type: 'sse_raw', error: String(err) },
+      body: {
+        type: 'sse_raw',
+        lines,
+        error: String(err),
+        ...(lines.length > 0 ? { truncated: true } : {}),
+      },
     };
     onLogEntry(entry);
     onDeltaCommit();
+  } finally {
+    if (timeoutId !== undefined) clearTimeout(timeoutId);
   }
 }
 

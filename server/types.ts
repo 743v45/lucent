@@ -173,10 +173,10 @@ export interface RawLogEntry {
   /** 请求使用的端点协议 */
   endpointType?: EndpointType;
   tokenUsage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadTokens?: number;
-    cacheWriteTokens?: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens?: number;
+    cache_creation_tokens?: number;
   };
   kvCache?: LogEntry['kvCache'];
   context?: LogEntry['context'];
@@ -199,6 +199,8 @@ export interface SSERawBody {
   type: 'sse_raw';
   lines: SSERawLine[];
   error?: string;
+  /** 流被截断（超时或上游断连）时为 true */
+  truncated?: boolean;
 }
 
 export interface ExtractedInfo {

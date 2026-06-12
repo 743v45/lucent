@@ -17,6 +17,7 @@ import * as LogReader from './services/log-reader.js';
 import { mountRoutes } from './routes/index.js';
 import { startProxyServer } from './proxy.js';
 import { setupInterceptor, drainPendingSSETasks } from './interceptor.js';
+import { drainWriteQueue } from './services/log-writer.js';
 import { isSseDebugEnabled } from './sse-extractor.js';
 import type { ProxyStatus } from './types.js';
 import type { ResolvedConfig } from './config.js';
@@ -66,7 +67,7 @@ export async function startServer(): Promise<void> {
   // 初始化日志服务
   LogWriter.init(resolvedConfig);
   LogReader.init(resolvedConfig);
-  LogWriter.cleanupOldLogs();
+  await LogWriter.cleanupOldLogs();
 
   // 启动代理服务器
   const proxyPort = resolvedConfig.proxyPort;
@@ -146,6 +147,9 @@ export async function shutdownServer(): Promise<void> {
 
   // 等待后台 SSE 任务完成，确保数据不丢失
   await drainPendingSSETasks();
+
+  // 等待所有挂起的日志写入完成
+  await drainWriteQueue();
 
   if (proxyServer) {
     await proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));

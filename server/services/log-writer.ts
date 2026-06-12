@@ -2,12 +2,13 @@
  * 日志写入服务
  *
  * 统一管理日志文件的初始化、轮转、清理和写入
- * 合并了原 index.ts 和 interceptor.ts 中的日志管理逻辑
+ * 使用异步 I/O + 写入队列，不阻塞事件循环
  */
 
-import { appendFileSync, mkdirSync, existsSync, statSync, unlinkSync, readdirSync } from 'node:fs';
+import { appendFile, mkdir, stat, unlink, readdir } from 'node:fs/promises';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { LOG_ENTRY_SEPARATOR } from '../constants.js';
+import { LOG_ENTRY_SEPARATOR, escapeLogContent } from '../constants.js';
 import type { RawLogEntry } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
@@ -17,6 +18,9 @@ const dbg = createDebug('lucent:log-writer');
 
 let resolvedConfig: ResolvedConfig;
 let currentLogFile: string | null = null;
+
+/** 异步写入队列：串行化写入，保证顺序 */
+let writeQueue: Promise<void> = Promise.resolve();
 
 // ==================== 初始化 ====================
 
@@ -53,10 +57,7 @@ function generateLogFilePath(): string {
 // ==================== 写入 ====================
 
 /**
- * 写入日志条目
- *
- * entry 可以携带任意 RawLogEntry 字段，包括 providerName（请求经过的供应商名）
- * 和 endpointType（使用的端点协议），由调用方（proxy.ts）传入。
+ * 写入日志条目（异步，通过队列串行化保证顺序）
  */
 export function writeLogEntry(entry: RawLogEntry): void {
   if (!currentLogFile) {
@@ -64,12 +65,23 @@ export function writeLogEntry(entry: RawLogEntry): void {
     currentLogFile = generateLogFilePath();
   }
 
-  try {
-    const line = JSON.stringify(entry) + LOG_ENTRY_SEPARATOR;
-    appendFileSync(currentLogFile, line);
-  } catch (error) {
-    dbg('写入日志失败: %O', error);
-  }
+  const line = escapeLogContent(JSON.stringify(entry)) + LOG_ENTRY_SEPARATOR;
+  const file = currentLogFile;
+
+  writeQueue = writeQueue.then(async () => {
+    try {
+      await appendFile(file, line);
+    } catch (error) {
+      dbg('写入日志失败: %O', error);
+    }
+  });
+}
+
+/**
+ * 等待所有挂起的写入完成
+ */
+export async function drainWriteQueue(): Promise<void> {
+  await writeQueue;
 }
 
 // ==================== 轮转 ====================
@@ -77,12 +89,14 @@ export function writeLogEntry(entry: RawLogEntry): void {
 /**
  * 检查并轮转日志文件（当文件超过大小限制时）
  */
-export function checkAndRotateLogFile(): void {
+export async function checkAndRotateLogFile(): Promise<void> {
   if (!currentLogFile || !existsSync(currentLogFile)) return;
 
   try {
-    const stats = statSync(currentLogFile);
-    if (stats.size >= resolvedConfig.maxLogFileSize) {
+    const stats_ = await stat(currentLogFile);
+    if (stats_.size >= resolvedConfig.maxLogFileSize) {
+      // 等待挂起写入完成后再轮转
+      await drainWriteQueue();
       dbg('日志文件达到大小限制，轮转中...');
       currentLogFile = generateLogFilePath();
       dbg('日志轮转: 新文件=%s', currentLogFile);
@@ -97,23 +111,24 @@ export function checkAndRotateLogFile(): void {
 /**
  * 清理过期日志文件
  */
-export function cleanupOldLogs(): void {
+export async function cleanupOldLogs(): Promise<void> {
   try {
     if (!existsSync(resolvedConfig.logDir)) return;
 
     const now = Date.now();
     const maxAge = resolvedConfig.logRetentionDays * 24 * 60 * 60 * 1000;
 
-    const files = readdirSync(resolvedConfig.logDir).filter(f => f.endsWith('.jsonl'));
+    const files = await readdir(resolvedConfig.logDir);
+    const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
 
-    for (const file of files) {
+    for (const file of jsonlFiles) {
       const filePath = join(resolvedConfig.logDir, file);
       try {
-        const stats = statSync(filePath);
-        const age = now - stats.mtimeMs;
+        const stats_ = await stat(filePath);
+        const age = now - stats_.mtimeMs;
 
         if (age > maxAge) {
-          unlinkSync(filePath);
+          await unlink(filePath);
           dbg('删除过期日志: %s', file);
         }
       } catch (error) {

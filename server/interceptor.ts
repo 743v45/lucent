@@ -35,10 +35,13 @@ const dbgSse = createDebug('lucent:interceptor:sse');
 let interceptorInstalled = false;
 const pendingSSETasks = new Set<Promise<void>>();
 
+/** 优雅关闭时等待 SSE 任务的超时（毫秒） */
+const DRAIN_TIMEOUT_MS = 5_000;
+
 export async function drainPendingSSETasks(): Promise<void> {
   if (pendingSSETasks.size === 0) return;
   dbg('等待后台 SSE 任务完成: count=%d', pendingSSETasks.size);
-  await Promise.all([...pendingSSETasks]);
+  await Promise.allSettled([...pendingSSETasks]);
   dbg('所有后台 SSE 任务已完成');
 }
 

@@ -2,15 +2,17 @@
  * 日志读取服务
  *
  * 从 JSONL 文件读取、归一化、过滤、分页日志
- * 从 index.ts 提取而来
+ * 使用异步 I/O，不阻塞事件循环
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
+import { readdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   DEFAULT_LOG_QUERY_LIMIT,
   MAX_LOG_FILES_TO_READ,
   LOG_SPLIT_REGEX,
+  unescapeLogContent,
 } from '../constants.js';
 import { extractContext } from '../context-extractors.js';
 import { extractCachedContent, getContextSizeForModel } from '../kvcache.js';
@@ -25,6 +27,55 @@ let resolvedConfig: ResolvedConfig;
 
 export function init(resolvedCfg: ResolvedConfig): void {
   resolvedConfig = resolvedCfg;
+}
+
+// ==================== 文件级缓存 ====================
+
+interface FileCache {
+  mtimeMs: number;
+  entries: LogEntry[];
+}
+
+const fileCache = new Map<string, FileCache>();
+
+/**
+ * 使缓存失效（日志写入/轮转/清理时调用）
+ */
+export function invalidateCache(): void {
+  fileCache.clear();
+}
+
+/**
+ * 读取单个文件的日志条目，使用 mtime 缓存
+ */
+async function readFileEntries(filename: string): Promise<LogEntry[]> {
+  const filePath = join(resolvedConfig.logDir, filename);
+
+  // 检查缓存
+  const stats_ = await stat(filePath);
+  const cached = fileCache.get(filename);
+  if (cached && cached.mtimeMs === stats_.mtimeMs) {
+    return cached.entries;
+  }
+
+  // 缓存未命中，解析文件
+  const content = await readFile(filePath, 'utf-8');
+  const entries: LogEntry[] = [];
+  const chunks = content.split(LOG_SPLIT_REGEX);
+  for (const chunk of chunks) {
+    const line = chunk.trim();
+    if (!line) continue;
+    try {
+      const raw = JSON.parse(unescapeLogContent(line));
+      entries.push(normalizeLogEntry(raw));
+    } catch {
+      // 忽略解析失败的行
+    }
+  }
+
+  // 更新缓存
+  fileCache.set(filename, { mtimeMs: stats_.mtimeMs, entries });
+  return entries;
 }
 
 // ==================== 归一化 ====================
@@ -69,12 +120,7 @@ export function normalizeLogEntry(raw: any): LogEntry {
       stream: raw.isStream ?? !!body.stream,
       error: raw.error,
     },
-    tokenUsage: raw.tokenUsage ? {
-      input_tokens: raw.tokenUsage.inputTokens ?? 0,
-      output_tokens: raw.tokenUsage.outputTokens ?? 0,
-      cache_creation_tokens: raw.tokenUsage.cacheWriteTokens,
-      cache_read_tokens: raw.tokenUsage.cacheReadTokens,
-    } : raw.tokenUsage,
+    tokenUsage: raw.tokenUsage,
     kvCache: raw.kvCache,
     context: raw.context,
     error: raw.error,
@@ -185,7 +231,7 @@ function buildContextFromRequest(log: LogEntry): void {
 /**
  * 读取并过滤日志
  */
-export function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: number } {
+export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[]; total: number }> {
   const {
     limit = DEFAULT_LOG_QUERY_LIMIT,
     offset = 0,
@@ -203,27 +249,17 @@ export function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: numb
       return { logs: [], total: 0 };
     }
 
-    const files = readdirSync(resolvedConfig.logDir)
+    const allFiles = await readdir(resolvedConfig.logDir);
+    const files = allFiles
       .filter(f => f.endsWith('.jsonl') && !f.startsWith('export_'))
       .sort()
       .reverse()
       .slice(0, MAX_LOG_FILES_TO_READ);
 
+    // 使用缓存读取每个文件
     for (const file of files) {
-      const filePath = join(resolvedConfig.logDir, file);
-      const content = readFileSync(filePath, 'utf-8');
-
-      const chunks = content.split(LOG_SPLIT_REGEX);
-      for (const chunk of chunks) {
-        const line = chunk.trim();
-        if (!line) continue;
-        try {
-          const raw = JSON.parse(line);
-          allLogs.push(normalizeLogEntry(raw));
-        } catch {
-          // 忽略解析失败的行
-        }
-      }
+      const entries = await readFileEntries(file);
+      allLogs.push(...entries);
     }
   } catch (error) {
     dbg('读取日志失败: %O', error);
@@ -280,11 +316,9 @@ export function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: numb
 
   const total = filteredLogs.length;
 
-  // 从 request.body 构建 context
-  filteredLogs.forEach(log => buildContextFromRequest(log));
-
-  // 分页
+  // 从 request.body 构建 context（只对分页后返回的条目）
   const paginatedLogs = filteredLogs.slice(offset, offset + limit);
+  paginatedLogs.forEach(log => buildContextFromRequest(log));
 
   return { logs: paginatedLogs, total };
 }
@@ -292,31 +326,20 @@ export function readLogs(query: LogsQuery = {}): { logs: LogEntry[]; total: numb
 /**
  * 获取单个日志详情
  */
-export function getLogById(id: string): LogEntry | null {
+export async function getLogById(id: string): Promise<LogEntry | null> {
   try {
     if (!existsSync(resolvedConfig.logDir)) {
       return null;
     }
 
-    const files = readdirSync(resolvedConfig.logDir).filter(f => f.endsWith('.jsonl'));
+    const files = (await readdir(resolvedConfig.logDir)).filter(f => f.endsWith('.jsonl'));
 
     for (const file of files) {
-      const filePath = join(resolvedConfig.logDir, file);
-      const content = readFileSync(filePath, 'utf-8');
-
-      const chunks = content.split(LOG_SPLIT_REGEX);
-      for (const chunk of chunks) {
-        const line = chunk.trim();
-        if (!line) continue;
-        try {
-          const log = JSON.parse(line) as LogEntry;
-          if (log.id === id) {
-            buildContextFromRequest(log);
-            return log;
-          }
-        } catch {
-          // 忽略解析失败的行
-        }
+      const entries = await readFileEntries(file);
+      const found = entries.find(e => e.id === id);
+      if (found) {
+        buildContextFromRequest(found);
+        return found;
       }
     }
   } catch (error) {

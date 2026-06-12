@@ -61,7 +61,7 @@ export function createLogsRouter(options: {
   });
 
   // GET /api/logs
-  router.get('/api/logs', (req, res) => {
+  router.get('/api/logs', async (req, res) => {
     const query: LogsQuery = {
       limit: parseInt(req.query.limit as string) || 100,
       offset: parseInt(req.query.offset as string) || 0,
@@ -72,7 +72,7 @@ export function createLogsRouter(options: {
       search: req.query.search as string,
     };
 
-    const result = LogReader.readLogs(query);
+    const result = await LogReader.readLogs(query);
     res.json(result);
   });
 
@@ -88,8 +88,8 @@ export function createLogsRouter(options: {
   });
 
   // GET /api/logs/:id
-  router.get('/api/logs/:id', (req, res) => {
-    const log = LogReader.getLogById(req.params.id);
+  router.get('/api/logs/:id', async (req, res) => {
+    const log = await LogReader.getLogById(req.params.id);
     if (log) {
       res.json({ log });
     } else {
