@@ -227,7 +227,11 @@ function App(): JSX.Element {
         </div>
 
         <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
-        <UsageGuide open={usageGuideOpen} onClose={() => setUsageGuideOpen(false)} />
+        <UsageGuide
+          open={usageGuideOpen}
+          onClose={() => setUsageGuideOpen(false)}
+          onOpenSettings={() => setSettingsOpen(true)}
+        />
       </div>
     </SettingsContext.Provider>
   );
