@@ -150,46 +150,42 @@ function buildContextFromRequest(log: LogEntry): void {
 
   if (!body || typeof body !== 'object') return;
 
-  // 提取 KV-Cache 信息（命中率、缓存内容）
+  // 提取 KV-Cache 信息（命中率、缓存内容、状态判定）
+  // 总是用新口径重新提取并覆盖：修正旧日志存储的 string[] 旧格式 + 旧命中率口径，
+  // 同时为无缓存命中的请求补上 status/cacheMode（用于前端空状态三态）。
   // 优先用已归一化的 tokenUsage（兼容 SSE/非 SSE），fallback 到 response.body.usage
-  if (!log.kvCache) {
-    const tu = log.tokenUsage as any;
-    const rawRespUsage = (log.response?.body as any)?.usage;
-    const normalizedUsage = (tu?.input_tokens !== undefined) ? {
-      input_tokens: tu.input_tokens,
-      output_tokens: tu.output_tokens,
-      cache_creation_input_tokens: tu.cache_creation_tokens,
-      cache_read_input_tokens: tu.cache_read_tokens,
-    } : rawRespUsage;
-    if (normalizedUsage) {
-      // 传入 endpointType/provider 以区分显式缓存（Anthropic）与自动缓存（OpenAI）
-      // 兼容旧日志：endpointType 字段缺失时 fallback 到 apiType
-      const endpointType = log.endpointType || (log as any).apiType;
-      // metadata.provider 用 'claude' 表示 Anthropic，规范成契约要求的 'anthropic'
-      const metaProvider = log.metadata?.provider;
-      const provider =
-        metaProvider === 'claude' ? 'anthropic'
-          : metaProvider === 'openai' ? 'openai'
-            : metaProvider;
-      const cached = extractCachedContent(body, normalizedUsage, { endpointType, provider });
-      if (cached.totalCachedTokens > 0) {
-        log.kvCache = {
-          hitRate: cached.hitRate,
-          cacheReadTokens: cached.cacheReadTokens,
-          cacheCreateTokens: cached.cacheCreateTokens,
-          totalCachedTokens: cached.totalCachedTokens,
-          totalInputTokens: cached.totalInputTokens,
-          uncachedInputTokens: cached.uncachedInputTokens,
-          cacheMode: cached.cacheMode,
-          provider: cached.provider,
-          status: cached.status,
-          ...(cached.system.length ? { system: cached.system } : {}),
-          ...(cached.messages.length ? { messages: cached.messages } : {}),
-          ...(cached.tools.length ? { tools: cached.tools } : {}),
-        };
-      }
-    }
-  }
+  const tu = log.tokenUsage as any;
+  const rawRespUsage = (log.response?.body as any)?.usage;
+  const normalizedUsage = (tu?.input_tokens !== undefined) ? {
+    input_tokens: tu.input_tokens,
+    output_tokens: tu.output_tokens,
+    cache_creation_input_tokens: tu.cache_creation_tokens,
+    cache_read_input_tokens: tu.cache_read_tokens,
+  } : rawRespUsage;
+  // 传入 endpointType/provider 以区分显式缓存（Anthropic）与自动缓存（OpenAI）
+  // 兼容旧日志：endpointType 字段缺失时 fallback 到 apiType
+  const endpointType = log.endpointType || (log as any).apiType;
+  // metadata.provider 用 'claude' 表示 Anthropic，规范成契约要求的 'anthropic'
+  const metaProvider = log.metadata?.provider;
+  const provider =
+    metaProvider === 'claude' ? 'anthropic'
+      : metaProvider === 'openai' ? 'openai'
+        : metaProvider;
+  const cached = extractCachedContent(body, normalizedUsage, { endpointType, provider });
+  log.kvCache = {
+    hitRate: cached.hitRate,
+    cacheReadTokens: cached.cacheReadTokens,
+    cacheCreateTokens: cached.cacheCreateTokens,
+    totalCachedTokens: cached.totalCachedTokens,
+    totalInputTokens: cached.totalInputTokens,
+    uncachedInputTokens: cached.uncachedInputTokens,
+    cacheMode: cached.cacheMode,
+    provider: cached.provider,
+    status: cached.status,
+    ...(cached.system.length ? { system: cached.system } : {}),
+    ...(cached.messages.length ? { messages: cached.messages } : {}),
+    ...(cached.tools.length ? { tools: cached.tools } : {}),
+  };
 
   // 使用统一的 context 提取器（内部会检测 API 类型）
   const extracted = extractContext(body, url);
