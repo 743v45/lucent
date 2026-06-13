@@ -61,7 +61,7 @@ export interface KVCacheBlock {
   /** 估算 token 数 */
   tokens?: number;
   /** 命中类型 */
-  kind?: 'hit' | 'create' | 'mixed';
+  kind?: 'hit' | 'create';
 }
 
 export interface KVCacheInfo {

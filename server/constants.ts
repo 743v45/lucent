@@ -61,6 +61,9 @@ export const LARGE_CONTEXT_SIZE = 1000000;   // 1M — 大上下文模型的上�
 /** 匹配使用大上下文的模型名称，用于自动选择 LARGE_CONTEXT_SIZE */
 export const LARGE_CONTEXT_MODEL_PATTERN = /opus|mythos|sonnet-4|claude-4/;
 
+// ==================== Cache 命中率阈值 ====================
+export const CACHE_HIT_RATE_GOOD_THRESHOLD = 70;  // 命中率 ≥ 此值视为高命中（块标 hit）
+
 // ==================== API Key 脱敏 ====================
 export const API_KEY_MASK_THRESHOLD = 12;  // key 长度超过此值才进行脱敏
 export const API_KEY_MASK_PREFIX = 8;      // 保留前 8 位明文

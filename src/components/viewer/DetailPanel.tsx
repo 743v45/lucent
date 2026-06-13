@@ -161,20 +161,47 @@ function InlineTokenStats({ log }: { log: LogEntry }) {
   const hasHitRate = log.kvCache?.hitRate != null && log.kvCache.hitRate > 0;
 
   return (
-    <div className="shrink-0 flex items-center gap-4 font-mono text-sm">
-      <div className="rounded-lg bg-bg-surface/50 px-3 py-2 space-y-1">
-        <div className="flex items-center gap-3">
-          <span className="text-text-quaternary">input: <span className="text-text-primary tabular-nums">{formatTokenValue(inputTokens)}</span></span>
-          <span className="text-text-quaternary">output: <span className="text-text-primary tabular-nums">{formatTokenValue(outputTokens)}</span></span>
+    <div className="shrink-0 flex items-stretch rounded-lg border border-border-subtle bg-bg-surface/50 overflow-hidden">
+      {/* 左侧主数据区:2x4 网格, 4 个核心指标定宽对齐 */}
+      <div className="flex-1 min-w-0 grid grid-cols-2 grid-rows-2 gap-x-6 gap-y-2 p-4">
+        <div className="flex flex-col gap-0.5 min-w-[88px]">
+          <span className="text-sm text-text-quaternary">input</span>
+          <span className="text-base font-[510] text-text-primary tabular-nums">{formatTokenValue(inputTokens)}</span>
         </div>
-        <div className="flex items-center gap-3">
-          <span className="text-text-quaternary">create: <span className="text-text-primary tabular-nums">{formatTokenValue(cacheCreate)}</span></span>
-          <span className="text-text-quaternary">read: <span className="text-text-primary tabular-nums">{formatTokenValue(cacheRead)}</span></span>
+        <div className="flex flex-col gap-0.5 min-w-[88px]">
+          <span className="text-sm text-text-quaternary">output</span>
+          <span className="text-base font-[510] text-text-primary tabular-nums">{formatTokenValue(outputTokens)}</span>
+        </div>
+        <div className="flex flex-col gap-0.5 min-w-[88px]">
+          <span className="text-sm text-text-quaternary">create</span>
+          <span className="text-base font-[510] text-text-primary tabular-nums">{formatTokenValue(cacheCreate)}</span>
+        </div>
+        <div className="flex flex-col gap-0.5 min-w-[88px]">
+          <span className="text-sm text-text-quaternary">read</span>
+          <span className="text-base font-[510] text-text-primary tabular-nums">{formatTokenValue(cacheRead)}</span>
         </div>
       </div>
-      <span className={`font-[510] text-base ${hasHitRate ? (hitRate > CACHE_HIT_RATE_GOOD_THRESHOLD ? 'text-success' : hitRate > CACHE_HIT_RATE_BAD_THRESHOLD ? 'text-warning' : 'text-error') : 'text-text-quaternary'}`}>
-        {hasHitRate ? `${hitRate.toFixed(1)}%` : ' '}
-      </span>
+
+      {/* 细分隔线 */}
+      <div className="w-px bg-border-subtle self-stretch" />
+
+      {/* 右侧关键指标区:命中率大字突出 */}
+      <div className="flex flex-col items-center justify-center px-6 shrink-0">
+        <span
+          className={`text-2xl font-[510] tabular-nums ${
+            hasHitRate
+              ? hitRate > CACHE_HIT_RATE_GOOD_THRESHOLD
+                ? 'text-success'
+                : hitRate > CACHE_HIT_RATE_BAD_THRESHOLD
+                ? 'text-warning'
+                : 'text-error'
+              : 'text-text-quaternary'
+          }`}
+        >
+          {hasHitRate ? `${hitRate.toFixed(1)}%` : '—'}
+        </span>
+        <span className="text-sm text-text-quaternary mt-1">命中率</span>
+      </div>
     </div>
   );
 }
@@ -805,9 +832,9 @@ function KVCacheGroup({
                 )}
                 {block.kind && (
                   <span className={`text-xs px-1.5 py-0.5 rounded ${
-                    block.kind === 'hit' ? 'text-success' : block.kind === 'create' ? 'text-warning' : 'text-text-tertiary'
+                    block.kind === 'hit' ? 'text-success' : 'text-warning'
                   }`}>
-                    {block.kind === 'hit' ? '命中' : block.kind === 'create' ? '新建' : '混合'}
+                    {block.kind === 'hit' ? '命中' : '新建'}
                   </span>
                 )}
                 {!isCollapsed && (

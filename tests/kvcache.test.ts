@@ -254,6 +254,28 @@ describe('extractCachedContent', () => {
     expect(hit.system[0].kind).toBe('hit');
     expect(hit.status).toBe('hit');
   });
+
+  it('explicit 模式低命中：read>0 但 hitRate<70% → 不标 kind（聚合数据无法确定具体命中哪些块）', () => {
+    // 智谱 glm 兼容端点典型场景：只返回聚合 cache_read，不知道具体命中了哪个块
+    const result = extractCachedContent(
+      {
+        system: [{ type: 'text', text: 'cached sys', cache_control: { type: 'ephemeral' } }],
+        messages: [],
+      },
+      {
+        input_tokens: 21890,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 1728,
+      },
+      { endpointType: 'anthropic-messages' },
+    );
+    // hitRate = 1728 / (21890 + 1728) ≈ 7% < 70% → 无法确定具体命中哪些块，不标 kind
+    expect(result.hitRate).toBeLessThan(70);
+    expect(result.cacheReadTokens).toBe(1728);
+    expect(result.system[0].kind).toBeUndefined();
+    // status 仍为 hit（请求级确实有命中读）
+    expect(result.status).toBe('hit');
+  });
 });
 
 // ==================== getContextSizeForModel ====================

@@ -78,6 +78,18 @@ totalTokens = cached.totalInputTokens + output_tokens
 ### 4.5 contextSize（分母自适应）
 `getContextSizeForModel(model)`：匹配 `/opus|mythos|sonnet-4|claude-4/` → 1M，否则 200K。
 
+### 4.6 blockKind 块级命中标签
+
+缓存块（tools / system / messages）的 `kind` 标签**按实际命中覆盖判定**，不能「有 `cache_read` 就全块标命中」：
+
+| 条件 | kind | 含义 |
+|------|------|------|
+| `cache_create>0` 且 `cache_read===0` | `create` | 首次写入（原生 Anthropic 首次请求） |
+| `cache_read>0` 且 `hitRate ≥ 70` | `hit` | 命中覆盖高，块命中 |
+| `cache_read>0` 且 `hitRate < 70` | 不标 | 聚合数据无法定位具体命中的块 |
+
+> **为何不用「有 read 全标 hit」**：原生 Anthropic 是前缀式缓存，块要么整片命中要么整片新建，`cache_read>0` 即意味全部块命中。但第三方兼容端点（智谱 glm 等）不返回 `cache_creation`，且 `cache_read` 是**聚合值**——只知道总共命中了多少 token，**不知道具体命中了哪个块**。低命中率时若硬标（命中/部分命中），等于假装知道每个块的命中情况。因此 hitRate<70 时**不标 kind**，命中信息只由顶部请求级 [`hitRate`](#41-命中率-hrrate) 承担。阈值复用 [`CACHE_HIT_RATE_GOOD_THRESHOLD`](server/constants.ts)。
+
 ---
 
 ## 5. 本次优化清单（2026-06-13）

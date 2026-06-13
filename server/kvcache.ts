@@ -8,6 +8,7 @@ import {
   LARGE_CONTEXT_SIZE,
   LARGE_CONTEXT_MODEL_PATTERN,
   TOOL_INPUT_PREVIEW_LENGTH,
+  CACHE_HIT_RATE_GOOD_THRESHOLD,
 } from './constants.js';
 import createDebug from 'debug';
 const log = createDebug('lucent:kvcache');
@@ -40,7 +41,7 @@ interface RequestBody {
 
 type CacheMode = 'explicit' | 'auto' | 'none';
 type CacheStatus = 'unsupported' | 'first-create' | 'hit' | 'no-data';
-type BlockKind = 'hit' | 'create' | 'mixed';
+type BlockKind = 'hit' | 'create';
 type Provider = 'anthropic' | 'openai' | 'unknown';
 
 interface KVCacheBlock {
@@ -392,12 +393,19 @@ export function extractCachedContent(
   }
 
   // block-level kind 判定（仅 explicit 模式有意义）
+  //
+  // 不能「有 cache_read 就全块标命中」：第三方兼容端点（智谱 glm 等）不返回
+  // cache_creation 且只返回聚合 cache_read，无法确定具体命中了哪个块。若仍标 hit，
+  // 会出现「块全命中但请求命中率仅个位数」的自相矛盾。按实际命中覆盖判定：
+  //   - 首次写入（create>0 且无 read）         → create
+  //   - 命中覆盖高（read>0 且 hitRate≥70%）     → hit
+  //   - 命中覆盖低（read>0 但 hitRate<70%）     → 不标（聚合数据无法定位具体命中的块）
   const blockKind: BlockKind | undefined =
     cacheMode === 'explicit'
-      ? result.cacheReadTokens > 0
-        ? 'hit'
-        : result.cacheCreateTokens > 0
-          ? 'create'
+      ? result.cacheCreateTokens > 0 && result.cacheReadTokens === 0
+        ? 'create'
+        : result.cacheReadTokens > 0 && result.hitRate >= CACHE_HIT_RATE_GOOD_THRESHOLD
+          ? 'hit'
           : undefined
       : undefined;
 
