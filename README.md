@@ -69,31 +69,34 @@ npm start
 
 ### 第二步：接入下游客户端
 
-启动 AI 客户端时，将 Base URL 指向本地代理的 `/custom/{供应商名}` 路径：
+启动 AI 客户端时，将 Base URL 指向本代理。**路径规则**：
+
+| 供应商类型 | Base URL |
+|-----------|---------|
+| 预设供应商 | `http://127.0.0.1:7048/{供应商名}` |
+| 自定义供应商 | `http://127.0.0.1:7048/custom/{供应商名}` |
+| OpenAI 端点 | 上述规则末尾 + `/v1` |
 
 ```bash
-# Claude Code（Anthropic Messages 协议）
-export ANTHROPIC_BASE_URL=http://127.0.0.1:7048/custom/glm
+# 预设供应商 GLM（无前缀）
+export ANTHROPIC_BASE_URL=http://127.0.0.1:7048/glm
 
-# Codex / OpenAI 客户端（OpenAI Chat 协议）
-export OPENAI_BASE_URL=http://127.0.0.1:7048/custom/glm/v1
+# 自定义供应商
+export ANTHROPIC_BASE_URL=http://127.0.0.1:7048/custom/my-glm
 
-# OpenAI Responses 协议
-export OPENAI_BASE_URL=http://127.0.0.1:7048/custom/glm
+# Codex / OpenAI 客户端（OpenAI Chat 协议，注意末尾 /v1）
+export OPENAI_BASE_URL=http://127.0.0.1:7048/openai/v1
 ```
 
-> 📌 **注意**：OpenAI Chat 协议的路径要加 `/v1`（因为标准路径是 `/v1/chat/completions`）。
+> 📌 **注意**：OpenAI Chat 协议的路径要加 `/v1`（因为标准路径是 `/v1/chat/completions`）。OpenAI Responses 同样。
+> 应用内的 **使用说明** 弹窗会根据你配置的供应商自动生成可复制的 `export` 命令。
 
 ### 示例：GLM 同时支持两种协议
 
-假设你配置了一个名为 `glm` 的供应商：
-
-| 协议 | 端点 URL | 接入地址 |
-|------|----------|----------|
-| Anthropic Messages | `https://open.bigmodel.cn/api/anthropic/v1` | `http://127.0.0.1:7048/custom/glm` |
-| OpenAI Chat | `https://open.bigmodel.cn/api/coding/paas/v4` | `http://127.0.0.1:7048/custom/glm/v1` |
-
-Claude Code 用 `ANTHROPIC_BASE_URL=http://127.0.0.1:7048/custom/glm`，Codex 用 `OPENAI_BASE_URL=http://127.0.0.1:7048/custom/glm/v1`，两者都能正常工作。
+| 供应商类型 | Anthropic Messages | OpenAI Chat |
+|-----------|--------------------|--------------|
+| 预设 GLM | `http://127.0.0.1:7048/glm` | `http://127.0.0.1:7048/glm/v1` |
+| 自定义 my-glm | `http://127.0.0.1:7048/custom/my-glm` | `http://127.0.0.1:7048/custom/my-glm/v1` |
 
 ## CLI 命令
 
