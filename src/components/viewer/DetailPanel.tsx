@@ -1,12 +1,30 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import type { LogEntry, TabType, SSERawBody, SSERawLine } from '../../types';
+import type { LogEntry, TabType, SSERawBody, SSERawLine, KVCacheBlock } from '../../types';
 import { ENDPOINT_LABELS } from '../../types';
-import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, getStatusColor } from '../../constants';
+import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, CACHE_HIT_RATE_GOOD_THRESHOLD, CACHE_HIT_RATE_BAD_THRESHOLD, getStatusColor } from '../../constants';
 import { resolveResponseType } from '../../utils/response-type';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+// PrismLight 按需注册：默认 Prism 入口会打包全部 ~270 种语言（主包大头），这里只引实际会用的几种
+import { PrismLight as SyntaxHighlighter } from 'react-syntax-highlighter';
+import json from 'react-syntax-highlighter/dist/esm/languages/prism/json';
+import bash from 'react-syntax-highlighter/dist/esm/languages/prism/bash';
+import javascript from 'react-syntax-highlighter/dist/esm/languages/prism/javascript';
+import typescript from 'react-syntax-highlighter/dist/esm/languages/prism/typescript';
+import jsx from 'react-syntax-highlighter/dist/esm/languages/prism/jsx';
+import tsx from 'react-syntax-highlighter/dist/esm/languages/prism/tsx';
+import python from 'react-syntax-highlighter/dist/esm/languages/prism/python';
+import markdown from 'react-syntax-highlighter/dist/esm/languages/prism/markdown';
+
+SyntaxHighlighter.registerLanguage('json', json);
+SyntaxHighlighter.registerLanguage('bash', bash);
+SyntaxHighlighter.registerLanguage('javascript', javascript);
+SyntaxHighlighter.registerLanguage('typescript', typescript);
+SyntaxHighlighter.registerLanguage('jsx', jsx);
+SyntaxHighlighter.registerLanguage('tsx', tsx);
+SyntaxHighlighter.registerLanguage('python', python);
+SyntaxHighlighter.registerLanguage('markdown', markdown);
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { extractFromSSELines, extractedToResponseBody } from '../../utils/sse-extractor';
 import 'react-json-view-lite/dist/index.css';
@@ -184,8 +202,8 @@ const TAB_CONFIG: { key: TabType; label: string }[] = [
 
 export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): JSX.Element {
   const [bodyCollapsed, setBodyCollapsed] = useState<BodyCollapsedState>({
-    request: false, // 默认展开
-    response: false,
+    request: true, // 默认折叠到 JSON_COLLAPSED_EXPAND_LEVEL，避免大 body 全展开卡顿
+    response: true,
   });
 
   const toggleBodyCollapsed = useCallback((type: 'request' | 'response') => {
@@ -554,6 +572,10 @@ function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: Response
             <pre className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary overflow-auto whitespace-pre-wrap break-words" style={{ backgroundColor: '#08090a' }}>
               {rawSSEText}
             </pre>
+          ) : extractedBody == null ? (
+            <div className="flex items-center justify-center h-full">
+              <span className="text-text-quaternary text-base">无响应体</span>
+            </div>
           ) : (
             <JsonBlock data={extractedBody} collapsed={bodyCollapsed} />
           )}
@@ -571,7 +593,31 @@ interface KVCacheTabProps {
 
 function KVCacheTab({ log }: KVCacheTabProps): JSX.Element {
   const data = log.kvCache;
-  if (!data || (!data.system?.length && !data.messages?.length && !data.tools?.length)) {
+
+  // 缓存模式标签
+  const cacheModeLabel: Record<string, string> = {
+    explicit: '显式缓存',
+    auto: '自动缓存',
+    none: '未启用',
+  };
+
+  // 命中率配色：>70 绿 / 30-70 黄 / <30 红 / 0 灰
+  const getHitRateColor = (hr: number, hasValue: boolean): string => {
+    if (!hasValue || hr === 0) return 'text-text-quaternary';
+    if (hr > CACHE_HIT_RATE_GOOD_THRESHOLD) return 'text-success';
+    if (hr > CACHE_HIT_RATE_BAD_THRESHOLD) return 'text-warning';
+    return 'text-error';
+  };
+
+  // 空状态判定：unsupported / no-data / 无 data 才显示空状态文案
+  // first-create / hit / 块空但 status 命中 走正常展示分支
+  const hasBlockContent = !!(data?.tools?.length || data?.system?.length || data?.messages?.length);
+  const isEmptyState =
+    !data ||
+    (!hasBlockContent && data.status !== 'hit' && data.status !== 'first-create');
+
+  // 完全无 data
+  if (!data) {
     return (
       <div className="flex items-center justify-center h-full">
         <span className="text-text-quaternary text-base">暂无缓存数据</span>
@@ -579,134 +625,201 @@ function KVCacheTab({ log }: KVCacheTabProps): JSX.Element {
     );
   }
 
+  const hitRate = data.hitRate ?? 0;
+  const hitRateHasValue = data.hitRate != null && data.hitRate > 0;
+  const hitRateColor = getHitRateColor(hitRate, hitRateHasValue);
+
+  const readTokens = data.cacheReadTokens ?? 0;
+  const createTokens = data.cacheCreateTokens ?? 0;
+  const uncachedTokens = data.uncachedInputTokens ?? 0;
+  const totalBar = readTokens + createTokens + uncachedTokens;
+
+  // 堆叠条比例（数据驱动的动态宽度，允许 inline width）
+  const readWidthPct = totalBar > 0 ? (readTokens / totalBar) * 100 : 0;
+  const createWidthPct = totalBar > 0 ? (createTokens / totalBar) * 100 : 0;
+  const uncachedWidthPct = totalBar > 0 ? (uncachedTokens / totalBar) * 100 : 0;
+
+  // 分组列表：tools → system → messages（对应 API 缓存层级）
+  const groups: Array<{ key: 'tools' | 'system' | 'messages'; label: string; blocks: KVCacheBlock[] }> = [];
+  if (data.tools?.length) groups.push({ key: 'tools', label: '工具', blocks: data.tools });
+  if (data.system?.length) groups.push({ key: 'system', label: '系统提示词', blocks: data.system });
+  if (data.messages?.length) groups.push({ key: 'messages', label: '消息', blocks: data.messages });
+
+  // 复制全部：拼接各块 text
   const copyAllCache = () => {
     const parts: string[] = [];
-    if (data.tools && data.tools.length > 0) {
-      const indented = data.tools
-        .map(xml => xml.split('\n').map(l => (l ? '  ' + l : l)).join('\n'))
-        .join('\n');
-      parts.push(`<tools>\n${indented}\n</tools>`);
-    }
-    if (data.system && data.system.length > 0) {
-      parts.push(`<system-reminder>\n${data.system.join('\n\n')}\n</system-reminder>`);
-    }
-    if (data.messages && data.messages.length > 0) {
-      data.messages.forEach(t => parts.push(t));
-    }
+    groups.forEach((g) => {
+      const texts = g.blocks.map(b => b.text).filter(Boolean);
+      if (texts.length) parts.push(texts.join('\n\n'));
+    });
     navigator.clipboard.writeText(parts.join('\n\n'));
   };
 
-  const hitRate = data.hitRate ?? 0;
-  const hitRateColor =
-    hitRate > 70
-      ? 'text-success'
-      : hitRate > 30
-        ? 'text-warning'
-        : 'text-error';
+  const groupSumTokens = (blocks: KVCacheBlock[]): number =>
+    blocks.reduce((sum, b) => sum + (b.tokens ?? 0), 0);
 
-  // 生成所有缓存条目：工具 -> 系统提示词 -> 消息
-  const allItems: Array<{ type: 'tool' | 'system' | 'message'; text: string; index: number }> = [];
+  const formatTokens = (n: number): string => formatTokenValue(n);
 
-  if (data.tools && data.tools.length > 0) {
-    data.tools.forEach((text, i) => {
-      allItems.push({ type: 'tool', text, index: i });
-    });
-  }
-  if (data.system && data.system.length > 0) {
-    data.system.forEach((text, i) => {
-      allItems.push({ type: 'system', text, index: i });
-    });
-  }
-  if (data.messages && data.messages.length > 0) {
-    data.messages.forEach((text, i) => {
-      allItems.push({ type: 'message', text, index: i });
-    });
-  }
+  return (
+    <div className="p-4">
+      {/* 概览卡片 */}
+      <div className="mb-4 p-4 bg-bg-surface rounded-lg border border-border-subtle">
+        <div className="flex items-start justify-between mb-3">
+          {/* 大字号命中率 */}
+          <div className="flex items-baseline gap-2">
+            <span className={`text-3xl font-[510] tabular-nums ${hitRateColor}`}>
+              {hitRateHasValue ? `${hitRate.toFixed(1)}%` : '—'}
+            </span>
+            <span className="text-sm text-text-quaternary">命中率</span>
+          </div>
+          {/* 右上角：cacheMode + provider */}
+          <div className="flex items-center gap-2">
+            {data.cacheMode && (
+              <span className="px-2 py-0.5 rounded-full text-sm font-[510] border border-border-primary text-text-tertiary">
+                {cacheModeLabel[data.cacheMode] ?? data.cacheMode}
+              </span>
+            )}
+            {data.provider && (
+              <span className="text-sm text-text-quaternary">{data.provider}</span>
+            )}
+          </div>
+        </div>
 
-  // 折叠状态：每个条目独立控制
-  const [collapsedMap, setCollapsedMap] = useState<Record<string, boolean>>(() => {
-    const initial: Record<string, boolean> = {};
-    allItems.forEach(item => {
-      initial[`${item.type}-${item.index}`] = false; // 默认全部展开
+        {/* 堆叠条（数据驱动动态宽度） */}
+        {totalBar > 0 && (
+          <div className="flex h-2 w-full rounded-full overflow-hidden bg-bg-deep mb-3">
+            <div className="bg-success/70" style={{ width: `${readWidthPct}%` }} />
+            <div className="bg-warning/70" style={{ width: `${createWidthPct}%` }} />
+            <div className="bg-text-quaternary/40" style={{ width: `${uncachedWidthPct}%` }} />
+          </div>
+        )}
+
+        {/* 三行数字：read / create / uncached */}
+        <div className="grid grid-cols-3 gap-3 text-sm">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-success/70" />
+            <span className="text-text-quaternary">命中</span>
+            <span className="text-success font-[510] tabular-nums">{formatTokens(readTokens)}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-warning/70" />
+            <span className="text-text-quaternary">新建</span>
+            <span className="text-warning font-[510] tabular-nums">{formatTokens(createTokens)}</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-text-quaternary/40" />
+            <span className="text-text-quaternary">未缓存</span>
+            <span className="text-text-tertiary font-[510] tabular-nums">{formatTokens(uncachedTokens)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* 空状态 / 块内容 */}
+      {isEmptyState ? (
+        <div className="flex items-center justify-center py-8">
+          <span className="text-text-quaternary text-base">
+            {data.status === 'unsupported' || (data.cacheMode === 'none' && totalBar === 0)
+              ? '此请求未使用缓存（无 cache_control 标记）'
+              : data.status === 'no-data'
+                ? '支持缓存但本次未命中'
+                : '暂无缓存数据'}
+          </span>
+        </div>
+      ) : hasBlockContent ? (
+        <>
+          {/* 分组列表 */}
+          <div className="flex items-center justify-end mb-2">
+            <button
+              onClick={copyAllCache}
+              className="px-3 py-0.5 text-sm font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
+            >
+              复制全部
+            </button>
+          </div>
+          <div className="space-y-3">
+            {groups.map((group) => (
+              <KVCacheGroup key={group.key} label={group.label} blocks={group.blocks} sumTokens={groupSumTokens(group.blocks)} />
+            ))}
+          </div>
+        </>
+      ) : (
+        // status 是 hit/first-create 但无块内容（如 OpenAI auto）
+        <div className="flex items-center justify-center py-6">
+          <span className="text-text-quaternary text-base">OpenAI 自动缓存，无块级内容</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ==================== KV-Cache Group ====================
+
+function KVCacheGroup({
+  label,
+  blocks,
+  sumTokens,
+}: {
+  label: string;
+  blocks: KVCacheBlock[];
+  sumTokens: number;
+}) {
+  // 折叠状态：长文本块默认折叠
+  const [collapsedMap, setCollapsedMap] = useState<Record<number, boolean>>(() => {
+    const initial: Record<number, boolean> = {};
+    blocks.forEach((b, i) => {
+      // 默认折叠长文本（超过 200 字符）
+      initial[i] = (b.text?.length ?? 0) > 200;
     });
     return initial;
   });
 
-  const toggleCollapse = (key: string) => {
-    setCollapsedMap(prev => ({ ...prev, [key]: !prev[key] }));
-  };
-
-  const getLabel = (item: { type: 'tool' | 'system' | 'message'; text: string; index: number }) => {
-    switch (item.type) {
-      case 'tool':
-        return '工具';
-      case 'system':
-        return '系统提示词';
-      case 'message':
-        return '消息';
-    }
-  };
-
-  const getLabelColor = (type: 'tool' | 'system' | 'message') => {
-    switch (type) {
-      case 'tool':
-        return 'text-tool';
-      case 'system':
-        return 'text-warning';
-      case 'message':
-        return 'text-brand-accent';
-    }
+  const toggleCollapse = (index: number) => {
+    setCollapsedMap(prev => ({ ...prev, [index]: !prev[index] }));
   };
 
   return (
-    <div className="p-4">
-      {/* Token 统计条 */}
-      <div className="mb-4 p-3 bg-bg-surface rounded-lg flex items-center justify-between border border-border-subtle">
-        <div className="flex gap-4 text-sm text-text-tertiary">
-          <span>
-            Tokens:{' '}
-            <span className="text-brand-accent">
-              write {data.cacheCreateTokens?.toLocaleString() ?? 0}
-            </span>
-            {' / '}
-            <span className="text-success">
-              read {data.cacheReadTokens?.toLocaleString() ?? 0}
-            </span>
-          </span>
-          {hitRate > 0 && (
-            <span className={hitRateColor}>
-              命中率: {hitRate.toFixed(1)}%
-            </span>
-          )}
-        </div>
-        <button
-          onClick={copyAllCache}
-          className="px-3 py-0.5 text-sm font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
-        >
-          复制全部
-        </button>
+    <div className="bg-bg-surface/50 rounded-lg border border-border-subtle">
+      {/* 分组标题 */}
+      <div className="flex items-center justify-between px-3 py-2 border-b border-border-subtle">
+        <span className="text-[15px] font-[510] text-text-secondary">
+          {label} <span className="text-text-quaternary font-normal">({blocks.length})</span>
+        </span>
+        {sumTokens > 0 && (
+          <span className="text-sm text-text-quaternary tabular-nums">~{formatTokenValue(sumTokens)} tok</span>
+        )}
       </div>
-
-      {/* 每个条目独立框 */}
-      <div className="space-y-3">
-        {allItems.map((item) => {
-          const key = `${item.type}-${item.index}`;
-          const isCollapsed = collapsedMap[key];
-
+      {/* 各块 */}
+      <div className="divide-y divide-border-subtle">
+        {blocks.map((block, i) => {
+          const isCollapsed = collapsedMap[i];
           return (
-            <div key={key} className="bg-bg-surface/50 rounded-lg border border-border-subtle">
+            <div key={i}>
               <button
-                onClick={() => toggleCollapse(key)}
-                className="flex items-center gap-2 w-full text-left px-3 py-2 text-[15px] font-[510] text-text-secondary hover:text-text-primary transition-colors"
+                onClick={() => toggleCollapse(i)}
+                className="flex items-center gap-2 w-full text-left px-3 py-2 text-sm text-text-tertiary hover:bg-bg-hover transition-colors"
               >
                 <ChevronIcon expanded={!isCollapsed} />
-                <span className={getLabelColor(item.type)}>{getLabel(item)}</span>
-                <span className="text-text-quaternary">#{item.index + 1}</span>
+                <span className="text-text-quaternary">#{i + 1}</span>
+                {block.tokens != null && (
+                  <span className="text-text-quaternary">约 {block.tokens} tok</span>
+                )}
+                {block.kind && (
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${
+                    block.kind === 'hit' ? 'text-success' : block.kind === 'create' ? 'text-warning' : 'text-text-tertiary'
+                  }`}>
+                    {block.kind === 'hit' ? '命中' : block.kind === 'create' ? '新建' : '混合'}
+                  </span>
+                )}
+                {!isCollapsed && (
+                  <span className="ml-auto truncate text-text-quaternary text-xs">
+                    {block.text.slice(0, 60)}{block.text.length > 60 ? '…' : ''}
+                  </span>
+                )}
               </button>
               {!isCollapsed && (
                 <div className="px-3 pb-3">
-                  <pre className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-md overflow-auto max-h-40 font-mono text-text-secondary whitespace-pre-wrap break-words">
-                    {item.text}
+                  <pre className="text-lg leading-relaxed bg-bg-deep/50 p-3 rounded-md overflow-auto max-h-60 font-mono text-text-secondary whitespace-pre-wrap break-words">
+                    {block.text}
                   </pre>
                 </div>
               )}
@@ -747,6 +860,25 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
       </div>
     );
   }
+
+  // 提取 tool_result.content：可能是 string、ContentBlock[] 或其他
+  const extractToolResultContent = (content: unknown): string => {
+    if (content == null) return '';
+    if (typeof content === 'string') return content;
+    if (Array.isArray(content)) {
+      return content
+        .map((block) => {
+          if (block && typeof block === 'object' && 'type' in block) {
+            const b = block as { type: string; text?: string };
+            if (b.type === 'text') return b.text ?? '';
+          }
+          return '';
+        })
+        .filter(Boolean)
+        .join('\n');
+    }
+    return String(content);
+  };
 
   // 折叠状态
   const [collapsed, setCollapsed] = useState<CollapsedGroups>({
@@ -798,8 +930,8 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
                     const toolBlock = block as { name?: string; input?: unknown };
                     return `[工具调用: ${toolBlock.name ?? 'unknown'}]\n${JSON.stringify(toolBlock.input, null, 2)}`;
                   } else if (block.type === 'tool_result') {
-                    const resultBlock = block as { content?: string };
-                    return `[工具结果]\n${resultBlock.content || ''}`;
+                    const resultBlock = block as { content?: unknown };
+                    return `[工具结果]\n${extractToolResultContent(resultBlock.content)}`;
                   }
                   return '';
                 })
@@ -1116,6 +1248,8 @@ interface MetaTabProps {
 }
 
 function MetaTab({ log }: MetaTabProps): JSX.Element {
+  // 与头部 InlineTokenStats 统一：优先 SSE 实时提取，再回退 response.body.usage，最后 tokenUsage
+  const tokenUsage = resolveTokenUsage(log);
   return (
     <div className="p-4">
       <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-3">
@@ -1132,6 +1266,11 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
               description="SubAgent 的功能分类，如 plan（规划）、search（搜索）、bash（命令执行）、workflow（工作流）"
             />
           )}
+          <MetaRow
+            label="客户端类型"
+            value={log.clientType || 'unknown'}
+            description="发起请求的客户端，如 claude-code、codex、opencode 等"
+          />
           <MetaRow
             label="模型"
             value={log.metadata.model || 'Unknown'}
@@ -1163,30 +1302,30 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
             value={log.metadata.stream ? '是' : '否'}
             description="是否使用 SSE 流式传输。开启后响应会逐步返回，适合长文本生成"
           />
-          {log.tokenUsage && (
+          {tokenUsage && (
             <>
               <MetaRow
                 label="Input Tokens"
-                value={log.tokenUsage.input_tokens?.toLocaleString() ?? '0'}
-                description="请求中包含的输入 token 数量（含系统提示词和用户消息）"
+                value={tokenUsage.input_tokens?.toLocaleString() ?? '0'}
+                description="请求中包含的输入 token 数量（含系统提示词和用户消息），与头部统计一致（含 SSE 实时提取）"
               />
               <MetaRow
                 label="Output Tokens"
-                value={log.tokenUsage.output_tokens?.toLocaleString() ?? '0'}
+                value={tokenUsage.output_tokens?.toLocaleString() ?? '0'}
                 description="模型生成的输出 token 数量"
               />
-              {log.tokenUsage.cache_read_tokens != null && (
+              {tokenUsage.cache_read_tokens != null && (
                 <MetaRow
                   label="Cache Read"
-                  value={log.tokenUsage.cache_read_tokens.toLocaleString()}
+                  value={tokenUsage.cache_read_tokens.toLocaleString()}
                   valueClassName="text-success"
                   description="从缓存读取的 token 数量，命中缓存可降低延迟和费用"
                 />
               )}
-              {log.tokenUsage.cache_creation_tokens != null && (
+              {tokenUsage.cache_creation_tokens != null && (
                 <MetaRow
                   label="Cache Creation"
-                  value={log.tokenUsage.cache_creation_tokens.toLocaleString()}
+                  value={tokenUsage.cache_creation_tokens.toLocaleString()}
                   valueClassName="text-brand-accent"
                   description="写入缓存的 token 数量，首次请求时创建"
                 />

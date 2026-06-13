@@ -162,13 +162,27 @@ function buildContextFromRequest(log: LogEntry): void {
       cache_read_input_tokens: tu.cache_read_tokens,
     } : rawRespUsage;
     if (normalizedUsage) {
-      const cached = extractCachedContent(body, normalizedUsage);
+      // 传入 endpointType/provider 以区分显式缓存（Anthropic）与自动缓存（OpenAI）
+      // 兼容旧日志：endpointType 字段缺失时 fallback 到 apiType
+      const endpointType = log.endpointType || (log as any).apiType;
+      // metadata.provider 用 'claude' 表示 Anthropic，规范成契约要求的 'anthropic'
+      const metaProvider = log.metadata?.provider;
+      const provider =
+        metaProvider === 'claude' ? 'anthropic'
+          : metaProvider === 'openai' ? 'openai'
+            : metaProvider;
+      const cached = extractCachedContent(body, normalizedUsage, { endpointType, provider });
       if (cached.totalCachedTokens > 0) {
         log.kvCache = {
           hitRate: cached.hitRate,
           cacheReadTokens: cached.cacheReadTokens,
           cacheCreateTokens: cached.cacheCreateTokens,
           totalCachedTokens: cached.totalCachedTokens,
+          totalInputTokens: cached.totalInputTokens,
+          uncachedInputTokens: cached.uncachedInputTokens,
+          cacheMode: cached.cacheMode,
+          provider: cached.provider,
+          status: cached.status,
           ...(cached.system.length ? { system: cached.system } : {}),
           ...(cached.messages.length ? { messages: cached.messages } : {}),
           ...(cached.tools.length ? { tools: cached.tools } : {}),

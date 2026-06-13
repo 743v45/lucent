@@ -126,15 +126,36 @@ export interface Metadata {
   error?: string;
 }
 
+/** 单个 KV-Cache 块（工具 / 系统 / 消息） */
+export interface KVCacheBlock {
+  /** 文本内容 */
+  text: string;
+  /** 估算 token 数 */
+  tokens?: number;
+  /** 命中类型 */
+  kind?: 'hit' | 'create' | 'mixed';
+}
+
 export interface KVCacheInfo {
   hitRate?: number;
   cacheReadTokens?: number;
   cacheCreateTokens?: number;
   totalCachedTokens?: number;
-  system?: string[];
-  messages?: string[];
-  tools?: string[];
-  // 旧字段兼容
+  totalInputTokens?: number;
+  uncachedInputTokens?: number;
+  /** 缓存模式：explicit=显式 cache_control / auto=自动（OpenAI）/ none=未启用 */
+  cacheMode?: 'explicit' | 'auto' | 'none';
+  /** 供应商名称 */
+  provider?: string;
+  /** 缓存状态 */
+  status?: 'unsupported' | 'first-create' | 'hit' | 'no-data';
+  /** 工具缓存块 */
+  tools?: KVCacheBlock[];
+  /** 系统提示词缓存块 */
+  system?: KVCacheBlock[];
+  /** 消息缓存块 */
+  messages?: KVCacheBlock[];
+  // 旧字段兼容（前端不再优先用）
   readBytes?: number;
   writeBytes?: number;
   content?: string;

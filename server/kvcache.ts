@@ -38,21 +38,86 @@ interface RequestBody {
   [key: string]: unknown;
 }
 
+type CacheMode = 'explicit' | 'auto' | 'none';
+type CacheStatus = 'unsupported' | 'first-create' | 'hit' | 'no-data';
+type BlockKind = 'hit' | 'create' | 'mixed';
+type Provider = 'anthropic' | 'openai' | 'unknown';
+
+interface KVCacheBlock {
+  text: string;
+  tokens?: number;
+  kind?: BlockKind;
+}
+
 interface ResponseUsage {
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
   input_tokens?: number;
   output_tokens?: number;
+  // OpenAI 自动缓存字段
+  prompt_tokens?: number;
+  prompt_tokens_details?: { cached_tokens?: number };
+  completion_tokens?: number;
+}
+
+interface ExtractOptions {
+  endpointType?: string;
+  provider?: string;
 }
 
 interface CachedContent {
-  system: string[];
-  messages: string[];
-  tools: string[];
+  system: KVCacheBlock[];
+  messages: KVCacheBlock[];
+  tools: KVCacheBlock[];
   cacheCreateTokens: number;
   cacheReadTokens: number;
   totalCachedTokens: number;
+  totalInputTokens: number;
+  uncachedInputTokens: number;
   hitRate: number;
+  cacheMode: CacheMode;
+  provider: Provider;
+  status: CacheStatus;
+}
+
+/**
+ * 估算文本 token 数（约值：每 4 字符 ≈ 1 token，至少 1）
+ */
+function estimateTokens(text: string): number {
+  return Math.max(1, Math.round(text.length / 4));
+}
+
+/**
+ * 探测请求体中是否存在 cache_control 标记（仅 Anthropic 显式缓存）
+ */
+function hasCacheControlMarker(body: RequestBody): boolean {
+  const scanBlocks = (blocks: unknown[]): boolean =>
+    blocks.some(b => b && typeof b === 'object' && 'cache_control' in (b as Record<string, unknown>));
+
+  if (Array.isArray(body.system) && scanBlocks(body.system)) return true;
+
+  if (Array.isArray(body.messages)) {
+    for (const msg of body.messages) {
+      if (Array.isArray(msg?.content) && scanBlocks(msg.content)) return true;
+    }
+  }
+
+  if (Array.isArray(body.tools) && scanBlocks(body.tools)) return true;
+
+  return false;
+}
+
+/**
+ * 推断 provider：endpointType 含 'anthropic' → anthropic；含 'openai' → openai；否则 unknown
+ */
+function deriveProvider(endpointType?: string, provider?: string): Provider {
+  const et = (endpointType || '').toLowerCase();
+  if (et.includes('anthropic')) return 'anthropic';
+  if (et.includes('openai')) return 'openai';
+  const p = (provider || '').toLowerCase();
+  if (p === 'anthropic' || p === 'claude') return 'anthropic';
+  if (p === 'openai') return 'openai';
+  return 'unknown';
 }
 
 /**
@@ -109,8 +174,8 @@ function extractToolResultText(toolResult: { content?: unknown; [key: string]: u
 /**
  * 提取系统提示词中的缓存内容
  */
-function extractCachedSystem(system: string | CacheControlBlock[]): string[] {
-  const result: string[] = [];
+function extractCachedSystem(system: string | CacheControlBlock[], kind?: BlockKind): KVCacheBlock[] {
+  const result: KVCacheBlock[] = [];
 
   if (typeof system === 'string') {
     // 字符串形式的 system，如果有缓存会有 cache_control 标记
@@ -133,7 +198,7 @@ function extractCachedSystem(system: string | CacheControlBlock[]): string[] {
       for (let i = 0; i <= lastCacheIndex; i++) {
         const block = system[i];
         if (block?.type === 'text' && typeof block.text === 'string') {
-          result.push(block.text);
+          result.push({ text: block.text, tokens: estimateTokens(block.text), kind });
         }
       }
     }
@@ -145,8 +210,8 @@ function extractCachedSystem(system: string | CacheControlBlock[]): string[] {
 /**
  * 提取消息中的缓存内容
  */
-function extractCachedMessages(messages: Message[]): string[] {
-  const result: string[] = [];
+function extractCachedMessages(messages: Message[], kind?: BlockKind): KVCacheBlock[] {
+  const result: KVCacheBlock[] = [];
 
   if (!Array.isArray(messages)) {
     return result;
@@ -167,6 +232,10 @@ function extractCachedMessages(messages: Message[]): string[] {
     }
   }
 
+  const pushBlock = (text: string): void => {
+    if (text) result.push({ text, tokens: estimateTokens(text), kind });
+  };
+
   // 收集所有缓存的消息
   if (lastCacheIndex >= 0) {
     for (let i = 0; i <= lastCacheIndex; i++) {
@@ -174,21 +243,21 @@ function extractCachedMessages(messages: Message[]): string[] {
       const content = msg?.content;
 
       if (typeof content === 'string') {
-        result.push(`[${msg.role}] ${content}`);
+        pushBlock(`[${msg.role}] ${content}`);
       } else if (Array.isArray(content)) {
         for (const block of content) {
           if (block?.type === 'text' && typeof block.text === 'string') {
-            result.push(`[${msg.role}] ${block.text}`);
+            pushBlock(`[${msg.role}] ${block.text}`);
           } else if (block?.type === 'tool_use') {
             const inputStr = block.input ? JSON.stringify(block.input) : '';
             const preview = inputStr.length > TOOL_INPUT_PREVIEW_LENGTH
               ? inputStr.substring(0, TOOL_INPUT_PREVIEW_LENGTH) + '...'
               : inputStr;
-            result.push(`[${msg.role}] ${block.name}(${preview})`);
+            pushBlock(`[${msg.role}] ${block.name}(${preview})`);
           } else if (block?.type === 'tool_result' && block.tool_use_id) {
             const toolText = extractToolResultText(block);
             if (toolText) {
-              result.push(`[tool_result: ${block.tool_use_id}] ${toolText}`);
+              pushBlock(`[tool_result: ${block.tool_use_id}] ${toolText}`);
             }
           }
         }
@@ -202,14 +271,15 @@ function extractCachedMessages(messages: Message[]): string[] {
 /**
  * 提取工具定义中的缓存内容
  */
-function extractCachedTools(tools: Tool[], hasCachedSystem: boolean): string[] {
-  const result: string[] = [];
+function extractCachedTools(tools: Tool[], hasCachedSystem: boolean, kind?: BlockKind): KVCacheBlock[] {
+  const result: KVCacheBlock[] = [];
 
   // 工具只有当系统有缓存时才被认为缓存
   // API 按照 tools → system → messages 的顺序缓存
   if (Array.isArray(tools) && tools.length > 0 && hasCachedSystem) {
     for (const tool of tools) {
-      result.push(formatToolAsXml(tool));
+      const text = formatToolAsXml(tool);
+      result.push({ text, tokens: estimateTokens(text), kind });
     }
   }
 
@@ -218,8 +288,28 @@ function extractCachedTools(tools: Tool[], hasCachedSystem: boolean): string[] {
 
 /**
  * 从请求体中提取缓存内容
+ *
+ * 支持两种缓存模式：
+ * - explicit（Anthropic）：body 含 cache_control 标记，usage 含 cache_creation/cache_read
+ * - auto（OpenAI）：无显式标记，usage.prompt_tokens_details.cached_tokens 表示命中读取
  */
-export function extractCachedContent(body: RequestBody, usage?: ResponseUsage): CachedContent {
+export function extractCachedContent(
+  body: RequestBody,
+  usage?: ResponseUsage,
+  options?: ExtractOptions,
+): CachedContent {
+  const endpointType = options?.endpointType;
+  const provider = deriveProvider(endpointType, options?.provider);
+
+  // cacheMode 判定
+  const isOpenAI = endpointType === 'openai-chat' || endpointType === 'openai-responses';
+  let cacheMode: CacheMode = 'none';
+  if (endpointType === 'anthropic-messages' && body && hasCacheControlMarker(body)) {
+    cacheMode = 'explicit';
+  } else if (isOpenAI) {
+    cacheMode = 'auto';
+  }
+
   const result: CachedContent = {
     system: [],
     messages: [],
@@ -227,38 +317,81 @@ export function extractCachedContent(body: RequestBody, usage?: ResponseUsage): 
     cacheCreateTokens: 0,
     cacheReadTokens: 0,
     totalCachedTokens: 0,
+    totalInputTokens: 0,
+    uncachedInputTokens: 0,
     hitRate: 0,
+    cacheMode,
+    provider,
+    status: 'no-data',
   };
 
   if (!body) {
+    // 无 body：未知模式 + 无数据
     return result;
   }
 
-  // 提取 usage 数据
-  result.cacheCreateTokens = usage?.cache_creation_input_tokens || 0;
-  result.cacheReadTokens = usage?.cache_read_input_tokens || 0;
-  result.totalCachedTokens = result.cacheCreateTokens + result.cacheReadTokens;
-
-  // 计算命中率: (cache read + cache create) / 全部 token
-  const totalTokens = (usage?.input_tokens || 0) + (usage?.output_tokens || 0) + result.totalCachedTokens;
-  if (totalTokens > 0) {
-    result.hitRate = Math.round((result.totalCachedTokens / totalTokens) * 100);
+  // token 提取（按协议分支）
+  if (isOpenAI) {
+    // OpenAI 自动缓存：cached_tokens 当作 read，无 create 概念
+    const cachedTokens = usage?.prompt_tokens_details?.cached_tokens || 0;
+    result.cacheReadTokens = cachedTokens;
+    result.cacheCreateTokens = 0;
+    result.totalInputTokens = usage?.prompt_tokens || 0;
+  } else {
+    // Anthropic 显式缓存（默认分支）
+    result.cacheCreateTokens = usage?.cache_creation_input_tokens || 0;
+    result.cacheReadTokens = usage?.cache_read_input_tokens || 0;
+    result.totalInputTokens =
+      (usage?.input_tokens || 0) +
+      (usage?.cache_creation_input_tokens || 0) +
+      (usage?.cache_read_input_tokens || 0);
   }
 
+  result.totalCachedTokens = result.cacheReadTokens + result.cacheCreateTokens;
+  result.uncachedInputTokens = Math.max(0, result.totalInputTokens - result.totalCachedTokens);
+
+  // hitRate 修正口径：命中读 / 总输入（仅看 cacheRead，不含 create）
+  if (result.totalInputTokens > 0) {
+    result.hitRate = Math.round((result.cacheReadTokens / result.totalInputTokens) * 100);
+  }
+
+  // status 四态判定
+  if (result.cacheReadTokens > 0) {
+    result.status = 'hit';
+  } else if (result.cacheCreateTokens > 0) {
+    result.status = 'first-create';
+  } else if (cacheMode === 'none') {
+    result.status = 'unsupported';
+  } else {
+    result.status = 'no-data';
+  }
+
+  // block-level kind 判定（仅 explicit 模式有意义）
+  const blockKind: BlockKind | undefined =
+    cacheMode === 'explicit'
+      ? result.cacheReadTokens > 0
+        ? 'hit'
+        : result.cacheCreateTokens > 0
+          ? 'create'
+          : undefined
+      : undefined;
+
   // 提取系统缓存
-  const cachedSystem = extractCachedSystem(body.system || []);
+  const cachedSystem = extractCachedSystem(body.system || [], blockKind);
   result.system = cachedSystem;
 
   // 提取消息缓存
-  const cachedMessages = extractCachedMessages(body.messages || []);
+  const cachedMessages = extractCachedMessages(body.messages || [], blockKind);
   result.messages = cachedMessages;
 
   // 提取工具缓存
-  const cachedTools = extractCachedTools(body.tools || [], cachedSystem.length > 0);
+  const cachedTools = extractCachedTools(body.tools || [], cachedSystem.length > 0, blockKind);
   result.tools = cachedTools;
 
-  log('KV 缓存: create=%d read=%d hitRate=%d%% systemBlocks=%d messageBlocks=%d toolBlocks=%d',
+  log('KV 缓存: mode=%s provider=%s status=%s create=%d read=%d hitRate=%d%% totalIn=%d uncachedIn=%d systemBlocks=%d messageBlocks=%d toolBlocks=%d',
+    result.cacheMode, result.provider, result.status,
     result.cacheCreateTokens, result.cacheReadTokens, result.hitRate,
+    result.totalInputTokens, result.uncachedInputTokens,
     result.system.length, result.messages.length, result.tools.length);
 
   return result;

@@ -36,11 +36,19 @@ describe('extractCachedContent', () => {
         cache_creation_input_tokens: 300,
         cache_read_input_tokens: 400,
       },
+      { endpointType: 'anthropic-messages' },
     );
     expect(result.cacheCreateTokens).toBe(300);
     expect(result.cacheReadTokens).toBe(400);
     expect(result.totalCachedTokens).toBe(700);
+    // 修正口径：read/totalInput = 400/1700 ≈ 24%
     expect(result.hitRate).toBeGreaterThan(0);
+    expect(result.totalInputTokens).toBe(1700);
+    expect(result.uncachedInputTokens).toBe(1000);
+    expect(result.cacheMode).toBe('none');
+    expect(result.provider).toBe('anthropic');
+    // read>0 → hit
+    expect(result.status).toBe('hit');
   });
 
   it('提取带 cache_control 的 system blocks', () => {
@@ -51,10 +59,14 @@ describe('extractCachedContent', () => {
       ],
       messages: [],
     };
-    const result = extractCachedContent(body);
+    const result = extractCachedContent(body, undefined, { endpointType: 'anthropic-messages' });
     expect(result.system).toHaveLength(2);
-    expect(result.system[0]).toBe('You are a helpful assistant.');
-    expect(result.system[1]).toBe('Additional context.');
+    expect(result.system[0].text).toBe('You are a helpful assistant.');
+    expect(result.system[1].text).toBe('Additional context.');
+    // explicit 模式：block 带 tokens 与 kind
+    expect(result.system[0].tokens).toBe(Math.max(1, Math.round('You are a helpful assistant.'.length / 4)));
+    expect(result.cacheMode).toBe('explicit');
+    expect(result.provider).toBe('anthropic');
   });
 
   it('system 为字符串时不提取缓存', () => {
@@ -70,10 +82,11 @@ describe('extractCachedContent', () => {
         { role: 'assistant', content: [{ type: 'text', text: 'Hi there', cache_control: { type: 'ephemeral' } }] },
       ],
     };
-    const result = extractCachedContent(body);
+    const result = extractCachedContent(body, undefined, { endpointType: 'anthropic-messages' });
     expect(result.messages.length).toBeGreaterThan(0);
-    expect(result.messages).toContain('[user] Hello');
-    expect(result.messages).toContain('[assistant] Hi there');
+    const texts = result.messages.map(b => b.text);
+    expect(texts).toContain('[user] Hello');
+    expect(texts).toContain('[assistant] Hi there');
   });
 
   it('无 cache_control 的消息不提取', () => {
@@ -107,7 +120,7 @@ describe('extractCachedContent', () => {
     expect(result.tools.length).toBeGreaterThan(0);
   });
 
-  it('命中率计算正确', () => {
+  it('命中率计算正确（修正口径：命中读 / 总输入）', () => {
     const result = extractCachedContent(
       { messages: [] },
       {
@@ -116,10 +129,104 @@ describe('extractCachedContent', () => {
         cache_creation_input_tokens: 50,
         cache_read_input_tokens: 100,
       },
+      { endpointType: 'anthropic-messages' },
     );
-    // totalCachedTokens = 150, totalTokens = 100+50+150 = 300
-    // hitRate = 150/300 * 100 = 50%
-    expect(result.hitRate).toBe(50);
+    // 修正口径：totalInputTokens = 100 + 50 + 100 = 250（不含 output）
+    // hitRate = cacheRead / totalInput = 100 / 250 = 40%
+    expect(result.totalInputTokens).toBe(250);
+    expect(result.hitRate).toBe(40);
+    expect(result.uncachedInputTokens).toBe(100);
+  });
+
+  it('OpenAI 自动缓存：cached_tokens 当作 read', () => {
+    const result = extractCachedContent(
+      { messages: [] },
+      {
+        prompt_tokens: 1000,
+        prompt_tokens_details: { cached_tokens: 600 },
+        completion_tokens: 200,
+      },
+      { endpointType: 'openai-chat' },
+    );
+    expect(result.provider).toBe('openai');
+    expect(result.cacheMode).toBe('auto');
+    // OpenAI 无 create 概念，cached 全算 read
+    expect(result.cacheReadTokens).toBe(600);
+    expect(result.cacheCreateTokens).toBe(0);
+    expect(result.totalCachedTokens).toBe(600);
+    expect(result.totalInputTokens).toBe(1000);
+    expect(result.uncachedInputTokens).toBe(400);
+    // hitRate = 600/1000 = 60%
+    expect(result.hitRate).toBe(60);
+    // read>0 → hit
+    expect(result.status).toBe('hit');
+  });
+
+  it('OpenAI Responses API 同样走 auto 模式', () => {
+    const result = extractCachedContent(
+      { messages: [] },
+      { prompt_tokens: 500, prompt_tokens_details: { cached_tokens: 0 } },
+      { endpointType: 'openai-responses' },
+    );
+    expect(result.cacheMode).toBe('auto');
+    expect(result.provider).toBe('openai');
+    // read=0, create=0, mode!=none → no-data
+    expect(result.status).toBe('no-data');
+    expect(result.hitRate).toBe(0);
+  });
+
+  it('status 四态：first-create', () => {
+    const result = extractCachedContent(
+      { messages: [] },
+      {
+        input_tokens: 100,
+        cache_creation_input_tokens: 200,
+        cache_read_input_tokens: 0,
+      },
+      { endpointType: 'anthropic-messages' },
+    );
+    // create>0 且 read===0 → first-create
+    expect(result.status).toBe('first-create');
+    expect(result.hitRate).toBe(0);
+    expect(result.totalInputTokens).toBe(300);
+  });
+
+  it('status 四态：unsupported（无缓存能力）', () => {
+    const result = extractCachedContent(
+      { messages: [] },
+      { input_tokens: 100, output_tokens: 50 },
+      // 未知 endpointType，无 cache_control 标记 → mode=none
+    );
+    expect(result.cacheMode).toBe('none');
+    expect(result.provider).toBe('unknown');
+    // read=0, create=0, mode=none → unsupported
+    expect(result.status).toBe('unsupported');
+  });
+
+  it('explicit 模式下 block.kind 正确判定', () => {
+    // 首次写入场景：create>0, read===0 → kind=create
+    const firstWrite = extractCachedContent(
+      {
+        system: [{ type: 'text', text: 'cached sys', cache_control: { type: 'ephemeral' } }],
+        messages: [],
+      },
+      { input_tokens: 10, cache_creation_input_tokens: 20, cache_read_input_tokens: 0 },
+      { endpointType: 'anthropic-messages' },
+    );
+    expect(firstWrite.system[0].kind).toBe('create');
+    expect(firstWrite.status).toBe('first-create');
+
+    // 命中场景：read>0 → kind=hit
+    const hit = extractCachedContent(
+      {
+        system: [{ type: 'text', text: 'cached sys', cache_control: { type: 'ephemeral' } }],
+        messages: [],
+      },
+      { input_tokens: 10, cache_creation_input_tokens: 0, cache_read_input_tokens: 30 },
+      { endpointType: 'anthropic-messages' },
+    );
+    expect(hit.system[0].kind).toBe('hit');
+    expect(hit.status).toBe('hit');
   });
 });
 
