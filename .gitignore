@@ -43,3 +43,5 @@ settings-modal.png
 
 # Logs directory (optional, for testing)
 logs/
+
+.claude/
