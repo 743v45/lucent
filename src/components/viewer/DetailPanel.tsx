@@ -661,7 +661,7 @@ function KVCacheTab({ log }: KVCacheTabProps): JSX.Element {
   const formatTokens = (n: number): string => formatTokenValue(n);
 
   return (
-    <div className="p-4">
+    <div className="p-4 h-full overflow-y-auto">
       {/* 概览卡片 */}
       <div className="mb-4 p-4 bg-bg-surface rounded-lg border border-border-subtle">
         <div className="flex items-start justify-between mb-3">

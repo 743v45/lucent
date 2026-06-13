@@ -52,4 +52,44 @@ describe('buildContextFromRequest — contextWindow 口径', () => {
     // totalInput = 100(input) + 200(create) + 300(read) = 600；output=50；total=650
     expect(log.context?.contextWindow?.totalTokens).toBe(650);
   });
+
+  it('SSE 流式响应：从 lines 提取 cache read（tokenUsage 缺失时兜底）', () => {
+    const lines = [
+      { event: 'message_start', data: JSON.stringify({ type: 'message_start', message: { usage: { input_tokens: 173, cache_creation_input_tokens: 0, cache_read_input_tokens: 29184 } } }) },
+      { event: 'message_delta', data: JSON.stringify({ type: 'message_delta', usage: { output_tokens: 121 } }) },
+    ];
+    const log = {
+      id: 'test-sse',
+      timestamp: '2026-06-12T00:00:00.000Z',
+      request: { method: 'POST', url: 'https://api.anthropic.com/v1/messages', headers: {}, body: { model: 'claude-3-5-sonnet-20241022', messages: [{ role: 'user', content: 'hi' }] } },
+      response: { status: 200, statusText: 'OK', headers: {}, body: { type: 'sse_raw', lines } },
+      agentType: 'main',
+      duration: 0,
+      metadata: { model: 'claude-3-5-sonnet-20241022', provider: 'claude', stream: true },
+      endpointType: 'anthropic-messages',
+    } as unknown as LogEntry;
+
+    buildContextFromRequest(log);
+
+    expect(log.kvCache?.cacheReadTokens).toBe(29184);
+    expect(log.kvCache?.hitRate).toBeGreaterThan(0);
+  });
+
+  it('历史 camelCase tokenUsage：归一化后正确读取 cache read', () => {
+    const log = {
+      id: 'test-camel',
+      timestamp: '2026-06-12T00:00:00.000Z',
+      request: { method: 'POST', url: 'https://api.anthropic.com/v1/messages', headers: {}, body: { model: 'claude-3-5-sonnet-20241022', messages: [{ role: 'user', content: 'hi' }] } },
+      response: { status: 200, statusText: 'OK', headers: {}, body: {} },
+      agentType: 'main',
+      duration: 0,
+      metadata: { model: 'claude-3-5-sonnet-20241022', provider: 'claude', stream: true },
+      tokenUsage: { inputTokens: 173, outputTokens: 121, cacheReadTokens: 29184 },
+      endpointType: 'anthropic-messages',
+    } as unknown as LogEntry;
+
+    buildContextFromRequest(log);
+
+    expect(log.kvCache?.cacheReadTokens).toBe(29184);
+  });
 });

@@ -16,6 +16,7 @@ import {
 } from '../constants.js';
 import { extractContext } from '../context-extractors.js';
 import { extractCachedContent, getContextSizeForModel } from '../kvcache.js';
+import { extractFromSSELines } from '../sse-extractor.js';
 import type { LogEntry, LogsQuery } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
@@ -150,18 +151,44 @@ export function buildContextFromRequest(log: LogEntry): void {
 
   if (!body || typeof body !== 'object') return;
 
-  // 提取 KV-Cache 信息（命中率、缓存内容、状态判定）
+  // 提取 KV-Cache 信息（命中率、缓存内容、状态判定）。
   // 总是用新口径重新提取并覆盖：修正旧日志存储的 string[] 旧格式 + 旧命中率口径，
   // 同时为无缓存命中的请求补上 status/cacheMode（用于前端空状态三态）。
-  // 优先用已归一化的 tokenUsage（兼容 SSE/非 SSE），fallback 到 response.body.usage
-  const tu = log.tokenUsage as any;
-  const rawRespUsage = (log.response?.body as any)?.usage;
-  const normalizedUsage = (tu?.input_tokens !== undefined) ? {
-    input_tokens: tu.input_tokens,
-    output_tokens: tu.output_tokens,
-    cache_creation_input_tokens: tu.cache_creation_tokens,
-    cache_read_input_tokens: tu.cache_read_tokens,
-  } : rawRespUsage;
+  // 优先从 SSE lines 提取 usage（source of truth，与前端 resolveTokenUsage 一致），
+  // 兼容历史 camelCase/snakeCase tokenUsage（归一化），最后回退 response.body.usage。
+  const respBody = log.response?.body as any;
+  let normalizedUsage: any;
+
+  // 1. SSE 流式：从原始 lines 提取（最可靠，覆盖 tokenUsage 缺失的历史日志）
+  if (respBody?.type === 'sse_raw' && Array.isArray(respBody.lines)) {
+    const extracted = extractFromSSELines(respBody.lines);
+    if (extracted.usage.input > 0 || extracted.usage.output > 0) {
+      normalizedUsage = {
+        input_tokens: extracted.usage.input,
+        output_tokens: extracted.usage.output,
+        cache_creation_input_tokens: extracted.usage.cache_create || undefined,
+        cache_read_input_tokens: extracted.usage.cache_read || undefined,
+      };
+    }
+  }
+
+  // 2. tokenUsage（兼容 camelCase 历史 / snakeCase 新）
+  if (!normalizedUsage) {
+    const tu = log.tokenUsage as any;
+    if (tu && (tu.input_tokens ?? tu.inputTokens) !== undefined) {
+      normalizedUsage = {
+        input_tokens: tu.input_tokens ?? tu.inputTokens,
+        output_tokens: tu.output_tokens ?? tu.outputTokens,
+        cache_creation_input_tokens: tu.cache_creation_tokens ?? tu.cacheCreationTokens,
+        cache_read_input_tokens: tu.cache_read_tokens ?? tu.cacheReadTokens,
+      };
+    }
+  }
+
+  // 3. fallback response.body.usage（非流式）
+  if (!normalizedUsage) {
+    normalizedUsage = respBody?.usage;
+  }
   // 传入 endpointType/provider 以区分显式缓存（Anthropic）与自动缓存（OpenAI）
   // 兼容旧日志：endpointType 字段缺失时 fallback 到 apiType
   const endpointType = log.endpointType || (log as any).apiType;
