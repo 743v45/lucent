@@ -39,7 +39,9 @@ export function identifyAgent(body: unknown): AgentIdentification {
   const request = body as ParsedRequest;
 
   // 主 Agent 识别：完整的 messages 数组且包含多轮对话
-  if (Array.isArray(request.messages) && request.messages.length > 2) {
+  // 注意：1 轮 user+assistant 恰好 2 条也应识别为主 Agent（>= 2），
+  // 只要同时存在 user 与 assistant 消息即可视为完整对话上下文。
+  if (Array.isArray(request.messages) && request.messages.length >= 2) {
     const hasUserMessage = request.messages.some(m => m.role === 'user');
     const hasAssistantMessage = request.messages.some(m => m.role === 'assistant');
 
@@ -164,7 +166,10 @@ function identifyFromContent(content: string): SubAgentType | null {
  * 从工具列表识别 Agent 类型
  */
 function identifyFromTools(tools: Array<{ name: string }>): SubAgentType | null {
-  const toolNames = tools.map(t => t.name.toLowerCase());
+  const toolNames = tools
+    .map(t => t.name)
+    .filter((name): name is string => typeof name === 'string')
+    .map(name => name.toLowerCase());
 
   // Plan Agent - 设计和规划工具
   if (toolNames.some(name =>
@@ -219,10 +224,29 @@ export function extractTokenUsage(responseBody: unknown): TokenUsage | undefined
     return undefined;
   }
 
+  // 兼容两套字段：
+  // - Anthropic: usage.input_tokens / usage.output_tokens
+  // - OpenAI 非流式: usage.prompt_tokens / usage.completion_tokens
+  const inputTokens = typeof usage.input_tokens === 'number'
+    ? usage.input_tokens
+    : (typeof usage.prompt_tokens === 'number' ? usage.prompt_tokens : 0);
+  const outputTokens = typeof usage.output_tokens === 'number'
+    ? usage.output_tokens
+    : (typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0);
+
+  // cache 读：Anthropic 的 cache_read_input_tokens / cache_creation_input_tokens，
+  // 兼容 OpenAI 的 prompt_tokens_details.cached_tokens。
+  const promptTokensDetails = usage.prompt_tokens_details as Record<string, unknown> | undefined;
+  const cachedTokens = typeof promptTokensDetails?.cached_tokens === 'number'
+    ? promptTokensDetails.cached_tokens
+    : undefined;
+
   const result = {
-    input_tokens: typeof usage.input_tokens === 'number' ? usage.input_tokens : 0,
-    output_tokens: typeof usage.output_tokens === 'number' ? usage.output_tokens : 0,
-    cache_read_tokens: typeof usage.cache_read_input_tokens === 'number' ? usage.cache_read_input_tokens : undefined,
+    input_tokens: inputTokens,
+    output_tokens: outputTokens,
+    cache_read_tokens: typeof usage.cache_read_input_tokens === 'number'
+      ? usage.cache_read_input_tokens
+      : cachedTokens,
     cache_creation_tokens: typeof usage.cache_creation_input_tokens === 'number' ? usage.cache_creation_input_tokens : undefined,
   };
   log('Token 使用: input=%d output=%d cacheRead=%d cacheCreate=%d', result.input_tokens, result.output_tokens, result.cache_read_tokens ?? 0, result.cache_creation_tokens ?? 0);

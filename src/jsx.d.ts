@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-empty-object-type -- 声明合并需空 extends */
 import type { JSX as ReactJSX } from 'react';
 
 declare global {

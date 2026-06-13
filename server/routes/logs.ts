@@ -20,9 +20,6 @@ import type { LogsQuery } from '../types.js';
 import createDebug from 'debug';
 const dbg = createDebug('lucent:routes:logs');
 
-// SSE 客户端连接集合
-const sseClients = new Set<import('express').Response>();
-
 export function createLogsRouter(options: {
   resolvedConfig: { logDir: string; heartbeatIntervalMs: number };
   onEnable: () => void; // 启用后的回调（设置日志文件）
@@ -30,6 +27,9 @@ export function createLogsRouter(options: {
   const router = Router();
 
   // GET /api/logs/stream — SSE 推送
+  // TODO: 实时推送未接通。当前 sseClients 集合已移除（无广播方/无前端 EventSource 消费者），
+  // 仅保留 SSE 端点骨架（connected 事件 + 心跳保活）以维持对外契约。接入广播时需重新引入
+  // 客户端集合并在 LogWriter 写入后向各客户端 res.write() 推送日志事件。
   router.get('/api/logs/stream', (_req, res) => {
     // 设置 SSE headers
     res.writeHead(200, {
@@ -42,9 +42,7 @@ export function createLogsRouter(options: {
     // 发送 connected 事件
     res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`);
 
-    // 添加到客户端集合
-    sseClients.add(res);
-    dbg('SSE 客户端连接: total=%d', sseClients.size);
+    dbg('SSE 客户端连接（实时推送未接通，仅保活）');
 
     // 心跳保活
     const heartbeatInterval = options.resolvedConfig.heartbeatIntervalMs || 30000;
@@ -55,25 +53,29 @@ export function createLogsRouter(options: {
     // 客户端断开时清理
     _req.on('close', () => {
       clearInterval(heartbeat);
-      sseClients.delete(res);
-      dbg('SSE 客户端断开: total=%d', sseClients.size);
+      dbg('SSE 客户端断开');
     });
   });
 
   // GET /api/logs
   router.get('/api/logs', async (req, res) => {
-    const query: LogsQuery = {
-      limit: parseInt(req.query.limit as string) || 100,
-      offset: parseInt(req.query.offset as string) || 0,
-      agentType: (req.query.agentType as LogsQuery['agentType']) || 'all',
-      subAgentType: req.query.subAgentType as string,
-      startDate: req.query.startDate as string,
-      endDate: req.query.endDate as string,
-      search: req.query.search as string,
-    };
+    try {
+      const query: LogsQuery = {
+        limit: parseInt(req.query.limit as string) || 100,
+        offset: parseInt(req.query.offset as string) || 0,
+        agentType: (req.query.agentType as LogsQuery['agentType']) || 'all',
+        subAgentType: req.query.subAgentType as string,
+        startDate: req.query.startDate as string,
+        endDate: req.query.endDate as string,
+        search: req.query.search as string,
+      };
 
-    const result = await LogReader.readLogs(query);
-    res.json(result);
+      const result = await LogReader.readLogs(query);
+      res.json(result);
+    } catch (error) {
+      dbg('查询日志失败: %O', error);
+      res.status(500).json({ error: 'Failed to get logs' });
+    }
   });
 
   // GET /api/logs/stats
@@ -89,11 +91,16 @@ export function createLogsRouter(options: {
 
   // GET /api/logs/:id
   router.get('/api/logs/:id', async (req, res) => {
-    const log = await LogReader.getLogById(req.params.id);
-    if (log) {
-      res.json({ log });
-    } else {
-      res.status(404).json({ error: 'Log not found' });
+    try {
+      const log = await LogReader.getLogById(req.params.id);
+      if (log) {
+        res.json({ log });
+      } else {
+        res.status(404).json({ error: 'Log not found' });
+      }
+    } catch (error) {
+      dbg('获取日志详情失败: %O', error);
+      res.status(500).json({ error: 'Failed to get log' });
     }
   });
 

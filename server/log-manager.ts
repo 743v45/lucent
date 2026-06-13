@@ -2,6 +2,12 @@
  * 日志管理模块
  *
  * 负责日志的导入、导出、清空和文件轮转
+ *
+ * TODO(重构): 本模块的 rotateLogFile（空占位，未真正重命名）、cleanupOldLogs
+ * 与 services/log-writer.ts 的 checkAndRotateLogFile / cleanupOldLogs 职责重复。
+ * 实际写入路径已由 services/log-writer.ts 统一处理（含真正的 rename 归档 + 写入互斥）。
+ * 本模块仍被 routes/logs.ts 用于 export/import/clear/stats，暂不删除以免风险；
+ * 建议后续将日志 I/O 职责完全收敛到 services/，移除这里的轮转/清理重复实现。
  */
 
 import { mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';

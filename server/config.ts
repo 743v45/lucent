@@ -5,7 +5,7 @@
  * 多供应商 + 多端点结构，运行时可修改，内存缓存 + 磁盘持久化
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS } from './constants.js';
 import { ENDPOINT_TYPES, isEndpointType, isValidProviderName, PRESET_NAMES } from './types.js';
@@ -222,7 +222,7 @@ function initDefaultConfig(): ProxyConfig {
  *
  * 行为：
  * - 文件不存在 → 创建默认配置并写盘
- * - 文件存在但 JSON 解析失败或校验失败 → 创建默认配置并写盘（旧的不要了）
+ * - 文件存在但 JSON 解析失败或校验失败 → 先把损坏文件备份为 config.json.bak，再写默认配置
  * - 文件合法 → 返回
  */
 export function loadConfig(): ProxyConfig {
@@ -239,7 +239,14 @@ export function loadConfig(): ProxyConfig {
     applyHostOverride(cachedConfig);
     return cachedConfig;
   } catch (error) {
-    log('配置文件无效，重置为默认配置: %O', error);
+    // 配置损坏：先把原文件备份为 .bak（用户配置不丢失），再写默认配置
+    try {
+      copyFileSync(CONFIG_PATH, `${CONFIG_PATH}.bak`);
+      log('损坏的配置文件已备份: %s', `${CONFIG_PATH}.bak`);
+    } catch (backupErr) {
+      log('备份损坏配置文件失败（继续覆盖）: %O', backupErr);
+    }
+    log('配置文件无效，已备份原文件并重置为默认配置: %O', error);
     return initDefaultConfig();
   }
 }

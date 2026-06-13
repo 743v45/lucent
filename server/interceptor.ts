@@ -41,7 +41,18 @@ const DRAIN_TIMEOUT_MS = 5_000;
 export async function drainPendingSSETasks(): Promise<void> {
   if (pendingSSETasks.size === 0) return;
   dbg('等待后台 SSE 任务完成: count=%d', pendingSSETasks.size);
-  await Promise.allSettled([...pendingSSETasks]);
+
+  // 超时保护：避免单个后台任务卡住导致优雅关闭无限阻塞
+  const allSettled = Promise.allSettled([...pendingSSETasks]);
+  const timeout = new Promise<'timeout'>((resolve) =>
+    setTimeout(() => resolve('timeout'), DRAIN_TIMEOUT_MS),
+  );
+
+  const result = await Promise.race([allSettled, timeout]);
+  if (result === 'timeout') {
+    dbg('排空超时（%dms），强制继续: count=%d', DRAIN_TIMEOUT_MS, pendingSSETasks.size);
+    return;
+  }
   dbg('所有后台 SSE 任务已完成');
 }
 
@@ -143,7 +154,10 @@ function handleStreamingResponse(
     body: null,
   };
 
-  const [clientBody, logBody] = response.body!.tee();
+  if (response.body == null) {
+    throw new Error('流式响应缺少 body');
+  }
+  const [clientBody, logBody] = response.body.tee();
   const task = extractInBackground(logBody, entry,
     (e) => LogWriter.writeLogEntry(e),
     () => commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp),

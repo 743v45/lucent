@@ -33,6 +33,7 @@ export function init(resolvedCfg: ResolvedConfig): void {
 
 interface FileCache {
   mtimeMs: number;
+  size: number;
   entries: LogEntry[];
 }
 
@@ -40,13 +41,20 @@ const fileCache = new Map<string, FileCache>();
 
 /**
  * 使缓存失效（日志写入/轮转/清理时调用）
+ *
+ * 注意：readFileEntries 已改为 mtimeMs + size 联合判定，
+ * append 后 size 必然变化，因此正常读取路径无需显式失效。
+ * 此函数保留供外部在确知结构变化（如轮转归档）时强制清理。
  */
 export function invalidateCache(): void {
   fileCache.clear();
 }
 
 /**
- * 读取单个文件的日志条目，使用 mtime 缓存
+ * 读取单个文件的日志条目，使用 mtimeMs + size 缓存
+ *
+ * 仅用 mtimeMs 在同秒高频 append 下 mtime 不变会返回过期数据，
+ * 联合 size 判定：size 变化即判定失效。
  */
 async function readFileEntries(filename: string): Promise<LogEntry[]> {
   const filePath = join(resolvedConfig.logDir, filename);
@@ -54,7 +62,7 @@ async function readFileEntries(filename: string): Promise<LogEntry[]> {
   // 检查缓存
   const stats_ = await stat(filePath);
   const cached = fileCache.get(filename);
-  if (cached && cached.mtimeMs === stats_.mtimeMs) {
+  if (cached && cached.mtimeMs === stats_.mtimeMs && cached.size === stats_.size) {
     return cached.entries;
   }
 
@@ -74,7 +82,7 @@ async function readFileEntries(filename: string): Promise<LogEntry[]> {
   }
 
   // 更新缓存
-  fileCache.set(filename, { mtimeMs: stats_.mtimeMs, entries });
+  fileCache.set(filename, { mtimeMs: stats_.mtimeMs, size: stats_.size, entries });
   return entries;
 }
 
@@ -242,6 +250,11 @@ export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[
     search,
   } = query;
 
+  // clamp limit/offset：防止恶意超大 limit 打爆内存
+  const MAX_LOG_QUERY_LIMIT = 500;
+  const safeLimit = Math.max(0, Math.min(limit, MAX_LOG_QUERY_LIMIT));
+  const safeOffset = Math.max(0, offset);
+
   let allLogs: LogEntry[] = [];
 
   try {
@@ -306,10 +319,12 @@ export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[
   if (search) {
     const searchLower = search.toLowerCase();
     filteredLogs = filteredLogs.filter(log => {
-      if (log.request.url.toLowerCase().includes(searchLower)) return true;
-      if (log.metadata.model.toLowerCase().includes(searchLower)) return true;
+      // 所有参与搜索的字段都做空值守卫，避免 undefined.toLowerCase() 抛 TypeError 中断查询
+      if ((log.request?.url ?? '').toLowerCase().includes(searchLower)) return true;
+      if ((log.metadata?.model ?? '').toLowerCase().includes(searchLower)) return true;
       if (log.error?.toLowerCase().includes(searchLower)) return true;
       if (log.subAgentType?.toLowerCase().includes(searchLower)) return true;
+      if ((log.providerName ?? '').toLowerCase().includes(searchLower)) return true;
       return false;
     });
   }
@@ -317,7 +332,7 @@ export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[
   const total = filteredLogs.length;
 
   // 从 request.body 构建 context（只对分页后返回的条目）
-  const paginatedLogs = filteredLogs.slice(offset, offset + limit);
+  const paginatedLogs = filteredLogs.slice(safeOffset, safeOffset + safeLimit);
   paginatedLogs.forEach(log => buildContextFromRequest(log));
 
   return { logs: paginatedLogs, total };

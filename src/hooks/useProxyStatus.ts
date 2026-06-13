@@ -1,7 +1,7 @@
 /**
  * 代理状态管理 Hook
  */
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { getProxyStatus, enableProxy, disableProxy } from '../utils/api';
 import type { ProxyStatus } from '../types';
 
@@ -16,6 +16,8 @@ export function useProxyStatus() {
   });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // unmount 防护：异步请求返回晚于卸载时阻断 setState
+  const mountedRef = useRef(true);
 
   // 加载状态
   const loadStatus = async () => {
@@ -23,12 +25,14 @@ export function useProxyStatus() {
       setLoading(true);
       setError(null);
       const data = await getProxyStatus();
+      if (!mountedRef.current) return;
       setStatus(data);
     } catch (err) {
+      if (!mountedRef.current) return;
       setError(err instanceof Error ? err.message : '加载失败');
       console.error('Failed to load proxy status:', err);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   };
 
@@ -60,7 +64,11 @@ export function useProxyStatus() {
 
   // 初始加载
   useEffect(() => {
+    mountedRef.current = true;
     loadStatus();
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   return {

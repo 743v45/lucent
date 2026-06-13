@@ -14,6 +14,8 @@ export function useLogs() {
   const [hasMore, setHasMore] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const offsetRef = useRef(0);
+  // unmount 防护：异步请求返回晚于卸载时阻断 setState
+  const mountedRef = useRef(true);
 
   // 转换 API 数据格式
   const formatLog = (log: any): LogEntry => ({
@@ -51,15 +53,17 @@ export function useLogs() {
       setLoading(true);
       setError(null);
       const data = await getLogs({ limit: PAGE_SIZE, offset: 0 });
+      if (!mountedRef.current) return;
       const formatted = (data.logs || []).map(formatLog);
       setLogs(formatted);
       offsetRef.current = formatted.length;
       setHasMore(formatted.length < data.total);
     } catch (err) {
+      if (!mountedRef.current) return;
       setError(err instanceof Error ? err.message : '加载失败');
       console.error('Failed to load logs:', err);
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   };
 
@@ -89,7 +93,11 @@ export function useLogs() {
   };
 
   useEffect(() => {
+    mountedRef.current = true;
     loadLogs();
+    return () => {
+      mountedRef.current = false;
+    };
   }, []);
 
   return {

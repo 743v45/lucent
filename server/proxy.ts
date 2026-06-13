@@ -78,8 +78,43 @@ function stripContentLengthHeader(headers: Record<string, string>): Record<strin
 // ==================== 错误响应 ====================
 
 function sendJsonError(res: any, status: number, error: string): void {
+  // 响应头可能已被上游流式分支写出发送，二次 writeHead 会抛 ERR_HTTP_HEADERS_SENT
+  if (res.headersSent) {
+    res.destroy();
+    return;
+  }
   res.writeHead(status, { 'content-type': 'application/json' });
   res.end(JSON.stringify({ error }));
+}
+
+/**
+ * 读取响应体并限制最大字节数，超限时截断
+ * 防止超大响应体撑爆内存
+ */
+async function readBodyWithLimit(response: Response, maxBytes: number): Promise<string> {
+  if (!response.body) return '';
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let received = 0;
+  let result = '';
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    received += value.byteLength;
+    if (received > maxBytes) {
+      // 取到上限为止的部分，剩余丢弃
+      const remaining = maxBytes - (received - value.byteLength);
+      if (remaining > 0) {
+        result += decoder.decode(value.subarray(0, remaining));
+      }
+      try { reader.cancel(); } catch { /* ignore */ }
+      result += `\n[truncated at ${maxBytes} bytes]`;
+      return result;
+    }
+    result += decoder.decode(value, { stream: true });
+  }
+  result += decoder.decode();
+  return result;
 }
 
 // ==================== 代理服务器 ====================
@@ -104,7 +139,6 @@ export async function startProxyServer(options?: { port?: number; host?: string 
 
       // 响应写出时打印一条完整日志
       const originalWriteHead = res.writeHead.bind(res);
-      // @ts-ignore
       res.writeHead = (statusCode: number, ...args: any[]) => {
         const duration = Date.now() - startTime;
         console.log(`[Lucent Proxy] ${req.method} ${reqUrl} ${statusCode} ${duration}ms ip=${clientIp}`);
@@ -205,7 +239,9 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         // 11. 处理错误响应
         if (!response.ok) {
           try {
-            const errorText = await response.text();
+            // 限制错误体读取量，防止超大错误响应撑爆内存
+            const MAX_ERROR_BODY = 64 * 1024; // 64KB
+            const errorText = await readBodyWithLimit(response, MAX_ERROR_BODY);
             log('❌ 上游错误: status=%d body=%s', response.status, errorText);
             res.writeHead(response.status, responseHeaders);
             res.end(errorText);
@@ -221,9 +257,21 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         // 12. 流式传输响应
         if (response.body) {
           const { Readable, pipeline } = await import('node:stream');
-          // @ts-ignore
+          // @ts-expect-error — Readable.fromWeb 类型在当前 @types/node 下不完全
           const nodeStream = Readable.fromWeb(response.body);
-          nodeStream.on('error', () => {});
+          // 非 EPIPE 错误（如上游读取异常）记录日志，便于排查
+          nodeStream.on('error', (err) => {
+            if ((err as NodeJS.ErrnoException).code !== 'EPIPE') {
+              log('上游流错误: %s', err.message);
+            }
+          });
+          // 客户端中途断开时主动销毁上游流，让断开传播到上游，
+          // 避免后台 tee 提取任务悬挂
+          res.on('close', () => {
+            if (!res.writableEnded) {
+              nodeStream.destroy();
+            }
+          });
           pipeline(nodeStream, res, (err) => {
             if (err && (err as NodeJS.ErrnoException).code !== 'EPIPE') {
               log('Stream 错误: %s', err.message);

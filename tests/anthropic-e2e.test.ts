@@ -54,7 +54,7 @@ type MockResponseMode =
 
 let mockServer: Server;
 let mockPort = 0;
-let capturedRequests: CapturedRequest[] = [];
+const capturedRequests: CapturedRequest[] = [];
 let responseMode: MockResponseMode = 'sse-text';
 
 // ==================== Anthropic Mock 响应构造 ====================

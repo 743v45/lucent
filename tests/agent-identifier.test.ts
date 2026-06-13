@@ -36,12 +36,13 @@ describe('extractTokenUsage', () => {
         prompt_tokens_details: { cached_tokens: 50 },
       },
     };
-    // extractTokenUsage 只读 input_tokens / output_tokens，不读 prompt_tokens
+    // 兼容 OpenAI 非流式：input_tokens 取 prompt_tokens，output_tokens 取 completion_tokens，
+    // cache_read_tokens 取 prompt_tokens_details.cached_tokens（Anthropic 字段缺失时回退）。
     const result = extractTokenUsage(body);
     expect(result).toEqual({
-      input_tokens: 0,
-      output_tokens: 0,
-      cache_read_tokens: undefined,
+      input_tokens: 200,
+      output_tokens: 80,
+      cache_read_tokens: 50,
       cache_creation_tokens: undefined,
     });
   });

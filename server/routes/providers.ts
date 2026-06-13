@@ -176,13 +176,16 @@ export function createProvidersRouter(): Router {
       const provider = findProviderByName(getConfig(), name);
       if (!provider) { res.status(404).json({ error: 'Provider not found' }); return; }
 
-      const baseUrl = provider.endpoints[endpointType];
-      if (!baseUrl) {
+      const rawBaseUrl = provider.endpoints[endpointType];
+      if (!rawBaseUrl) {
         res.status(400).json({
           error: `Provider "${name}" 未配置 ${endpointType} 协议的端点（endpoints["${endpointType}"] = null）`,
         });
         return;
       }
+
+      // 归一化 baseUrl：去除尾部斜杠，避免用户填 `https://x/` 时拼接出 `//v1/messages`
+      const baseUrl = rawBaseUrl.replace(/\/+$/, '');
 
       const startTime = Date.now();
       dbg('🧪 测试连接: provider=%s, endpointType=%s, baseUrl=%s',
@@ -224,6 +227,7 @@ export function createProvidersRouter(): Router {
         method: 'POST',
         headers,
         body: JSON.stringify(testBody),
+        signal: AbortSignal.timeout(10000),
       });
       const duration = Date.now() - startTime;
       dbg('📥 测试响应: status=%d, ok=%s, duration=%dms', response.status, response.ok, duration);
@@ -237,7 +241,16 @@ export function createProvidersRouter(): Router {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       dbg('❌ 测试失败: %s', msg);
-      res.json({ ok: false, duration: 0, message: `连接失败: ${msg}` });
+      // AbortSignal.timeout 抛 TimeoutError（name 含 'Timeout'）或 DOMException(name='TimeoutError')，
+      // 翻译成对用户友好的中文提示
+      const isTimeout =
+        (error instanceof Error && /timeout/i.test(error.name)) ||
+        /timeout|abort/i.test(msg);
+      res.json({
+        ok: false,
+        duration: 0,
+        message: isTimeout ? '连接超时' : `连接失败: ${msg}`,
+      });
     }
   });
 

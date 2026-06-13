@@ -82,7 +82,8 @@ export function extractAnthropicMessages(body: any): ExtractedContext | null {
   const messages: NormalizedMessage[] = Array.isArray(body.messages)
     ? body.messages.map((msg: any) => ({
         role: msg.role || 'user',
-        content: msg.content,
+        // Anthropic 允许 content 为 null/undefined；规范化为空数组避免下游 normalizeContent 收到 null。
+        content: msg.content == null ? [] : msg.content,
       }))
     : [];
 
@@ -111,7 +112,7 @@ export function extractOpenAIChat(body: any): ExtractedContext | null {
         systemPrompt = typeof msg.content === 'string'
           ? msg.content
           : Array.isArray(msg.content)
-            ? msg.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
+            ? msg.content.filter((b: any) => b.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('\n')
             : undefined;
       }
       continue;

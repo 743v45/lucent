@@ -44,7 +44,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [testingMap, setTestingMap] = useState<Record<EndpointType, boolean>>({} as Record<EndpointType, boolean>);
+  const [testingMap, setTestingMap] = useState<Record<string, boolean>>({});
   const [testResults, setTestResults] = useState<Record<string, Record<EndpointType, { ok: boolean; duration: number; message: string } | null>>>({});
 
   // 编辑状态
@@ -65,28 +65,35 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const proxyPort = DEFAULT_PROXY_PORT; // TODO: 从 status API 获取动态值
 
   useEffect(() => {
-    if (open) loadProviders();
-  }, [open]);
-
-  const loadProviders = async () => {
-    setLoading(true);
-    try {
-      const list = await listProviders();
-      setProviders(list);
-      // 初始化 formData
-      const data: Record<string, { endpoints: Record<EndpointType, string | null> }> = {};
-      for (const p of list) {
-        const full = await getProviderFull(p.name);
-        data[p.name] = { endpoints: full.endpoints };
+    if (!open) return;
+    let cancelled = false;
+    const loadProviders = async () => {
+      setLoading(true);
+      try {
+        const list = await listProviders();
+        if (cancelled) return;
+        setProviders(list);
+        // 并发拉取每个 provider 的完整配置（替代串行 N+1）
+        const fulls = await Promise.all(list.map(p => getProviderFull(p.name)));
+        if (cancelled) return;
+        // 初始化 formData
+        const data: Record<string, { endpoints: Record<EndpointType, string | null> }> = {};
+        list.forEach((p, i) => {
+          data[p.name] = { endpoints: fulls[i].endpoints };
+        });
+        setFormData(data);
+        setTestResults({});
+      } catch {
+        if (!cancelled) message.error('加载供应商列表失败');
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setFormData(data);
-      setTestResults({});
-    } catch {
-      message.error('加载供应商列表失败');
-    } finally {
-      setLoading(false);
-    }
-  };
+    };
+    loadProviders();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
 
   const handleExpand = (name: string) => {
     setExpanded(expanded === name ? null : name);
@@ -248,7 +255,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   };
 
   const handleTest = async (name: string, endpointType: EndpointType) => {
-    setTestingMap(prev => ({ ...prev, [endpointType]: true }));
+    const testKey = `${name}:${endpointType}`;
+    setTestingMap(prev => ({ ...prev, [testKey]: true }));
     try {
       const result = await testProviderEndpoint(name, endpointType);
       setTestResults(prev => ({
@@ -267,7 +275,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       }));
       message.error('测试失败');
     } finally {
-      setTestingMap(prev => ({ ...prev, [endpointType]: false }));
+      setTestingMap(prev => ({ ...prev, [testKey]: false }));
     }
   };
 
@@ -488,7 +496,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             {ENDPOINT_TYPES.map(et => {
               const val = data.endpoints[et];
               const result = results[et];
-              const isTesting = testingMap[et];
+              const isTesting = testingMap[`${p.name}:${et}`];
               const defaultUrl = preset?.endpoints[et];
               const showReset = preset && defaultUrl !== null && val !== defaultUrl && val !== null;
               const hasUrlError = blurredFields.has(p.name + '.' + et) && val && !isValidUrl(val);

@@ -58,7 +58,7 @@ type MockMode =
 
 let mockServer: Server;
 let mockPort = 0;
-let captured: CapturedRequest[] = [];
+const captured: CapturedRequest[] = [];
 let mode: MockMode = 'chat-sse';
 
 // ==================== OpenAI Mock 响应 ====================

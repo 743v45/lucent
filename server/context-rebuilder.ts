@@ -125,6 +125,14 @@ export class ContextRebuilder {
           timestamp,
           id: body.id,
         });
+      } else if (block.type === 'thinking') {
+        // Anthropic 扩展思考块：提取 thinking 文本作为 assistant 消息。
+        messages.push({
+          role: body.role || 'assistant',
+          content: typeof block.thinking === 'string' ? block.thinking : '',
+          timestamp,
+          id: body.id,
+        });
       } else if (block.type === 'tool_use') {
         messages.push({
           role: body.role || 'assistant',
@@ -135,6 +143,10 @@ export class ContextRebuilder {
           name: block.name as string | undefined,
         });
       }
+      // TODO: tool_result 块（type==='tool_result'）当前未单独提取，
+      // 因请求侧已通过 extractMessagesFromRequest 覆盖工具结果消息。
+      // TODO: OpenAI 响应（choices[].message）走不同结构，不在此函数适用范围，
+      // 其上下文由 context-extractors.ts 处理，此处不硬改。
     }
 
     return messages;
@@ -190,12 +202,35 @@ export class ContextRebuilder {
         const content = typeof firstUserMsg.content === 'string'
           ? firstUserMsg.content
           : this.extractTextFromBlocks(firstUserMsg.content);
-        // 使用内容的哈希作为键（简化版）
-        return `cp_${content.substring(0, CHECKPOINT_KEY_CONTENT_LENGTH).replace(/\s/g, '_')}`;
+        // 内容非空时用内容前缀作键
+        if (content) {
+          return `cp_${content.substring(0, CHECKPOINT_KEY_CONTENT_LENGTH).replace(/\s/g, '_')}`;
+        }
       }
     }
 
-    return `cp_${Date.now()}`;
+    // 回退：首条 user 消息为空/缺失时，用 system + 首条 message 文本组合的简单哈希，
+    // 而非时间戳——避免同对话每次请求生成新 key 导致 checkpoint 孤立。
+    const systemText = typeof requestBody.system === 'string'
+      ? requestBody.system
+      : (Array.isArray(requestBody.system) ? this.extractTextFromBlocks(requestBody.system) : '');
+    const firstMsg = requestBody.messages?.[0];
+    const firstMsgText = firstMsg
+      ? (typeof firstMsg.content === 'string'
+        ? firstMsg.content
+        : this.extractTextFromBlocks(firstMsg.content))
+      : '';
+    const fallbackSeed = `${systemText}|${firstMsgText}`;
+    if (fallbackSeed.trim()) {
+      // 简单确定性哈希（djb2），保证相同对话产生相同 key。
+      let hash = 5381;
+      for (let i = 0; i < fallbackSeed.length; i++) {
+        hash = ((hash << 5) + hash + fallbackSeed.charCodeAt(i)) | 0;
+      }
+      return `cp_${(hash >>> 0).toString(36)}`;
+    }
+
+    return `cp_empty`;
   }
 
   /**
@@ -237,7 +272,13 @@ export class ContextRebuilder {
    */
   private sortMessagesByTimestamp(messages: ContextMessage[]): ContextMessage[] {
     return [...messages].sort((a, b) => {
-      return new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime();
+      const timeA = new Date(a.timestamp).getTime();
+      const timeB = new Date(b.timestamp).getTime();
+      // 非法时间戳（NaN）会令比较函数恒返回 false 导致排序不可预测；
+      // NaN 回退为 0，使其相对顺序稳定（不早于任意有效时间戳之后随机排列）。
+      const safeA = Number.isNaN(timeA) ? 0 : timeA;
+      const safeB = Number.isNaN(timeB) ? 0 : timeB;
+      return safeA - safeB;
     });
   }
 
@@ -378,6 +419,16 @@ export function calculateContextWindow(
 ): ContextWindow {
   const contextSize = getContextSizeForModel(model);
   const totalTokens = inputTokens + outputTokens;
+  // contextSize 为 0（未知模型等）时避免除零产生 NaN 污染 UI，直接置 0 使用率。
+  if (contextSize <= 0) {
+    log('上下文窗口: %d/%d tokens (contextSize<=0，置 0)', totalTokens, contextSize);
+    return {
+      totalTokens,
+      contextSize,
+      usedPercentage: 0,
+      remainingPercentage: 0,
+    };
+  }
   const usedPercentage = Math.min(100, Math.round((totalTokens / contextSize) * 100));
   const remainingPercentage = 100 - usedPercentage;
 
@@ -408,7 +459,13 @@ export function buildConversationSummary(
   const totalMessages = checkpoint.messages.length;
   const userMessages = checkpoint.messages.filter(m => m.role === 'user').length;
   const assistantMessages = checkpoint.messages.filter(m => m.role === 'assistant').length;
-  const toolMessages = checkpoint.messages.filter(m => m.role === 'tool' || m.tool_use_id).length;
+  // toolMessages 只统计"工具结果"消息（role==='tool'，或 Anthropic 中承载 tool_result 的 user 消息）。
+  // 注意：assistant 的 tool_use 块也会带 tool_use_id，但那属于 assistant 发起的工具调用，
+  // 不应计入 toolMessages（避免与 assistantMessages 双计）。
+  const toolMessages = checkpoint.messages.filter(m =>
+    m.role === 'tool' ||
+    (m.tool_use_id && m.role !== 'assistant')
+  ).length;
   const systemPromptLength = checkpoint.systemPrompt?.length || 0;
   const toolsCount = checkpoint.tools?.length || 0;
 

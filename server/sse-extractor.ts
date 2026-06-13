@@ -182,6 +182,9 @@ export function extractFromSSELines(lines: SSERawLine[]): ExtractedInfo {
 /** SSE 后台收集超时时间（毫秒） */
 const SSE_COLLECT_TIMEOUT_MS = 60_000; // 1 分钟
 
+/** SSE 原始行累计字节上限（防止超长流导致 OOM） */
+const SSE_COLLECT_MAX_BYTES = 2 * 1024 * 1024; // 2MB
+
 /**
  * 后台收集 SSE 原始行数据（不阻塞客户端响应）
  * 存储原始数据，展示时再调用 extractFromSSELines 提取
@@ -196,6 +199,8 @@ export async function collectSSELinesInBackground(
   onDeltaCommit: () => void,
 ): Promise<void> {
   const lines: SSERawLine[] = [];
+  let totalBytes = 0;
+  let truncated = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
 
   try {
@@ -214,6 +219,12 @@ export async function collectSSELinesInBackground(
       while (true) {
         const { done, value } = await reader.read();
         if (done) return 'done' as const;
+        // 累计字节上限保护：超限后停止收集，标记截断
+        totalBytes += (value?.event?.length || 0) + (value?.data?.length || 0);
+        if (totalBytes > SSE_COLLECT_MAX_BYTES) {
+          truncated = true;
+          return 'limit' as const;
+        }
         lines.push({
           event: value.event || '',
           data: value.data || '',
@@ -224,8 +235,17 @@ export async function collectSSELinesInBackground(
     const result = await Promise.race([readPromise, timeoutPromise]);
 
     if (result === 'timeout') {
+      truncated = true;
       dbgSse('SSE 收集超时: lines=%d id=%s', lines.length, entry.id);
+    } else if (result === 'limit') {
+      dbgSse('SSE 收集超限: lines=%d bytes=%d id=%s', lines.length, totalBytes, entry.id);
+    }
+
+    if (result === 'timeout') {
       try { reader.cancel(); } catch { /* ignore */ }
+      // reader.cancel() 会令 readPromise 内的 reader.read() reject，
+      // 这里主动 await 吃掉，避免未处理的 Promise rejection
+      await readPromise.catch(() => {});
     }
 
     // 写入日志：存储原始 SSE 数据
@@ -236,7 +256,7 @@ export async function collectSSELinesInBackground(
       body: {
         type: 'sse_raw',
         lines,
-        ...(result === 'timeout' ? { truncated: true } : {}),
+        ...(truncated ? { truncated: true } : {}),
       },
     };
 
@@ -255,7 +275,7 @@ export async function collectSSELinesInBackground(
     onDeltaCommit();
 
     dumpSseDebug(entry, lines);
-    dbgSse('SSE 收集完成: lines=%d truncated=%s', lines.length, result === 'timeout');
+    dbgSse('SSE 收集完成: lines=%d truncated=%s', lines.length, truncated);
   } catch (err) {
     dbgSse('SSE 收集失败: %O', err);
     entry.response = {

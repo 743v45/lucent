@@ -314,7 +314,8 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         </div>
 
         {/* Tab Content */}
-        <div className="flex-1 min-h-0 bg-bg-deep">
+        {/* key={log.id}：切日志时强制重建内容子树，重置 KVCacheTab/ContextTab/ResponseTab 等内部 state（折叠态、选中项、SSE 视图模式等） */}
+        <div className="flex-1 min-h-0 bg-bg-deep" key={log.id}>
           {renderTabContent()}
         </div>
       </div>
@@ -775,14 +776,15 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
           title: '系统提示词',
           content: data.systemPrompt || '',
         };
-      case 'tool':
+      case 'tool': {
         const tool = data.tools?.[selected.index];
         if (!tool) return null;
         return {
           title: `工具: ${tool.name}`,
           content: tool.description || '无描述',
         };
-      case 'message':
+      }
+      case 'message': {
         const msg = data.messages?.[selected.index];
         if (!msg) return null;
         const contentText =
@@ -806,6 +808,7 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
           title: `${msg.role === 'user' ? '用户' : msg.role === 'assistant' ? '助手' : '工具'} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`,
           content: contentText,
         };
+      }
     }
   };
 

@@ -40,6 +40,61 @@ const shortenModel = (model: string): string => {
 
 /** 来源字符串：`glm · anthropic-messages`；历史日志 fallback `-` */
 
+/** 时间格式化：HH:mm:ss */
+function formatTime(timestamp: string): string {
+  const date = new Date(timestamp);
+  return date.toLocaleTimeString('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+/** 完整日期：yyyy/MM/dd HH:mm:ss */
+function formatFullDate(timestamp: string): string {
+  const date = new Date(timestamp);
+  return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${formatTime(timestamp)}`;
+}
+
+/** 时间 hover 显示完整日期的组件（模块顶层，避免每次渲染重建类型） */
+function TimeWithTooltip({ timestamp }: { timestamp: string }) {
+  const [showDate, setShowDate] = useState(false);
+  const timeoutRef = useRef<number | null>(null);
+
+  const handleMouseEnter = () => {
+    timeoutRef.current = window.setTimeout(() => {
+      setShowDate(true);
+    }, DATE_HOVER_DELAY_MS);
+  };
+
+  const handleMouseLeave = () => {
+    if (timeoutRef.current) {
+      window.clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+    setShowDate(false);
+  };
+
+  useEffect(() => {
+    return () => {
+      if (timeoutRef.current) {
+        window.clearTimeout(timeoutRef.current);
+      }
+    };
+  }, []);
+
+  return (
+    <span
+      className="shrink-0 text-text-tertiary text-[13px] cursor-default"
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      title={formatFullDate(timestamp)}
+    >
+      {showDate ? formatFullDate(timestamp) : formatTime(timestamp)}
+    </span>
+  );
+}
+
 export function LogListPanel({
   logs,
   selectedId,
@@ -82,20 +137,6 @@ export function LogListPanel({
     return `${(ms / MS_TO_S_THRESHOLD).toFixed(1)}s`;
   };
 
-  const formatTime = (timestamp: string): string => {
-    const date = new Date(timestamp);
-    return date.toLocaleTimeString('zh-CN', {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    });
-  };
-
-  const formatFullDate = (timestamp: string): string => {
-    const date = new Date(timestamp);
-    return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${formatTime(timestamp)}`;
-  };
-
   // 截断 URL，去掉协议，显示完整地址
   const shortenUrl = (url: string): string => {
     try {
@@ -107,60 +148,21 @@ export function LogListPanel({
     }
   };
 
-  // 时间 hover 显示日期的组件
-  const TimeWithTooltip = ({ timestamp }: { timestamp: string }) => {
-    const [showDate, setShowDate] = useState(false);
-    const timeoutRef = useRef<number | null>(null);
-
-    const handleMouseEnter = () => {
-      timeoutRef.current = window.setTimeout(() => {
-        setShowDate(true);
-      }, DATE_HOVER_DELAY_MS);
-    };
-
-    const handleMouseLeave = () => {
-      if (timeoutRef.current) {
-        window.clearTimeout(timeoutRef.current);
-        timeoutRef.current = null;
-      }
-      setShowDate(false);
-    };
-
-    useEffect(() => {
-      return () => {
-        if (timeoutRef.current) {
-          window.clearTimeout(timeoutRef.current);
-        }
-      };
-    }, []);
-
-    return (
-      <span
-        className="shrink-0 text-text-tertiary text-[13px] cursor-default"
-        onMouseEnter={handleMouseEnter}
-        onMouseLeave={handleMouseLeave}
-        title={formatFullDate(timestamp)}
-      >
-        {showDate ? formatFullDate(timestamp) : formatTime(timestamp)}
-      </span>
-    );
-  };
-
   return (
     <div
       className="h-full flex flex-col border-r border-border-subtle bg-bg-panel shrink-0"
       style={{ width }}
     >
       {/* Header */}
-      <div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2">
+      <div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2 min-w-0">
         <Text className="text-text-primary text-[15px] font-[510] shrink-0">
           通信记录
         </Text>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex items-center gap-2 min-w-0 shrink">
           {providers && onProviderFilterChange && (
             <Select
               size="small"
-              className="min-w-[120px]"
+              className="shrink min-w-0"
               value={providerFilter ?? 'all'}
               onChange={(v) => onProviderFilterChange(v)}
               options={[
@@ -180,7 +182,7 @@ export function LogListPanel({
           {onEndpointFilterChange && (
             <Select
               size="small"
-              className="min-w-[100px]"
+              className="shrink min-w-0"
               value={endpointFilter ?? 'all'}
               onChange={(v) => onEndpointFilterChange(v)}
               labelRender={(option) => {
@@ -246,7 +248,7 @@ export function LogListPanel({
                 `}
               >
                 {/* 行1：Agent类型 tag + 模型名 + SSE/JSON + 时间 + 测试标记 */}
-                <div className="flex items-center gap-2 text-sm leading-[1.3]">
+                <div className="flex items-center gap-1.5 text-sm leading-[1.3] min-w-0">
                   {agentTag}
                   {log.isTest && (
                     <Tooltip title="测试请求">
@@ -272,23 +274,23 @@ export function LogListPanel({
                 </div>
 
                 {/* 行2：供应商 + 协议 + 客户端图标 + 请求地址 + 耗时 + 状态码 */}
-                <div className="flex items-center gap-2 text-[13px] leading-[1.3]">
+                <div className="flex items-center gap-1 text-[13px] leading-[1.3] min-w-0">
                   <Tooltip title={log.providerName ? `供应商: ${log.providerName}` : '未知供应商'}>
-                    <span><ProviderIcon providerName={log.providerName || ''} size={14} /></span>
+                    <span className="shrink-0"><ProviderIcon providerName={log.providerName || ''} size={14} /></span>
                   </Tooltip>
                   {log.endpointType && (
                     <Tooltip title={`协议: ${ENDPOINT_LABELS[log.endpointType] ?? log.endpointType}`}>
-                      <span><ProtocolIcon type={log.endpointType} size={14} /></span>
+                      <span className="shrink-0"><ProtocolIcon type={log.endpointType} size={14} /></span>
                     </Tooltip>
                   )}
-                  <ClientIcon clientType={log.clientType} />
+                  <span className="shrink-0"><ClientIcon clientType={log.clientType} /></span>
                   <span
                     className="text-text-quaternary truncate flex-1 min-w-0"
                     title={log.request.url}
                   >
                     {shortenUrl(log.request.url)}
                   </span>
-                  <span className="shrink-0 text-text-tertiary w-[50px] text-right">
+                  <span className="shrink-0 text-text-tertiary text-right">
                     {log.duration > 0 ? formatDuration(log.duration) : '-'}
                   </span>
                   {log.response && (

@@ -5,7 +5,7 @@
  * 使用异步 I/O + 写入队列，不阻塞事件循环
  */
 
-import { appendFile, mkdir, stat, unlink, readdir } from 'node:fs/promises';
+import { appendFile, rename, stat, unlink, readdir } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { LOG_ENTRY_SEPARATOR, escapeLogContent } from '../constants.js';
@@ -19,8 +19,17 @@ const dbg = createDebug('lucent:log-writer');
 let resolvedConfig: ResolvedConfig;
 let currentLogFile: string | null = null;
 
-/** 异步写入队列：串行化写入，保证顺序 */
+/** 异步写入队列：串行化写入与轮转，保证顺序、消除竞态 */
 let writeQueue: Promise<void> = Promise.resolve();
+
+/** 写入队列长度上限：高频时拒绝新条目入队，防止 OOM */
+const WRITE_QUEUE_MAX_LENGTH = 10000;
+let writeQueueLength = 0;
+let droppedCount = 0;
+let failedCount = 0;
+
+/** drainWriteQueue 超时（毫秒）：与 interceptor 的 drainPendingSSETasks 风格一致 */
+const DRAIN_TIMEOUT_MS = 5000;
 
 // ==================== 初始化 ====================
 
@@ -57,6 +66,25 @@ function generateLogFilePath(): string {
 // ==================== 写入 ====================
 
 /**
+ * 将一个异步任务串行追加到写入队列（写入 / 轮转共用，保证互斥）
+ */
+function enqueue(task: () => Promise<void>): void {
+  writeQueueLength++;
+  writeQueue = writeQueue
+    .then(async () => {
+      try {
+        await task();
+      } catch (error) {
+        failedCount++;
+        dbg('队列任务失败 (failedCount=%d): %O', failedCount, error);
+      }
+    })
+    .finally(() => {
+      writeQueueLength--;
+    });
+}
+
+/**
  * 写入日志条目（异步，通过队列串行化保证顺序）
  */
 export function writeLogEntry(entry: RawLogEntry): void {
@@ -68,42 +96,69 @@ export function writeLogEntry(entry: RawLogEntry): void {
   const line = escapeLogContent(JSON.stringify(entry)) + LOG_ENTRY_SEPARATOR;
   const file = currentLogFile;
 
-  writeQueue = writeQueue.then(async () => {
-    try {
-      await appendFile(file, line);
-    } catch (error) {
-      dbg('写入日志失败: %O', error);
-    }
+  // 背压：队列超限时拒绝新条目入队（FIFO 保护已排队写入，防止 OOM）
+  if (writeQueueLength >= WRITE_QUEUE_MAX_LENGTH) {
+    droppedCount++;
+    dbg('写入队列背压: 丢弃新条目 (length=%d droppedCount=%d)', writeQueueLength, droppedCount);
+    return;
+  }
+
+  enqueue(async () => {
+    await appendFile(file, line);
   });
 }
 
 /**
- * 等待所有挂起的写入完成
+ * 等待所有挂起的写入完成（带超时，shutdown 时 IO hang 不会永久阻塞）
  */
 export async function drainWriteQueue(): Promise<void> {
-  await writeQueue;
+  let timedOut = false;
+  const timer = new Promise<void>(resolve => {
+    setTimeout(() => {
+      timedOut = true;
+      resolve();
+    }, DRAIN_TIMEOUT_MS);
+  });
+
+  await Promise.race([writeQueue, timer]);
+
+  if (timedOut) {
+    dbg('drainWriteQueue 超时 %dms，放弃等待挂起写入继续退出', DRAIN_TIMEOUT_MS);
+  }
 }
 
 // ==================== 轮转 ====================
 
 /**
  * 检查并轮转日志文件（当文件超过大小限制时）
+ *
+ * 注意：判定+切换+重命名放进与写入同一个 writeQueue 串行执行，
+ * 消除与写入的竞态。interceptor 不 await 也安全。
  */
-export async function checkAndRotateLogFile(): Promise<void> {
-  if (!currentLogFile || !existsSync(currentLogFile)) return;
+export function checkAndRotateLogFile(): void {
+  if (!currentLogFile) return;
 
-  try {
-    const stats_ = await stat(currentLogFile);
-    if (stats_.size >= resolvedConfig.maxLogFileSize) {
-      // 等待挂起写入完成后再轮转
-      await drainWriteQueue();
-      dbg('日志文件达到大小限制，轮转中...');
-      currentLogFile = generateLogFilePath();
-      dbg('日志轮转: 新文件=%s', currentLogFile);
+  const oldFile = currentLogFile;
+
+  enqueue(async () => {
+    if (!existsSync(oldFile)) return;
+    const stats_ = await stat(oldFile);
+    if (stats_.size < resolvedConfig.maxLogFileSize) return;
+
+    // 真正归档旧文件（重命名），避免旧文件无限增长
+    const rotatedPath = oldFile.replace(/\.jsonl$/, `_rotated_${Date.now()}.jsonl`);
+    try {
+      await rename(oldFile, rotatedPath);
+      dbg('日志文件达到大小限制，已归档: %s -> %s', oldFile, rotatedPath);
+    } catch (error) {
+      // rename 失败不崩：保留旧文件继续追加（最坏情况是单文件超限），更新指针避免下次重复尝试
+      dbg('日志轮转 rename 失败（保留原文件继续写入）: %O', error);
     }
-  } catch (error) {
-    dbg('检查日志文件大小失败: %O', error);
-  }
+
+    // 无论 rename 成功与否，都切换到新文件，避免一直写同一个超限文件
+    currentLogFile = generateLogFilePath();
+    dbg('日志轮转: 新文件=%s', currentLogFile);
+  });
 }
 
 // ==================== 清理 ====================
