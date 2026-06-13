@@ -106,9 +106,6 @@ totalTokens = cached.totalInputTokens + output_tokens
 
 ---
 
-## 6. 已清理（2026-06-13 后续）
-
-- 整模块删除 [`server/context-rebuilder.ts`](server/context-rebuilder.ts)（489 行，零 import）：含 `ContextRebuilder` 类、`globalContextRebuilder`、`calculateContextWindow`、`buildConversationSummary` 四个死代码导出。本次随 `git rm` 清理。
 
 ---
 
