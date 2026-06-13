@@ -81,18 +81,22 @@
 ────────────────────
 Claude Code
 [export ANTHROPIC_BASE_URL=http://...:7048/glm        ] [复制]
+   供应商 glm  → 上游 https://api.example.com/v1/messages
 [export ANTHROPIC_BASE_URL=http://...:7048/custom/my  ] [复制]
+   供应商 my   → 上游 https://api.example.com/v1/messages
 ────────────────────
 Codex / OpenAI
 [export OPENAI_BASE_URL=http://...:7048/openai/v1      ] [复制]
+   供应商 openai → 上游 https://api.example.com
 ────────────────────
 ```
 
 每个客户端组：
 - 只在该组有至少一个端点时显示
 - 标题用 `h3` 样式（`text-text-primary font-[560]`）
-- 每行：`code`（完整 export 命令，`font-mono`）+ 复制按钮
-- 行右上角可保留小字「→ 上游」原 URL（与现状一致，保留诊断信息），但默认弱化
+- 每行 = 完整 `export` 命令（`code`，`font-mono`）+ 复制按钮
+- **保留「→ 上游」原 URL**（与现状一致，保留诊断信息），渲染为小号弱化文本，独立一行，位于命令下方
+- 命令行与上游 URL 行用同级 flex 排版（命令左 flex-1、复制按钮右 shrink-0）；上游 URL 单独一行，缩进对齐命令行起点
 
 ### 4.4 无供应商状态
 
@@ -121,10 +125,10 @@ Codex / OpenAI
 | 文件 | 改动类型 | 说明 |
 |-----|---------|------|
 | `src/components/common/UsageGuide.tsx` | 重构 | 移除 Collapse、按客户端分组、改文案、品牌 Lucent、加 onOpenSettings |
-| `src/App.tsx` | 小改 | 把 `setSettingsOpen(true)` 之类的现有 handler 透传给 `UsageGuide` |
+| `src/App.tsx` | 小改 | 把 `setSettingsOpen(true)`（已存在 `App.tsx:192`）透传给 `UsageGuide` 的 `onOpenSettings` |
 | `README.md` | 小改 | 使用方法区分预设/自定义、加 OpenAI `/v1` 说明 |
 
-不引入新依赖。
+不引入新依赖。不改 `src/types.ts` / `src/constants.ts`（`Provider.presetName` 字段已存在，`getProxyStatus()` 返回的 `providers` 数组已包含该字段）。
 
 ## 7. 验收标准
 

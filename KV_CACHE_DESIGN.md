@@ -106,10 +106,9 @@ totalTokens = cached.totalInputTokens + output_tokens
 
 ---
 
-## 6. 已知边界（本次不处理）
+## 6. 已清理（2026-06-13 后续）
 
-- **`estimateTokens` 仍为近似估算**：CJK 权重为经验值，非精确 tokenizer；面板标注「约 X tok」。
-- **`server/context-rebuilder.ts`（489 行）整模块零 import**：属 context 模块死代码，**超出 kv-cache 审查范围，本次仅记录不删**。后续可单独评审清理（含 `calculateContextWindow` / `globalContextRebuilder` / `buildConversationSummary`）。
+- 整模块删除 [`server/context-rebuilder.ts`](server/context-rebuilder.ts)（489 行，零 import）：含 `ContextRebuilder` 类、`globalContextRebuilder`、`calculateContextWindow`、`buildConversationSummary` 四个死代码导出。本次随 `git rm` 清理。
 
 ---
 
