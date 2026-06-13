@@ -172,7 +172,7 @@ function InlineTokenStats({ log }: { log: LogEntry }) {
           <span className="text-text-quaternary">read: <span className="text-text-primary tabular-nums">{formatTokenValue(cacheRead)}</span></span>
         </div>
       </div>
-      <span className={`font-[510] text-base ${hasHitRate ? (hitRate > 70 ? 'text-success' : hitRate > 30 ? 'text-warning' : 'text-error') : 'text-text-quaternary'}`}>
+      <span className={`font-[510] text-base ${hasHitRate ? (hitRate > CACHE_HIT_RATE_GOOD_THRESHOLD ? 'text-success' : hitRate > CACHE_HIT_RATE_BAD_THRESHOLD ? 'text-warning' : 'text-error') : 'text-text-quaternary'}`}>
         {hasHitRate ? `${hitRate.toFixed(1)}%` : ' '}
       </span>
     </div>

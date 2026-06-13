@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractCachedContent, getContextSizeForModel, parseModelBaseName } from '../server/kvcache.js';
+import { extractCachedContent, getContextSizeForModel } from '../server/kvcache.js';
 
 // ==================== extractCachedContent ====================
 
@@ -75,6 +75,18 @@ describe('extractCachedContent', () => {
     expect(result.system).toEqual([]);
   });
 
+  it('estimateTokens 对中文文本不再低估（CJK 权重高于 length/4）', () => {
+    const chinese = '你好世界，这是一段用于测试中文 token 估算的文本内容';
+    const body = {
+      system: [{ type: 'text', text: chinese, cache_control: { type: 'ephemeral' } }],
+      messages: [],
+    };
+    const result = extractCachedContent(body, undefined, { endpointType: 'anthropic-messages' });
+    const oldLengthBasedEstimate = Math.max(1, Math.round(chinese.length / 4));
+    // CJK 字符应按更高权重估算，结果须显著高于纯 length/4
+    expect(result.system[0].tokens).toBeGreaterThan(oldLengthBasedEstimate);
+  });
+
   it('提取带 cache_control 的消息', () => {
     const body = {
       messages: [
@@ -118,6 +130,20 @@ describe('extractCachedContent', () => {
     };
     const result = extractCachedContent(withSystemCache);
     expect(result.tools.length).toBeGreaterThan(0);
+  });
+
+  it('工具自身带 cache_control 时即使 system 无缓存也提取', () => {
+    const body = {
+      system: [{ type: 'text', text: 'System without cache marker' }],
+      messages: [],
+      tools: [
+        { name: 'bash', description: 'Run commands', cache_control: { type: 'ephemeral' } },
+      ],
+    };
+    const result = extractCachedContent(body, undefined, { endpointType: 'anthropic-messages' });
+    expect(result.cacheMode).toBe('explicit');
+    expect(result.tools).toHaveLength(1);
+    expect(result.tools[0].text).toContain('bash');
   });
 
   it('命中率计算正确（修正口径：命中读 / 总输入）', () => {
@@ -264,17 +290,4 @@ describe('getContextSizeForModel', () => {
 });
 
 // ==================== parseModelBaseName ====================
-
-describe('parseModelBaseName', () => {
-  it('标准格式', () => {
-    expect(parseModelBaseName('claude-opus-4-20250514')).toBe('opus-4');
-  });
-
-  it('带日期后缀', () => {
-    expect(parseModelBaseName('claude-sonnet-4-6-20250514')).toBe('sonnet-4-6');
-  });
-
-  it('空字符串', () => {
-    expect(parseModelBaseName('')).toBe('unknown');
-  });
-});
+// 已删除：parseModelBaseName 为死代码（无生产调用），随函数一并清理

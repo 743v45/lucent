@@ -393,7 +393,7 @@ function isValidLogEntry(entry: unknown): entry is LogEntry {
 /**
  * 转换为 Markdown 格式
  */
-function convertToMarkdown(logs: LogEntry[], includeMeta?: boolean): string {
+export function convertToMarkdown(logs: LogEntry[], includeMeta?: boolean): string {
   const lines: string[] = [];
 
   lines.push('# Lucent 日志报告\n');
@@ -410,13 +410,13 @@ function convertToMarkdown(logs: LogEntry[], includeMeta?: boolean): string {
 
     if (log.tokenUsage) {
       lines.push(`**Token 使用**:\n`);
-      lines.push(`  - Input: ${log.tokenUsage.inputTokens}\n`);
-      lines.push(`  - Output: ${log.tokenUsage.outputTokens}\n`);
-      if (log.tokenUsage.cacheReadTokens) {
-        lines.push(`  - Cache Read: ${log.tokenUsage.cacheReadTokens}\n`);
+      lines.push(`  - Input: ${log.tokenUsage.input_tokens}\n`);
+      lines.push(`  - Output: ${log.tokenUsage.output_tokens}\n`);
+      if (log.tokenUsage.cache_read_tokens) {
+        lines.push(`  - Cache Read: ${log.tokenUsage.cache_read_tokens}\n`);
       }
-      if (log.tokenUsage.cacheWriteTokens) {
-        lines.push(`  - Cache Write: ${log.tokenUsage.cacheWriteTokens}\n`);
+      if (log.tokenUsage.cache_creation_tokens) {
+        lines.push(`  - Cache Write: ${log.tokenUsage.cache_creation_tokens}\n`);
       }
     }
 

@@ -81,10 +81,32 @@ interface CachedContent {
 }
 
 /**
- * 估算文本 token 数（约值：每 4 字符 ≈ 1 token，至少 1）
+ * 估算文本 token 数（约值）
+ *
+ * 区分 CJK 与 ASCII：CJK 字符约 1.5 字符/token，ASCII 约 4 字符/token。
+ * 纯 length/4 会严重低估中文（中文 1 字符 ≈ 0.6-0.7 token）。
  */
 function estimateTokens(text: string): number {
-  return Math.max(1, Math.round(text.length / 4));
+  if (!text) return 1;
+
+  let cjk = 0;
+  let other = 0;
+  for (const ch of text) {
+    const code = ch.codePointAt(0)!;
+    // CJK 统一表意文字 / CJK 标点 / 平假名·片假名 / 韩文音节 / 全角形式
+    if (
+      (code >= 0x4E00 && code <= 0x9FFF) ||
+      (code >= 0x3000 && code <= 0x30FF) ||
+      (code >= 0xAC00 && code <= 0xD7AF) ||
+      (code >= 0xFF00 && code <= 0xFFEF)
+    ) {
+      cjk++;
+    } else {
+      other++;
+    }
+  }
+
+  return Math.max(1, Math.round(cjk / 1.5 + other / 4));
 }
 
 /**
@@ -273,10 +295,13 @@ function extractCachedMessages(messages: Message[], kind?: BlockKind): KVCacheBl
  */
 function extractCachedTools(tools: Tool[], hasCachedSystem: boolean, kind?: BlockKind): KVCacheBlock[] {
   const result: KVCacheBlock[] = [];
+  if (!Array.isArray(tools) || tools.length === 0) return result;
 
-  // 工具只有当系统有缓存时才被认为缓存
-  // API 按照 tools → system → messages 的顺序缓存
-  if (Array.isArray(tools) && tools.length > 0 && hasCachedSystem) {
+  // tools 被缓存的条件（满足其一）：
+  // 1. tools 自身带 cache_control 标记（独立缓存断点）
+  // 2. system 有缓存（前缀式：tools 排在 system 之前，跟随系统缓存）
+  const toolsHaveCacheMarker = tools.some(t => t && typeof t === 'object' && 'cache_control' in t);
+  if (toolsHaveCacheMarker || hasCachedSystem) {
     for (const tool of tools) {
       const text = formatToolAsXml(tool);
       result.push({ text, tokens: estimateTokens(text), kind });
@@ -395,60 +420,6 @@ export function extractCachedContent(
     result.system.length, result.messages.length, result.tools.length);
 
   return result;
-}
-
-/**
- * 构建上下文窗口事件数据
- */
-export function buildContextWindowEvent(
-  usage?: ResponseUsage,
-  contextSize: number = DEFAULT_CONTEXT_SIZE
-): {
-  total_input_tokens: number;
-  total_output_tokens: number;
-  context_window_size: number;
-  current_usage: ResponseUsage | undefined;
-  used_percentage: number;
-  remaining_percentage: number;
-} | null {
-  if (!usage) {
-    return null;
-  }
-
-  const inputTokens =
-    (usage.input_tokens || 0) +
-    (usage.cache_creation_input_tokens || 0) +
-    (usage.cache_read_input_tokens || 0);
-  const outputTokens = usage.output_tokens || 0;
-  const totalTokens = inputTokens + outputTokens;
-
-  // 自适应纠偏：如果输入超过 200K，可能是 1M 上下文模型
-  const effectiveSize = contextSize === DEFAULT_CONTEXT_SIZE && inputTokens > DEFAULT_CONTEXT_SIZE ? LARGE_CONTEXT_SIZE : contextSize;
-
-  const usedPct = Math.round((totalTokens / effectiveSize) * 100);
-
-  return {
-    total_input_tokens: inputTokens,
-    total_output_tokens: outputTokens,
-    context_window_size: effectiveSize,
-    current_usage: usage,
-    used_percentage: usedPct,
-    remaining_percentage: 100 - usedPct,
-  };
-}
-
-/**
- * 解析模型基础名称（用于上下文窗口计算）
- */
-export function parseModelBaseName(model: string): string {
-  if (!model) return 'unknown';
-
-  const lower = model.toLowerCase();
-
-  // claude-opus-4-6-20250514 -> opus-4-6
-  const base = lower.replace(/^claude-/i, '').replace(/-\d{8}$/, '').trim();
-
-  return base;
 }
 
 /**

@@ -106,10 +106,10 @@ export interface LogEntry {
   clientType?: ClientType;
   duration: number;
   tokenUsage?: {
-    inputTokens: number;
-    outputTokens: number;
-    cacheReadTokens?: number;
-    cacheWriteTokens?: number;
+    input_tokens: number;
+    output_tokens: number;
+    cache_read_tokens?: number;
+    cache_creation_tokens?: number;
   };
   metadata: {
     model: string;

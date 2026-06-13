@@ -144,7 +144,7 @@ export function normalizeLogEntry(raw: any): LogEntry {
  * 从 request.body 构建 context 数据
  * 使用 context-extractors 统一提取多种 API 格式
  */
-function buildContextFromRequest(log: LogEntry): void {
+export function buildContextFromRequest(log: LogEntry): void {
   const body = log.request?.body as any;
   const url = log.request?.url || '';
 
@@ -226,13 +226,12 @@ function buildContextFromRequest(log: LogEntry): void {
     ...(tools?.length ? { tools } : {}),
   };
 
-  // 计算上下文窗口
-  const usage = (log.response?.body as any)?.usage;
-  if (usage && log.metadata?.model) {
-    const inputTokens = usage.input_tokens ?? usage.cache_read_input_tokens ?? 0;
-    const outputTokens = usage.output_tokens ?? 0;
+  // 计算上下文窗口：复用 KV-Cache 的 totalInputTokens（已按 provider 口径含 cache），
+  // 与 KV-Cache 面板口径一致，避免漏算 cache 或 OpenAI 重复算 cached_tokens。
+  if (cached.totalInputTokens > 0 && log.metadata?.model) {
+    const outputTokens = normalizedUsage?.output_tokens ?? 0;
     const contextSize = getContextSizeForModel(log.metadata.model);
-    const totalTokens = inputTokens + outputTokens;
+    const totalTokens = cached.totalInputTokens + outputTokens;
     const usedPercentage = Math.min(100, Math.round((totalTokens / contextSize) * 100));
 
     log.context.contextWindow = {
