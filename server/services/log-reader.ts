@@ -136,6 +136,7 @@ export function normalizeLogEntry(raw: any): LogEntry {
     isTest: raw.isTest,
     providerName: raw.providerName,
     endpointType: raw.endpointType,
+    threadId: raw.threadId,
   };
 }
 

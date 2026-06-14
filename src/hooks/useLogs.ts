@@ -45,6 +45,7 @@ export function useLogs() {
     isTest: log.isTest,
     providerName: log.providerName,
     endpointType: log.endpointType as LogEntry['endpointType'],
+    threadId: log.threadId,
   });
 
   // 初始加载（最新的 PAGE_SIZE 条）
