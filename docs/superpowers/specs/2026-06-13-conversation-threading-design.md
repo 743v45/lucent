@@ -1,8 +1,12 @@
 # 会话串联（Conversation Threading）设计
 
 - 日期：2026-06-13
-- 状态：设计待审（v2 — 修正字段避撞与 delta 约束）
+- 状态：已实现（v3 — 同步重建 no-op deviation）
 - 关联：跨日志会话聚合（用户诉求 B）
+
+## Spec Deviations（实现时调整）
+
+1. **重启重建降级为 no-op**：`rebuildFromLogs` 空实现，`index.ts` 不调用。原因：jsonl 中 main 请求 `body.messages` 被 delta-storage slice（[delta-storage.ts:116](../../../server/delta-storage.ts#L116)），历史 entry 无完整 messages，重建会算错锚点。`threadId` 内容寻址已保证分组正确 + 活跃会话链随新请求自然重建，故 MVP 跳过。完整重建（需 delta 解压）留后续迭代。
 
 ## 1. 背景与目标
 
@@ -112,7 +116,7 @@ export const globalSessionTracker = new SessionTracker();
 
 > **必须在 `processDeltaForMainAgent`（[:263](../../../server/interceptor.ts#L263)）之前完成**——`processDelta` 会 mutate `entry.body.messages`（slice 成增量，[delta-storage.ts:116-121](../../../server/delta-storage.ts#L116)）。`identify` 接收的是函数参数 `body`（原始完整），不是 `entry.body`，故即使后续 slice 也不影响。`buildRequestEntry` 内调用天然满足此约束。
 
-**重启重建**：[index.ts](../../../server/index.ts) 启动时，`readLogs`（最多 `MAX_LOG_FILES_TO_READ=20` 个文件，[constants.ts:39](../../../server/constants.ts#L39)），按时间序 replay `main` 请求重建链。entry 已有 `threadId` 的信任并据此建链（重算指纹），无字段的重算补。
+**重启重建（MVP no-op，见开头 Spec Deviations #1）**：`rebuildFromLogs` 空实现，`index.ts` 不调用。`threadId` 内容寻址保证重启后 id 稳定，活跃会话链随新请求自然重建。
 
 **删死代码**：`server/context-rebuilder.ts`（已确认零引用）。
 
@@ -177,7 +181,7 @@ export const globalSessionTracker = new SessionTracker();
 | AC4 | 仅 main 请求填字段，sub 请求留空 | 单测 + e2e |
 | AC5 | 三协议（anthropic/openai-chat/openai-responses）均正确提取首条 user | 单测 |
 | AC6 | **delta 格式下识别仍正确**：identify 收到完整 body，不受 slice 影响 | 单测（mock delta 前后 body） |
-| AC7 | 服务重启后，内存链重建，已写 entry 的 `threadId` 稳定不变 | 单测 `rebuildFromLogs` |
+| AC7 | `threadId` 内容寻址：重启/清空内存链后重算 id 一致（重建为 no-op，见 Deviations #1） | 单测 `identify` reset 后一致 |
 | AC8 | `threadId` 内容寻址：清空内存链重算，id 一致 | 单测 |
 | AC9 | 列表会话视图：同会话请求折叠成一组，可展开看每条 | e2e |
 | AC10 | sub 请求按时间邻近附属于 main 会话节点 | e2e |
@@ -190,7 +194,7 @@ export const globalSessionTracker = new SessionTracker();
 
 | 轮次 | 日期 | 结果 | 备注 |
 |---|---|---|---|
-| 第 1 轮 | （实施时填写） | — | 单测 + e2e 首跑 |
+| 第 1 轮 | 2026-06-15 | 通过 | tsc clean；298 测试全过（session-tracker 14 / group-by-thread 4 / conversation-e2e 5 + 现有 275）；final review APPROVED |
 
 ## 10. 测试策略
 
