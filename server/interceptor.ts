@@ -25,6 +25,7 @@ import {
   MAX_RESPONSE_BODY_LENGTH,
 } from './constants.js';
 import { extractTokenUsage, identifyClient } from './agent-identifier.js';
+import { globalSessionTracker } from './session-tracker.js';
 import type { EndpointType, RawLogEntry } from './types.js';
 import createDebug from 'debug';
 const dbg = createDebug('lucent:interceptor');
@@ -226,6 +227,9 @@ function buildRequestEntry(
   const safeHeaders = sanitizeHeaders(headers);
   const isMain = isMainAgentRequest(body);
   const { agentType, subAgentType } = parseAgentType(body, isMain);
+  const threadId = agentType === 'main'
+    ? globalSessionTracker.identify(body, urlStr, new Date().toISOString())
+    : undefined;
   const model = (body as any)?.model || 'unknown';
   const clientType = identifyClient(headers);
   const isTest = isTestRequest(body);
@@ -257,6 +261,7 @@ function buildRequestEntry(
     isTest,
     providerName: providerName || undefined,
     endpointType: endpointType || undefined,
+    threadId,
   };
 }
 
