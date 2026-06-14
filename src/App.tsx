@@ -117,6 +117,7 @@ function App(): JSX.Element {
       autoCollapse: true,
       showThinking: false,
       showFullTools: false,
+      conversationView: 'timeline',
     },
     updatePreferences: (updates: Partial<typeof settingsValue.preferences>) => {
       if (updates.activeTab) {

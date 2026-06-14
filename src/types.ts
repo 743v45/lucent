@@ -21,6 +21,8 @@ export interface LogEntry {
   isTest?: boolean;
   /** 请求经过的供应商名称（来自配置中的 provider.name） */
   providerName?: string;
+  /** 会话线索标识：同一对话（首条 user 锚定）的多次 main 请求共享。仅 main 填充。 */
+  threadId?: string;
   /** 请求使用的端点协议（openai-chat / openai-responses / anthropic-messages） */
   endpointType?: EndpointType;
 }
@@ -202,6 +204,7 @@ export interface Preferences {
   autoCollapse: boolean;
   showThinking: boolean;
   showFullTools: boolean;
+  conversationView: 'timeline' | 'session';
 }
 
 export interface SettingsContextValue {

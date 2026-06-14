@@ -150,6 +150,8 @@ export interface LogEntry {
   providerName?: string;
   /** 请求使用的端点协议（openai-chat / openai-responses / anthropic-messages） */
   endpointType?: EndpointType;
+  /** 会话线索标识（与 RawLogEntry._conversationId 无关） */
+  threadId?: string;
   /** 是否为测试请求（配置/连接测试） */
   isTest?: boolean;
 }
@@ -195,6 +197,8 @@ export interface RawLogEntry {
   providerName?: string;
   /** 请求使用的端点协议 */
   endpointType?: EndpointType;
+  /** 会话线索标识（内容寻址，仅 main；与 _conversationId delta 标签无关） */
+  threadId?: string;
   tokenUsage?: {
     input_tokens: number;
     output_tokens: number;

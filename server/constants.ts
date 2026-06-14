@@ -103,6 +103,8 @@ export const TOOL_INPUT_PREVIEW_LENGTH = 200;
 // ==================== 上下文重建 ====================
 export const MAX_CONTEXT_CHECKPOINTS = 100;      // 单次请求保留的最大检查点数量
 export const CHECKPOINT_KEY_CONTENT_LENGTH = 50;  // 检查点去重 key 的内容截取长度
+/** SessionTracker 内存会话链最大条数（LRU 清理） */
+export const MAX_SESSIONS = 100;
 
 // ==================== Claude 配置目录 ====================
 /** Claude CLI 的配置目录路径，用于读取用户的 API key 等设置 */

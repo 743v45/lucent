@@ -10,6 +10,7 @@ export const SettingsContext = createContext<SettingsContextValue>({
     autoCollapse: true,
     showThinking: false,
     showFullTools: false,
+    conversationView: 'timeline',
   },
   updatePreferences: () => {},
 });
