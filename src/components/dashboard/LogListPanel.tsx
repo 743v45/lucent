@@ -1,12 +1,14 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import { Empty, Select, Spin, Typography } from 'antd';
 import type { LogEntry, AgentType, Provider, EndpointType } from '../../types';
 import { ENDPOINT_LABELS, ENDPOINT_TYPES } from '../../types';
 import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, getStatusColor } from '../../constants';
 import { resolveResponseType } from '../../utils/response-type';
+import { groupByThread } from '../../utils/group-by-thread';
 import { ClientIcon } from '../common/ClientIcon';
 import { ProviderIcon } from '../common/ProviderIcon';
 import { ProtocolIcon } from '../common/ProtocolIcon';
+import { ChevronIcon } from '../common/ChevronIcon';
 import { Tooltip } from 'antd';
 
 const { Text } = Typography;
@@ -25,6 +27,8 @@ interface LogListPanelProps {
   onProviderFilterChange?: (name: string) => void;
   endpointFilter?: string;
   onEndpointFilterChange?: (type: string) => void;
+  conversationView: 'timeline' | 'session';
+  onConversationViewChange: (v: 'timeline' | 'session') => void;
 }
 
 /** 截断模型名，保留关键信息 */
@@ -95,6 +99,145 @@ function TimeWithTooltip({ timestamp }: { timestamp: string }) {
   );
 }
 
+/** 通用日志行（时间线 / 会话视图复用） */
+function LogRow({
+  log, isSelected, onSelect, getAgentTypeTag, shortenModel, shortenUrl, formatDuration,
+}: {
+  log: LogEntry;
+  isSelected: boolean;
+  onSelect: (id: string) => void;
+  getAgentTypeTag: (a: AgentType) => { tag: JSX.Element; color: string };
+  shortenModel: (m: string) => string;
+  shortenUrl: (u: string) => string;
+  formatDuration: (ms: number) => string;
+}) {
+  const { tag: agentTag, color: agentColor } = getAgentTypeTag(log.agentType);
+  return (
+    <div
+      onClick={() => onSelect(log.id)}
+      className={`
+        mb-2 p-2 rounded-lg flex flex-col gap-1.5 cursor-pointer
+        transition-colors duration-150 border
+        ${isSelected
+          ? 'bg-bg-elevated border-brand-accent'
+          : 'bg-bg-surface border-border-subtle hover:border-border-primary'
+        }
+      `}
+    >
+      {/* 行1：Agent类型 tag + 模型名 + SSE/JSON + 时间 + 测试标记 */}
+      <div className="flex items-center gap-1.5 text-sm leading-[1.3] min-w-0">
+        {agentTag}
+        {log.isTest && (
+          <Tooltip title="测试请求">
+            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-600 font-[510]">
+              hi
+            </span>
+          </Tooltip>
+        )}
+        <span
+          className={`truncate flex-1 min-w-0 font-[510] ${agentColor}`}
+          title={log.metadata.model}
+        >
+          {shortenModel(log.metadata.model)}
+        </span>
+        <span className={`shrink-0 text-xs px-1 rounded border ${
+          resolveResponseType(log.response?.headers['content-type'], log.metadata.stream) === 'sse'
+            ? 'text-brand-accent border-brand-accent/30'
+            : 'text-text-quaternary border-border-subtle'
+        }`}>
+          {resolveResponseType(log.response?.headers['content-type'], log.metadata.stream) === 'sse' ? 'SSE' : 'JSON'}
+        </span>
+        <TimeWithTooltip timestamp={log.timestamp} />
+      </div>
+
+      {/* 行2：供应商 + 协议 + 客户端图标 + 请求地址 + 耗时 + 状态码 */}
+      <div className="flex items-center gap-1 text-[13px] leading-[1.3] min-w-0">
+        <Tooltip title={log.providerName ? `供应商: ${log.providerName}` : '未知供应商'}>
+          <span className="shrink-0"><ProviderIcon providerName={log.providerName || ''} size={14} /></span>
+        </Tooltip>
+        {log.endpointType && (
+          <Tooltip title={`协议: ${ENDPOINT_LABELS[log.endpointType] ?? log.endpointType}`}>
+            <span className="shrink-0"><ProtocolIcon type={log.endpointType} size={14} /></span>
+          </Tooltip>
+        )}
+        <span className="shrink-0"><ClientIcon clientType={log.clientType} /></span>
+        <span
+          className="text-text-quaternary truncate flex-1 min-w-0"
+          title={log.request.url}
+        >
+          {shortenUrl(log.request.url)}
+        </span>
+        <span className="shrink-0 text-text-tertiary text-right">
+          {log.duration > 0 ? formatDuration(log.duration) : '-'}
+        </span>
+        {log.response && (
+          <span
+            className={`font-[510] shrink-0 ${getStatusColor(log.response.status)}`}
+          >
+            {log.response.status}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** 会话视图：按 threadId 分组，可折叠展开 */
+function SessionListView({ logs, selectedId, onSelectLog, getAgentTypeTag, shortenModel, shortenUrl, formatDuration }: {
+  logs: LogEntry[];
+  selectedId: string | null;
+  onSelectLog: (id: string) => void;
+  getAgentTypeTag: (a: AgentType) => { tag: JSX.Element; color: string };
+  shortenModel: (m: string) => string;
+  shortenUrl: (u: string) => string;
+  formatDuration: (ms: number) => string;
+}) {
+  const { groups, ungrouped } = useMemo(() => groupByThread(logs), [logs]);
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
+  const toggle = (id: string) => setCollapsed(p => ({ ...p, [id]: !p[id] }));
+
+  return (
+    <>
+      {groups.map((g) => (
+        <div key={g.threadId} className="mb-2">
+          <button onClick={() => toggle(g.threadId)}
+            className="w-full flex items-center gap-2 p-2 rounded-lg bg-bg-surface border border-border-subtle hover:border-border-primary text-left">
+            <ChevronIcon expanded={!collapsed[g.threadId]} />
+            <span className="truncate flex-1 min-w-0 text-[13px] font-[510] text-text-secondary">{g.title}</span>
+            <span className="shrink-0 text-xs text-text-quaternary">{g.mainLogs.length + g.subLogs.length} 请求</span>
+            <span className="shrink-0 text-xs text-text-quaternary tabular-nums">{g.totalTokens} tok</span>
+          </button>
+          {!collapsed[g.threadId] && (
+            <div className="mt-1">
+              {[...g.mainLogs, ...g.subLogs]
+                .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+                .map((log) => (
+                  <LogRow key={log.id} log={log} isSelected={selectedId === log.id} onSelect={onSelectLog}
+                    getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
+                    shortenUrl={shortenUrl} formatDuration={formatDuration} />
+                ))}
+            </div>
+          )}
+        </div>
+      ))}
+      {ungrouped.length > 0 && (
+        <div className="mt-2">
+          <button onClick={() => toggle('__ungrouped')}
+            className="w-full flex items-center gap-2 p-2 rounded-lg bg-bg-surface border border-border-subtle text-left">
+            <ChevronIcon expanded={!collapsed['__ungrouped']} />
+            <span className="text-[13px] font-[510] text-text-quaternary">未归类 ({ungrouped.length})</span>
+          </button>
+          {!collapsed['__ungrouped'] && ungrouped.map((log) => (
+            <LogRow key={log.id} log={log} isSelected={selectedId === log.id} onSelect={onSelectLog}
+              getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
+              shortenUrl={shortenUrl} formatDuration={formatDuration} />
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
 export function LogListPanel({
   logs,
   selectedId,
@@ -109,6 +252,8 @@ export function LogListPanel({
   onProviderFilterChange,
   endpointFilter,
   onEndpointFilterChange,
+  conversationView,
+  onConversationViewChange,
 }: LogListPanelProps): JSX.Element {
   // MainAgent: 金色加灰 #C9A227, SubAgent: 橙色加灰 #B87A4A
   const getAgentTypeTag = (agentType: AgentType): { tag: JSX.Element; color: string } => {
@@ -159,6 +304,20 @@ export function LogListPanel({
           通信记录
         </Text>
         <div className="ml-auto flex items-center gap-2 min-w-0 shrink">
+          <div className="flex items-center rounded-md border border-border-subtle overflow-hidden shrink-0">
+            <button
+              onClick={() => onConversationViewChange('timeline')}
+              className={`px-2.5 py-0.5 text-[13px] font-[510] transition-colors ${
+                conversationView === 'timeline' ? 'bg-bg-active text-text-primary' : 'text-text-quaternary hover:text-text-secondary bg-bg-deep'
+              }`}
+            >时间线</button>
+            <button
+              onClick={() => onConversationViewChange('session')}
+              className={`px-2.5 py-0.5 text-[13px] font-[510] transition-colors ${
+                conversationView === 'session' ? 'bg-bg-active text-text-primary' : 'text-text-quaternary hover:text-text-secondary bg-bg-deep'
+              }`}
+            >会话</button>
+          </div>
           {providers && onProviderFilterChange && (
             <Select
               size="small"
@@ -231,79 +390,17 @@ export function LogListPanel({
             }
           }}
         >
-          {logs.map((log) => {
-            const isSelected = selectedId === log.id;
-            const { tag: agentTag, color: agentColor } = getAgentTypeTag(log.agentType);
-            return (
-              <div
-                key={log.id}
-                onClick={() => onSelectLog(log.id)}
-                className={`
-                  mb-2 p-2 rounded-lg flex flex-col gap-1.5 cursor-pointer
-                  transition-colors duration-150 border
-                  ${isSelected
-                    ? 'bg-bg-elevated border-brand-accent'
-                    : 'bg-bg-surface border-border-subtle hover:border-border-primary'
-                  }
-                `}
-              >
-                {/* 行1：Agent类型 tag + 模型名 + SSE/JSON + 时间 + 测试标记 */}
-                <div className="flex items-center gap-1.5 text-sm leading-[1.3] min-w-0">
-                  {agentTag}
-                  {log.isTest && (
-                    <Tooltip title="测试请求">
-                      <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-600 font-[510]">
-                        hi
-                      </span>
-                    </Tooltip>
-                  )}
-                  <span
-                    className={`truncate flex-1 min-w-0 font-[510] ${agentColor}`}
-                    title={log.metadata.model}
-                  >
-                    {shortenModel(log.metadata.model)}
-                  </span>
-                  <span className={`shrink-0 text-xs px-1 rounded border ${
-                    resolveResponseType(log.response?.headers['content-type'], log.metadata.stream) === 'sse'
-                      ? 'text-brand-accent border-brand-accent/30'
-                      : 'text-text-quaternary border-border-subtle'
-                  }`}>
-                    {resolveResponseType(log.response?.headers['content-type'], log.metadata.stream) === 'sse' ? 'SSE' : 'JSON'}
-                  </span>
-                  <TimeWithTooltip timestamp={log.timestamp} />
-                </div>
-
-                {/* 行2：供应商 + 协议 + 客户端图标 + 请求地址 + 耗时 + 状态码 */}
-                <div className="flex items-center gap-1 text-[13px] leading-[1.3] min-w-0">
-                  <Tooltip title={log.providerName ? `供应商: ${log.providerName}` : '未知供应商'}>
-                    <span className="shrink-0"><ProviderIcon providerName={log.providerName || ''} size={14} /></span>
-                  </Tooltip>
-                  {log.endpointType && (
-                    <Tooltip title={`协议: ${ENDPOINT_LABELS[log.endpointType] ?? log.endpointType}`}>
-                      <span className="shrink-0"><ProtocolIcon type={log.endpointType} size={14} /></span>
-                    </Tooltip>
-                  )}
-                  <span className="shrink-0"><ClientIcon clientType={log.clientType} /></span>
-                  <span
-                    className="text-text-quaternary truncate flex-1 min-w-0"
-                    title={log.request.url}
-                  >
-                    {shortenUrl(log.request.url)}
-                  </span>
-                  <span className="shrink-0 text-text-tertiary text-right">
-                    {log.duration > 0 ? formatDuration(log.duration) : '-'}
-                  </span>
-                  {log.response && (
-                    <span
-                      className={`font-[510] shrink-0 ${getStatusColor(log.response.status)}`}
-                    >
-                      {log.response.status}
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
+          {conversationView === 'timeline' ? (
+            logs.map((log) => (
+              <LogRow key={log.id} log={log} isSelected={selectedId === log.id} onSelect={onSelectLog}
+                getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
+                shortenUrl={shortenUrl} formatDuration={formatDuration} />
+            ))
+          ) : (
+            <SessionListView logs={logs} selectedId={selectedId} onSelectLog={onSelectLog}
+              getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
+              shortenUrl={shortenUrl} formatDuration={formatDuration} />
+          )}
           {loadingMore && (
             <div className="flex justify-center py-3">
               <Spin size="small" />

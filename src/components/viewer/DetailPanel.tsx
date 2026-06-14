@@ -31,26 +31,9 @@ import 'react-json-view-lite/dist/index.css';
 import './DetailPanel.css';
 import { ProviderIcon } from '../common/ProviderIcon';
 import { ProtocolIcon } from '../common/ProtocolIcon';
+import { ChevronIcon } from '../common/ChevronIcon';
 import { Tooltip } from 'antd';
 
-
-// ==================== Chevron Icon ====================
-
-function ChevronIcon({ expanded }: { expanded: boolean }) {
-  return (
-    <svg
-      className={`w-3 h-3 text-text-quaternary transition-transform duration-150 ${expanded ? 'rotate-90' : ''}`}
-      fill="currentColor"
-      viewBox="0 0 20 20"
-    >
-      <path
-        fillRule="evenodd"
-        d="M7.21 14.77a.75.75 0 01.02-1.06L11.168 10 7.23 6.29a.75.75 0 111.04-1.08l4.5 4.25a.75.75 0 010 1.08l-4.5 4.25a.75.75 0 01-1.06-.02z"
-        clipRule="evenodd"
-      />
-    </svg>
-  );
-}
 
 // ==================== Copy Button ====================
 

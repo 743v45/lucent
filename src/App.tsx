@@ -31,6 +31,7 @@ function App(): JSX.Element {
   const [activeTab, setActiveTab] = useState<TabType>(
     (params.get(URL_PARAM_TAB) as TabType) || DEFAULT_ACTIVE_TAB
   );
+  const [conversationView, setConversationView] = useState<'timeline' | 'session'>('timeline');
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [usageGuideOpen, setUsageGuideOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
@@ -117,12 +118,15 @@ function App(): JSX.Element {
       autoCollapse: true,
       showThinking: false,
       showFullTools: false,
-      conversationView: 'timeline',
+      conversationView,
     },
     updatePreferences: (updates: Partial<typeof settingsValue.preferences>) => {
       if (updates.activeTab) {
         setActiveTab(updates.activeTab);
         updateUrl(selectedLogId, updates.activeTab);
+      }
+      if (updates.conversationView) {
+        setConversationView(updates.conversationView);
       }
     },
   };
@@ -214,6 +218,8 @@ function App(): JSX.Element {
             onProviderFilterChange={handleProviderFilterChange}
             endpointFilter={endpointFilter}
             onEndpointFilterChange={handleEndpointFilterChange}
+            conversationView={conversationView}
+            onConversationViewChange={(v) => setConversationView(v)}
           />
           {/* 拖拽分割栏 */}
           <div
