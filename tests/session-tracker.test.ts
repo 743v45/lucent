@@ -63,3 +63,51 @@ describe('findContinuation', () => {
     expect(got?.threadId).toBe('thread_x-2');
   });
 });
+
+import { SessionTracker } from '../server/session-tracker.js';
+
+describe('SessionTracker.identify', () => {
+  it('续：同会话第二次请求返回相同 threadId', () => {
+    const t = new SessionTracker();
+    const body1 = { messages: [{ role: 'user', content: '你好' }] };
+    const body2 = { messages: [
+      { role: 'user', content: '你好' },
+      { role: 'assistant', content: '嗨' },
+      { role: 'user', content: '再见' },
+    ] };
+    const id1 = t.identify(body1, 'https://api.anthropic.com/v1/messages', '2026-01-01T00:00:00Z');
+    const id2 = t.identify(body2, 'https://api.anthropic.com/v1/messages', '2026-01-01T00:00:01Z');
+    expect(id1).toMatch(/^thread_/);
+    expect(id2).toBe(id1);
+  });
+
+  it('分叉：同首条 user 但前缀不匹配 → 分会话 -2', () => {
+    const t = new SessionTracker();
+    const body1 = { messages: [{ role: 'user', content: '你好' }, { role: 'assistant', content: 'A' }] };
+    const body2 = { messages: [{ role: 'user', content: '你好' }, { role: 'assistant', content: 'B' }] };
+    const id1 = t.identify(body1, 'https://api.anthropic.com/v1/messages', '2026-01-01T00:00:00Z');
+    const id2 = t.identify(body2, 'https://api.anthropic.com/v1/messages', '2026-01-01T00:00:01Z');
+    expect(id2).toBe(`${id1}-2`);
+  });
+
+  it('无 user → undefined（未归类）', () => {
+    const t = new SessionTracker();
+    expect(t.identify({ messages: [{ role: 'assistant', content: 'x' }] }, 'u', 't')).toBeUndefined();
+  });
+
+  it('内容寻址：reset 后重算 id 一致', () => {
+    const t = new SessionTracker();
+    const body = { messages: [{ role: 'user', content: '稳定锚点' }] };
+    const id1 = t.identify(body, 'u', '2026-01-01');
+    t.reset();
+    const id2 = t.identify(body, 'u', '2026-01-02');
+    expect(id2).toBe(id1);
+  });
+
+  it('OpenAI-Responses 协议（body.input）也能识别', () => {
+    const t = new SessionTracker();
+    const body = { input: [{ role: 'user', content: 'resp 协议' }] };
+    const id = t.identify(body, 'https://api.openai.com/v1/responses', '2026-01-01');
+    expect(id).toMatch(/^thread_/);
+  });
+});
