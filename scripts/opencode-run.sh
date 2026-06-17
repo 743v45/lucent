@@ -37,7 +37,7 @@ set -euo pipefail
 #          "npm": "@ai-sdk/openai-compatible",
 #          "name": "OpenAI Chat",
 #          "options": {
-#            "baseURL": "http://localhost:7048/v1",
+#            "baseURL": "http://localhost:7048/custom/hxy/v1",
 #            "headers": { "x-api-key": "sk-upai" }
 #          },
 #          "models": {
@@ -51,11 +51,12 @@ set -euo pipefail
 #    因为 OpenCode 默认的 openai provider 不发送 x-api-key header，
 #    且 Responses API 格式与慧星云不完全兼容。
 #
-# 2. AgentProxy OpenAI Chat 配置
-#    需要配置 AgentProxy 的 openai-chat profile：
-#      curl -X PUT "http://localhost:7049/api/config/openai-chat/profiles/1" \
+# 2. AgentProxy 供应商配置
+#    需要在 AgentProxy 里配一个名为 hxy 的自定义供应商（与 opencode.json 的 baseURL 对应）。
+#    通过 Web UI 配置，或调用 provider API（provider 模式，非旧 profile 模式）：
+#      curl -X POST "http://localhost:7049/api/providers" \
 #        -H "Content-Type: application/json" \
-#        -d '{"upstreamBaseUrl":"http://zhy1.dc.huixingyun.com:55627","apiKey":"sk-upai"}'
+#        -d '{"name":"hxy","endpoints":{"openai-chat":"http://zhy1.dc.huixingyun.com:55627","openai-responses":null,"anthropic-messages":null}}'
 #
 # ──────────────────────────────────────────────────────────────────
 
@@ -85,7 +86,7 @@ if [[ ! -f "$CONFIG_FILE" ]]; then
       "npm": "@ai-sdk/openai-compatible",
       "name": "OpenAI Chat",
       "options": {
-        "baseURL": "http://localhost:7048/v1",
+        "baseURL": "http://localhost:7048/custom/hxy/v1",
         "headers": {
           "x-api-key": "sk-upai"
         }

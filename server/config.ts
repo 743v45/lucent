@@ -62,7 +62,8 @@ function buildDefaultConfig(): ProxyConfig {
         endpoints: {
           'openai-chat': null,
           'openai-responses': null,
-          'anthropic-messages': 'https://api.anthropic.com',
+          // baseUrl 必须含 /v1，与 presets.ts 对齐；proxy.ts 假设 baseUrl 已含版本路径
+          'anthropic-messages': 'https://api.anthropic.com/v1',
         },
       },
     ],

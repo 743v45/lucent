@@ -139,3 +139,389 @@ export async function readLatestLog(logDir: string): Promise<Array<Record<string
     try { return JSON.parse(line); } catch { return {}; }
   });
 }
+
+// ==================== Mock 上游服务器 ====================
+
+import { createServer, type Server, type IncomingMessage, type ServerResponse } from 'node:http';
+
+/** mock 上游记录的单条请求 */
+export interface CapturedRequest {
+  url: string;
+  method: string;
+  headers: Record<string, string>;
+  body: string;
+}
+
+/** mock 上游响应模式（Anthropic 格式） */
+export type AnthropicResponseMode =
+  | 'sse-text'          // 标准文本 SSE 流
+  | 'sse-tool-use'      // Tool Use SSE 流
+  | 'sse-thinking'      // 思考 + 文本 SSE 流
+  | 'json'              // 非流式 JSON 响应
+  | 'error-400'
+  | 'error-401'
+  | 'error-429'
+  | 'error-500';
+
+/** mock 上游响应模式（OpenAI 格式） */
+export type OpenAIResponseMode =
+  | 'chat-sse'           // chat.completion.chunk SSE 流
+  | 'chat-json'          // 非流式 chat.completion
+  | 'chat-tool-calls'    // 带 tool_calls 的 SSE 流
+  | 'responses-sse'      // Responses API SSE 流
+  | 'responses-json'     // 非流式 Responses
+  | 'error-400'
+  | 'error-401'
+  | 'error-429'
+  | 'error-500';
+
+/** mock 上游响应格式 */
+export type MockFormat = 'anthropic' | 'openai';
+
+/** Mock 上游实例 */
+export interface MockUpstream {
+  /** 实际监听端口（listen 0 随机分配，写 config 时用） */
+  port: number;
+  /** 已收到的请求列表 */
+  requests: CapturedRequest[];
+  /** 清空已记录的请求（替代 beforeEach 手动 length=0） */
+  reset(): void;
+  /** 切换响应模式（Anthropic: sse-text 等；OpenAI: chat-sse 等） */
+  setMode(mode: AnthropicResponseMode | OpenAIResponseMode): void;
+  /** 关闭并释放端口 */
+  close(): Promise<void>;
+}
+
+/**
+ * 创建并启动一个 mock 上游服务器
+ *
+ * 所有 e2e 测试的统一上游：记录请求 + 按模式返回响应。
+ * - format: 'anthropic'（默认）→ MockResponseMode 见 AnthropicResponseMode
+ * - format: 'openai'            → MockResponseMode 见 OpenAIResponseMode
+ *
+ * @param opts.name   仅调试标识，不影响行为
+ * @param opts.format 响应格式，默认 'anthropic'
+ */
+export async function createMockUpstream(opts?: { name?: string; format?: MockFormat }): Promise<MockUpstream> {
+  const requests: CapturedRequest[] = [];
+  const format: MockFormat = opts?.format ?? 'anthropic';
+  let mode: AnthropicResponseMode | OpenAIResponseMode = format === 'openai' ? 'chat-sse' : 'sse-text';
+
+  const handler = async (req: IncomingMessage, res: ServerResponse) => {
+    const chunks: Buffer[] = [];
+    for await (const chunk of req) chunks.push(chunk as Buffer);
+    const body = Buffer.concat(chunks).toString();
+
+    requests.push({
+      url: req.url || '/',
+      method: req.method || 'GET',
+      headers: req.headers as Record<string, string>,
+      body,
+    });
+
+    if (format === 'openai') {
+      switch (mode as OpenAIResponseMode) {
+        case 'chat-sse':          respondSSE(res, openaiChatSSEEvents()); break;
+        case 'chat-json':         respondJSON(res, 200, openaiChatJsonBody()); break;
+        case 'chat-tool-calls':   respondSSE(res, openaiChatToolCallsSSEEvents()); break;
+        case 'responses-sse':     respondSSE(res, openaiResponsesSSEEvents()); break;
+        case 'responses-json':    respondJSON(res, 200, openaiResponsesJsonBody()); break;
+        case 'error-400':         respondJSON(res, 400, openaiErrorBody('invalid_request_error', 'Invalid model')); break;
+        case 'error-401':         respondJSON(res, 401, openaiErrorBody('invalid_api_key', 'Incorrect API key')); break;
+        case 'error-429':         respondJSON(res, 429, openaiErrorBody('rate_limit_exceeded', 'Rate limit exceeded')); break;
+        case 'error-500':         respondJSON(res, 500, openaiErrorBody('server_error', 'Internal server error')); break;
+      }
+    } else {
+      switch (mode as AnthropicResponseMode) {
+        case 'sse-text':       respondSSE(res, anthropicTextSSEEvents()); break;
+        case 'sse-tool-use':   respondSSE(res, anthropicToolUseSSEEvents()); break;
+        case 'sse-thinking':   respondSSE(res, anthropicThinkingSSEEvents()); break;
+        case 'json':           respondJSON(res, 200, anthropicJsonResponse()); break;
+        case 'error-400':      respondJSON(res, 400, anthropicErrorBody('invalid_request_error', 'mock 400')); break;
+        case 'error-401':      respondJSON(res, 401, anthropicErrorBody('authentication_error', 'mock 401')); break;
+        case 'error-429':      respondJSON(res, 429, anthropicErrorBody('rate_limit_error', 'mock 429')); break;
+        case 'error-500':      respondJSON(res, 500, anthropicErrorBody('api_error', 'mock 500')); break;
+      }
+    }
+  };
+
+  const server: Server = createServer(handler);
+
+  const port: number = await new Promise<number>((resolve, reject) => {
+    server.listen(0, '127.0.0.1', () => {
+      const addr = server.address();
+      if (addr && typeof addr === 'object' && 'port' in addr) resolve(addr.port);
+      else reject(new Error('Failed to get mock upstream port'));
+    });
+    server.on('error', reject);
+  });
+
+  return {
+    port,
+    requests,
+    reset() { requests.length = 0; },
+    setMode(m: AnthropicResponseMode | OpenAIResponseMode) { mode = m; },
+    close() {
+      return new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
+    },
+  };
+}
+
+// ==================== Anthropic SSE 响应 fixture ====================
+// 从原 anthropic-e2e.test.ts 迁移，供所有 e2e 复用。
+// 这些是 Anthropic Messages 协议的标准 SSE 事件序列。
+
+function respondSSE(res: ServerResponse, events: string[]): void {
+  res.writeHead(200, {
+    'content-type': 'text/event-stream',
+    'cache-control': 'no-cache',
+    'connection': 'keep-alive',
+  });
+  let i = 0;
+  const interval = setInterval(() => {
+    if (i < events.length) {
+      res.write(events[i]);
+      i++;
+    } else {
+      clearInterval(interval);
+      res.end();
+    }
+  }, 10);
+}
+
+function respondJSON(res: ServerResponse, status: number, body: object): void {
+  const data = JSON.stringify(body);
+  res.writeHead(status, {
+    'content-type': 'application/json',
+    'content-length': Buffer.byteLength(data),
+  });
+  res.end(data);
+}
+
+/** 标准 Anthropic 文本 SSE 事件序列 */
+function anthropicTextSSEEvents(): string[] {
+  return [
+    'event: message_start\ndata: ' + JSON.stringify({
+      type: 'message_start',
+      message: {
+        id: 'msg_e2e_test', type: 'message', role: 'assistant',
+        model: 'claude-sonnet-4-20250514', content: [],
+        stop_reason: null, stop_sequence: null,
+        usage: { input_tokens: 258, output_tokens: 0 },
+      },
+    }) + '\n\n',
+    'event: content_block_start\ndata: ' + JSON.stringify({
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'text', text: '' },
+    }) + '\n\n',
+    'event: content_block_delta\ndata: ' + JSON.stringify({
+      type: 'content_block_delta', index: 0,
+      delta: { type: 'text_delta', text: 'Hello! ' },
+    }) + '\n\n',
+    'event: content_block_delta\ndata: ' + JSON.stringify({
+      type: 'content_block_delta', index: 0,
+      delta: { type: 'text_delta', text: 'How can I help?' },
+    }) + '\n\n',
+    'event: content_block_stop\ndata: ' + JSON.stringify({
+      type: 'content_block_stop', index: 0,
+    }) + '\n\n',
+    'event: message_delta\ndata: ' + JSON.stringify({
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: 15 },
+    }) + '\n\n',
+    'event: message_stop\ndata: ' + JSON.stringify({
+      type: 'message_stop',
+    }) + '\n\n',
+  ];
+}
+
+/** Tool Use SSE 事件序列 */
+function anthropicToolUseSSEEvents(): string[] {
+  return [
+    'event: message_start\ndata: ' + JSON.stringify({
+      type: 'message_start',
+      message: {
+        id: 'msg_e2e_tool', type: 'message', role: 'assistant',
+        model: 'claude-sonnet-4-20250514', content: [],
+        stop_reason: null, stop_sequence: null,
+        usage: { input_tokens: 400, output_tokens: 0 },
+      },
+    }) + '\n\n',
+    'event: content_block_start\ndata: ' + JSON.stringify({
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'tool_use', id: 'toolu_e2e_01', name: 'bash' },
+    }) + '\n\n',
+    'event: content_block_delta\ndata: ' + JSON.stringify({
+      type: 'content_block_delta', index: 0,
+      delta: { type: 'input_json_delta', partial_json: '{"command":"ls -la"}' },
+    }) + '\n\n',
+    'event: content_block_stop\ndata: ' + JSON.stringify({
+      type: 'content_block_stop', index: 0,
+    }) + '\n\n',
+    'event: message_delta\ndata: ' + JSON.stringify({
+      type: 'message_delta',
+      delta: { stop_reason: 'tool_use', stop_sequence: null },
+      usage: { output_tokens: 45 },
+    }) + '\n\n',
+    'event: message_stop\ndata: ' + JSON.stringify({
+      type: 'message_stop',
+    }) + '\n\n',
+  ];
+}
+
+/** 思考 + 文本 SSE 事件序列 */
+function anthropicThinkingSSEEvents(): string[] {
+  return [
+    'event: message_start\ndata: ' + JSON.stringify({
+      type: 'message_start',
+      message: {
+        id: 'msg_e2e_think', type: 'message', role: 'assistant',
+        model: 'claude-sonnet-4-20250514', content: [],
+        stop_reason: null, stop_sequence: null,
+        usage: { input_tokens: 300, output_tokens: 0 },
+      },
+    }) + '\n\n',
+    'event: content_block_start\ndata: ' + JSON.stringify({
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'thinking', thinking: '' },
+    }) + '\n\n',
+    'event: content_block_delta\ndata: ' + JSON.stringify({
+      type: 'content_block_delta', index: 0,
+      delta: { type: 'thinking_delta', thinking: 'Let me analyze...' },
+    }) + '\n\n',
+    'event: content_block_stop\ndata: ' + JSON.stringify({
+      type: 'content_block_stop', index: 0,
+    }) + '\n\n',
+    'event: content_block_start\ndata: ' + JSON.stringify({
+      type: 'content_block_start', index: 1,
+      content_block: { type: 'text', text: '' },
+    }) + '\n\n',
+    'event: content_block_delta\ndata: ' + JSON.stringify({
+      type: 'content_block_delta', index: 1,
+      delta: { type: 'text_delta', text: 'The answer is 42.' },
+    }) + '\n\n',
+    'event: content_block_stop\ndata: ' + JSON.stringify({
+      type: 'content_block_stop', index: 1,
+    }) + '\n\n',
+    'event: message_delta\ndata: ' + JSON.stringify({
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: 60 },
+    }) + '\n\n',
+    'event: message_stop\ndata: ' + JSON.stringify({
+      type: 'message_stop',
+    }) + '\n\n',
+  ];
+}
+
+/** 非流式 JSON 响应体 */
+function anthropicJsonResponse(): object {
+  return {
+    id: 'msg_e2e_json', type: 'message', role: 'assistant',
+    model: 'claude-sonnet-4-20250514',
+    content: [{ type: 'text', text: 'Hello from JSON response.' }],
+    stop_reason: 'end_turn', stop_sequence: null,
+    usage: { input_tokens: 100, output_tokens: 10 },
+  };
+}
+
+/** Anthropic 标准错误响应 */
+function anthropicErrorBody(errorType: string, message: string): object {
+  return {
+    type: 'error',
+    error: { type: errorType, message },
+  };
+}
+
+// ==================== OpenAI 响应 fixture ====================
+// 从原 providers-e2e.test.ts 迁移，覆盖 chat completions + responses 两套协议。
+
+/** chat.completion.chunk SSE 流 */
+function openaiChatSSEEvents(): string[] {
+  return [
+    'data: ' + JSON.stringify({
+      id: 'chatcmpl-e2e', object: 'chat.completion.chunk', model: 'gpt-4o',
+      choices: [{ index: 0, delta: { role: 'assistant', content: '' } }],
+    }) + '\n\n',
+    'data: ' + JSON.stringify({
+      id: 'chatcmpl-e2e', object: 'chat.completion.chunk', model: 'gpt-4o',
+      choices: [{ index: 0, delta: { content: 'Hello! ' } }],
+    }) + '\n\n',
+    'data: ' + JSON.stringify({
+      id: 'chatcmpl-e2e', object: 'chat.completion.chunk', model: 'gpt-4o',
+      choices: [{ index: 0, delta: { content: 'How can I help?' } }],
+    }) + '\n\n',
+    'data: ' + JSON.stringify({
+      id: 'chatcmpl-e2e', object: 'chat.completion.chunk', model: 'gpt-4o',
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+      usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
+    }) + '\n\n',
+    'data: [DONE]\n\n',
+  ];
+}
+
+/** 带 tool_calls 的 chat.completion.chunk SSE 流 */
+function openaiChatToolCallsSSEEvents(): string[] {
+  return [
+    'data: ' + JSON.stringify({
+      id: 'chatcmpl-e2e-tool', object: 'chat.completion.chunk', model: 'gpt-4o',
+      choices: [{ index: 0, delta: { role: 'assistant', content: null, tool_calls: [{ index: 0, id: 'call_e2e_1', type: 'function', function: { name: 'get_weather', arguments: '' } }] } }],
+    }) + '\n\n',
+    'data: ' + JSON.stringify({
+      id: 'chatcmpl-e2e-tool', object: 'chat.completion.chunk', model: 'gpt-4o',
+      choices: [{ index: 0, delta: { tool_calls: [{ index: 0, function: { arguments: '{"location":"Tokyo"}' } }] } }],
+    }) + '\n\n',
+    'data: ' + JSON.stringify({
+      id: 'chatcmpl-e2e-tool', object: 'chat.completion.chunk', model: 'gpt-4o',
+      choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+      usage: { prompt_tokens: 50, completion_tokens: 20, total_tokens: 70 },
+    }) + '\n\n',
+    'data: [DONE]\n\n',
+  ];
+}
+
+/** 非流式 chat.completion JSON */
+function openaiChatJsonBody(): object {
+  return {
+    id: 'chatcmpl-e2e-json', object: 'chat.completion', model: 'gpt-4o',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'Hello from JSON.' }, finish_reason: 'stop' }],
+    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+  };
+}
+
+/** Responses API SSE 流 */
+function openaiResponsesSSEEvents(): string[] {
+  return [
+    'event: response.output_text.delta\ndata: ' + JSON.stringify({
+      type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'Hello!',
+    }) + '\n\n',
+    'event: response.output_text.delta\ndata: ' + JSON.stringify({
+      type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: ' World.',
+    }) + '\n\n',
+    'event: response.completed\ndata: ' + JSON.stringify({
+      type: 'response.completed',
+      response: {
+        id: 'resp-e2e', object: 'response', status: 'completed',
+        output: [{ type: 'message', content: [{ type: 'output_text', text: 'Hello! World.' }] }],
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+      },
+    }) + '\n\n',
+  ];
+}
+
+/** 非流式 Responses JSON */
+function openaiResponsesJsonBody(): object {
+  return {
+    id: 'resp-e2e-json', object: 'response', status: 'completed', model: 'gpt-4o',
+    output: [{ type: 'message', content: [{ type: 'output_text', text: 'Hello from JSON.' }] }],
+    usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+  };
+}
+
+/** OpenAI 标准错误响应 */
+function openaiErrorBody(code: string, message: string): object {
+  return { error: { message, type: 'invalid_request_error', code } };
+}

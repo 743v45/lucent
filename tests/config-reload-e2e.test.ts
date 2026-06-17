@@ -6,76 +6,18 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, type TestEnv } from './e2e-helpers.js';
+import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, createMockUpstream, type MockUpstream, type TestEnv } from './e2e-helpers.js';
 
 // ==================== 常量 ====================
 
 const testEnv = createTestEnv('config-reload-e2e');
-const { configPath: CONFIG_PATH, logDir: LOG_DIR, proxyPort: PROXY_PORT, webPort: WEB_PORT } = testEnv;
-
-// ==================== 类型 ====================
-
-interface MockServer {
-  server: ReturnType<typeof createServer>;
-  port: number;
-  requests: Array<{ url: string; method: string; headers: Record<string, string> }>;
-}
+const { configPath: CONFIG_PATH, proxyPort: PROXY_PORT, webPort: WEB_PORT } = testEnv;
 
 // ==================== 全局状态 ====================
 
-let mock1: MockServer;
-let mock2: MockServer;
-
-// ==================== Mock 服务器 ====================
-
-function createMock(name: string): MockServer {
-  const requests: MockServer['requests'] = [];
-
-  const handler = (req: IncomingMessage, res: ServerResponse) => {
-    requests.push({
-      url: req.url || '/',
-      method: req.method || 'GET',
-      headers: req.headers as Record<string, string>,
-    });
-
-    res.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      'connection': 'keep-alive',
-    });
-
-    const events = [
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_test","role":"assistant"}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"OK from ' + name + '"}}\n\n',
-      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":1}}\n\n',
-    ];
-
-    let i = 0;
-    const interval = setInterval(() => {
-      if (i < events.length) { res.write(events[i]); i++; }
-      else { clearInterval(interval); res.end(); }
-    }, 10);
-
-    req.on('close', () => clearInterval(interval));
-  };
-
-  const server = createServer(handler);
-  return { server, port: 0, requests };
-}
-
-function startMock(server: ReturnType<typeof createServer>): Promise<number> {
-  return new Promise((resolve, reject) => {
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      if (addr && typeof addr === 'object' && 'port' in addr) resolve(addr.port);
-      else reject(new Error('No port'));
-    });
-    server.on('error', reject);
-  });
-}
+let mock1: MockUpstream;
+let mock2: MockUpstream;
 
 // ==================== 工具函数 ====================
 
@@ -105,11 +47,8 @@ async function readConfig(): Promise<any> {
 
 describe('配置动态更新 E2E 测试', () => {
   beforeAll(async () => {
-    mock1 = createMock('mock1');
-    mock2 = createMock('mock2');
-
-    mock1.port = await startMock(mock1.server);
-    mock2.port = await startMock(mock2.server);
+    mock1 = await createMockUpstream({ name: 'mock1' });
+    mock2 = await createMockUpstream({ name: 'mock2' });
 
     // 初始配置: glm → mock1
     await cleanTestDir(testEnv);
@@ -136,14 +75,14 @@ describe('配置动态更新 E2E 测试', () => {
 
   afterAll(async () => {
     await stopBackend();
-    mock1.server.close();
-    mock2.server.close();
+    await mock1.close();
+    await mock2.close();
     await cleanTestDir(testEnv);
   }, 10000);
 
   beforeEach(() => {
-    mock1.requests.length = 0;
-    mock2.requests.length = 0;
+    mock1.reset();
+    mock2.reset();
   });
 
   it('初始状态: 请求应发送到 Mock 1', async () => {

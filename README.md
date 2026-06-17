@@ -61,42 +61,35 @@ npm start
 1. **命名**：给供应商一个名字（如 `glm`、`deepseek`、`claude`），只允许字母、数字、下划线、短横线
 2. **填 API Key**：供应商的认证密钥
 3. **填端点 URL**：按供应商支持的协议填写对应地址（可只填一个）：
-   - **Anthropic Messages**：如 `https://api.anthropic.com`（Claude 系列）
-   - **OpenAI Chat**：如 `https://api.openai.com` 或 `https://api.deepseek.com`
-   - **OpenAI Responses**：OpenAI 新 Responses API（如支持则填写）
+   - **Anthropic Messages**：如 `https://api.anthropic.com/v1`（Claude 系列）
+   - **OpenAI Chat**：如 `https://api.openai.com/v1` 或 `https://api.deepseek.com/v1`
+   - **OpenAI Responses**：如 `https://api.openai.com/v1`（OpenAI 新 Responses API）
 
 > 💡 **提示**：未配置的协议端点访问时会返回 404。比如只填了 Anthropic Messages，访问 `/custom/glm/v1/chat/completions` 会报错。
 
 ### 第二步：接入下游客户端
 
-启动 AI 客户端时，将 Base URL 指向本代理。**路径规则**：
+Lucent 是透明代理，请求只过一道——客户端接哪个供应商就走哪个。把客户端的 Base URL 指向本代理即可。
 
-| 供应商类型 | Base URL |
-|-----------|---------|
-| 预设供应商 | `http://127.0.0.1:7048/{供应商名}` |
-| 自定义供应商 | `http://127.0.0.1:7048/custom/{供应商名}` |
-| OpenAI 端点 | 上述规则末尾 + `/v1` |
+**路径规则**（`custom/` 前缀仅自定义供应商需要，预设供应商直接用供应商名）：
+
+| 协议 | 下游 Base URL（环境变量） | 下游接入路径 | 上游 Base URL（示例）+ 补全路径 |
+|------|--------------------------|-------------|-------------------------------|
+| Anthropic Messages | `http://127.0.0.1:7048/custom/hxy2` | `…/custom/hxy2/v1/messages` | `https://api.anthropic.com/v1` + `/messages` |
+| OpenAI Chat | `http://127.0.0.1:7048/custom/hxy2/v1` | `…/custom/hxy2/v1/chat/completions`（兼容不带 `/v1`） | `https://api.openai.com/v1` + `/chat/completions` |
+| OpenAI Responses | `http://127.0.0.1:7048/custom/hxy2/v1` | `…/custom/hxy2/v1/responses`（兼容不带 `/v1`） | `https://api.openai.com/v1` + `/responses` |
+
+> 上例用自定义供应商 `hxy2` 演示；预设供应商去掉 `custom/` 前缀（如 `http://127.0.0.1:7048/anthropic`）。上游 Base URL 由各供应商配置决定（DeepSeek 是 `https://api.deepseek.com/v1`，其他平台各不相同），上表 OpenAI 官方仅为示例。
 
 ```bash
-# 预设供应商 GLM（无前缀）
-export ANTHROPIC_BASE_URL=http://127.0.0.1:7048/glm
+# Anthropic 协议（Claude Code 等）
+export ANTHROPIC_BASE_URL=http://127.0.0.1:7048/custom/hxy2
 
-# 自定义供应商
-export ANTHROPIC_BASE_URL=http://127.0.0.1:7048/custom/my-glm
-
-# Codex / OpenAI 客户端（OpenAI Chat 协议，注意末尾 /v1）
-export OPENAI_BASE_URL=http://127.0.0.1:7048/openai/v1
+# OpenAI 协议（Codex / OpenAI 客户端，末尾加 /v1）
+export OPENAI_BASE_URL=http://127.0.0.1:7048/custom/hxy2/v1
 ```
 
-> 📌 **注意**：OpenAI Chat 协议的路径要加 `/v1`（因为标准路径是 `/v1/chat/completions`）。OpenAI Responses 同样。
 > 应用内的 **使用说明** 弹窗会根据你配置的供应商自动生成可复制的 `export` 命令。
-
-### 示例：GLM 同时支持两种协议
-
-| 供应商类型 | Anthropic Messages | OpenAI Chat |
-|-----------|--------------------|--------------|
-| 预设 GLM | `http://127.0.0.1:7048/glm` | `http://127.0.0.1:7048/glm/v1` |
-| 自定义 my-glm | `http://127.0.0.1:7048/custom/my-glm` | `http://127.0.0.1:7048/custom/my-glm/v1` |
 
 ## CLI 命令
 

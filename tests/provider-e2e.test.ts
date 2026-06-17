@@ -12,12 +12,10 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { createServer, type Server } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
-import type { IncomingMessage, ServerResponse } from 'node:http';
-import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, readLatestLog, type TestEnv } from './e2e-helpers.js';
+import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, readLatestLog, createMockUpstream, type MockUpstream, type TestEnv } from './e2e-helpers.js';
 
 // ==================== 常量 ====================
 
@@ -25,17 +23,6 @@ const testEnv = createTestEnv('provider-e2e');
 const { configPath: CONFIG_PATH, logDir: LOG_DIR, proxyPort: PROXY_PORT, webPort: WEB_PORT } = testEnv;
 
 // ==================== 类型定义 ====================
-
-interface MockUpstream {
-  server: Server;
-  port: number;
-  requests: Array<{
-    url: string;
-    method: string;
-    headers: Record<string, string>;
-    body?: string;
-  }>;
-}
 
 interface ProxyConfig {
   host: string;
@@ -54,60 +41,6 @@ let mockAnthropic: MockUpstream;
 let mockOpenAI: MockUpstream;
 
 // ==================== 工具函数 ====================
-
-/**
- * 创建 mock 上游服务器
- */
-function createMockUpstream(name: string): MockUpstream {
-  const requests: MockUpstream['requests'] = [];
-
-  const handler = async (req: IncomingMessage, res: ServerResponse) => {
-    const chunks: Buffer[] = [];
-    for await (const chunk of req) chunks.push(chunk);
-    const body = Buffer.concat(chunks).toString();
-
-    requests.push({
-      url: req.url || '/',
-      method: req.method || 'GET',
-      headers: req.headers as Record<string, string>,
-      body,
-    });
-
-    // 返回 SSE 流式响应
-    res.writeHead(200, {
-      'content-type': 'text/event-stream',
-      'cache-control': 'no-cache',
-      'connection': 'keep-alive',
-    });
-
-    const events = [
-      'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_test","role":"assistant"}}\n\n',
-      'event: content_block_delta\ndata: {"type":"content_block_delta","delta":{"type":"text_delta","text":"OK from ' + name + '"}}\n\n',
-      'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":5}}\n\n',
-    ];
-
-    let i = 0;
-    const interval = setInterval(() => {
-      if (i < events.length) { res.write(events[i]); i++; }
-      else { clearInterval(interval); res.end(); }
-    }, 10);
-
-    req.on('close', () => clearInterval(interval));
-  };
-
-  return { server: createServer(handler), port: 0, requests };
-}
-
-function startMockServer(server: Server): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    server.listen(0, '127.0.0.1', () => {
-      const addr = server.address();
-      if (addr && typeof addr === 'object' && 'port' in addr) resolve(addr.port);
-      else reject(new Error('Failed to get server port'));
-    });
-    server.on('error', reject);
-  });
-}
 
 /**
  * 通过代理发送请求到自定义路径
@@ -168,11 +101,8 @@ async function readTestConfig(): Promise<ProxyConfig | null> {
 
 describe('Provider E2E 测试', () => {
   beforeAll(async () => {
-    mockAnthropic = createMockUpstream('anthropic');
-    mockOpenAI = createMockUpstream('openai');
-
-    mockAnthropic.port = await startMockServer(mockAnthropic.server);
-    mockOpenAI.port = await startMockServer(mockOpenAI.server);
+    mockAnthropic = await createMockUpstream({ name: 'anthropic' });
+    mockOpenAI = await createMockUpstream({ name: 'openai' });
 
     await cleanTestDir(testEnv);
     await writeTestConfig(testEnv, {
@@ -198,14 +128,14 @@ describe('Provider E2E 测试', () => {
 
   afterAll(async () => {
     await stopBackend();
-    mockAnthropic.server.close();
-    mockOpenAI.server.close();
+    await mockAnthropic.close();
+    await mockOpenAI.close();
     await cleanTestDir(testEnv);
   }, 10000);
 
   beforeEach(() => {
-    mockAnthropic.requests.length = 0;
-    mockOpenAI.requests.length = 0;
+    mockAnthropic.reset();
+    mockOpenAI.reset();
   });
 
   // ==================== 路由命中测试 ====================
@@ -351,6 +281,82 @@ describe('Provider E2E 测试', () => {
     });
   });
 
+  // ==================== 测试连接（baseUrl 含 /v1，与 presets 一致）====================
+
+  describe('测试连接: baseUrl 含 /v1（presets 写法）', () => {
+    // presets.ts 里 anthropic/openai/deepseek 等内置预设的 baseUrl 均含 /v1
+    // 测试路由必须与 proxy 主转发对齐：baseUrl 已含 /v1，直接补协议路径，不能重复加 /v1
+    // 否则拼成 https://api.anthropic.com/v1/v1/messages → 测试必失败
+
+    it('anthropic-messages: baseUrl 含 /v1 → 上游收到 /v1/messages（非 /v1/v1/messages）', async () => {
+      // 动态新建一个 baseUrl 含 /v1 的 provider，复用主套件 mock 上游
+      const res = await apiRequest('POST', '/api/providers', {
+        name: 'preset-style',
+        endpoints: {
+          'anthropic-messages': `http://127.0.0.1:${mockAnthropic.port}/v1`,
+          'openai-chat': null,
+          'openai-responses': null,
+        },
+      });
+      expect(res.status).toBe(201);
+
+      const testRes = await apiRequest('POST', '/api/providers/preset-style/test', {
+        endpointType: 'anthropic-messages',
+      });
+      expect(testRes.status).toBe(200);
+
+      // mock 上游应收到 /v1/messages，而非双重 v1
+      const hit = mockAnthropic.requests.find(r => r.url.includes('/messages'));
+      expect(hit).toBeDefined();
+      expect(hit!.url).toBe('/v1/messages');
+      expect(hit!.url).not.toContain('/v1/v1/');
+    });
+
+    it('openai-chat: baseUrl 含 /v1 → 上游收到 /v1/chat/completions（非 /v1/v1/chat/completions）', async () => {
+      const res = await apiRequest('POST', '/api/providers', {
+        name: 'preset-style-chat',
+        endpoints: {
+          'openai-chat': `http://127.0.0.1:${mockOpenAI.port}/v1`,
+          'anthropic-messages': null,
+          'openai-responses': null,
+        },
+      });
+      expect(res.status).toBe(201);
+
+      const testRes = await apiRequest('POST', '/api/providers/preset-style-chat/test', {
+        endpointType: 'openai-chat',
+      });
+      expect(testRes.status).toBe(200);
+
+      const hit = mockOpenAI.requests.find(r => r.url.includes('/chat/completions'));
+      expect(hit).toBeDefined();
+      expect(hit!.url).toBe('/v1/chat/completions');
+      expect(hit!.url).not.toContain('/v1/v1/');
+    });
+
+    it('openai-responses: baseUrl 含 /v1 → 上游收到 /v1/responses（非 /v1/v1/responses）', async () => {
+      const res = await apiRequest('POST', '/api/providers', {
+        name: 'preset-style-resp',
+        endpoints: {
+          'openai-chat': null,
+          'openai-responses': `http://127.0.0.1:${mockOpenAI.port}/v1`,
+          'anthropic-messages': null,
+        },
+      });
+      expect(res.status).toBe(201);
+
+      const testRes = await apiRequest('POST', '/api/providers/preset-style-resp/test', {
+        endpointType: 'openai-responses',
+      });
+      expect(testRes.status).toBe(200);
+
+      const hit = mockOpenAI.requests.find(r => r.url.includes('/responses'));
+      expect(hit).toBeDefined();
+      expect(hit!.url).toBe('/v1/responses');
+      expect(hit!.url).not.toContain('/v1/v1/');
+    });
+  });
+
   // ==================== 日志落盘测试 ====================
 
   describe('日志落盘', () => {
@@ -421,5 +427,8 @@ describe('首次启动:无配置时创建默认 anthropic 供应商', () => {
     const defaultProvider = config?.providers.find(p => p.name === 'anthropic');
     expect(defaultProvider).toBeDefined();
     expect(defaultProvider?.endpoints['anthropic-messages']).toBeDefined();
+    // 默认 baseUrl 必须含 /v1，与 presets.ts 对齐（proxy.ts 假设 baseUrl 含 /v1）
+    // 不含 /v1 会导致代理转发拼成 https://api.anthropic.com/messages → 上游 404
+    expect(defaultProvider?.endpoints['anthropic-messages']).toBe('https://api.anthropic.com/v1');
   }, 20000);
 });

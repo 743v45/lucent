@@ -195,9 +195,11 @@ export function createProvidersRouter(): Router {
       let testBody: unknown;
       const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 
+      // baseUrl 已含版本路径（与 presets 一致：如 https://api.anthropic.com/v1），
+      // 此处只补协议路径，不重复加 /v1。与 proxy 主转发（proxy.ts:211 strip 下游 /v1 后拼 baseUrl）同源。
       switch (endpointType) {
         case 'anthropic-messages':
-          testUrl = `${baseUrl}/v1/messages`;
+          testUrl = `${baseUrl}/messages`;
           headers['anthropic-version'] = ANTHROPIC_API_VERSION;
           testBody = {
             model: TEST_MODELS['anthropic-messages'],
@@ -206,7 +208,7 @@ export function createProvidersRouter(): Router {
           };
           break;
         case 'openai-chat':
-          testUrl = `${baseUrl}/v1/chat/completions`;
+          testUrl = `${baseUrl}/chat/completions`;
           testBody = {
             model: TEST_MODELS['openai-chat'],
             max_tokens: TEST_MAX_TOKENS,
@@ -214,7 +216,7 @@ export function createProvidersRouter(): Router {
           };
           break;
         case 'openai-responses':
-          testUrl = `${baseUrl}/v1/responses`;
+          testUrl = `${baseUrl}/responses`;
           testBody = {
             model: TEST_MODELS['openai-responses'],
             input: TEST_REQUEST_CONTENT,
