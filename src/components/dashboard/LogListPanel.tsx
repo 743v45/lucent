@@ -114,6 +114,8 @@ function LogRow({
   const { tag: agentTag, color: agentColor } = getAgentTypeTag(log.agentType);
   return (
     <div
+      data-testid="log-row"
+      data-logid={log.id}
       onClick={() => onSelect(log.id)}
       className={`
         mb-2 p-2 rounded-lg flex flex-col gap-1.5 cursor-pointer

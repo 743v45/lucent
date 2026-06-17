@@ -328,6 +328,7 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
             return (
               <button
                 key={tab.key}
+                data-testid={`tab-${tab.key}`}
                 onClick={() => onTabChange(tab.key)}
                 className={`px-4 py-1.5 text-[15px] font-[510] rounded-md transition-all ${
                   isActive
@@ -455,7 +456,7 @@ function RequestTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: RequestTa
             <CopyButton onCopy={() => onCopy(log.request.body)} />
           </div>
         </div>
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0" data-testid="request-body">
           <JsonBlock data={log.request.body} collapsed={bodyCollapsed} />
         </div>
       </div>
@@ -577,7 +578,7 @@ function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: Response
             <CopyButton onCopy={() => onCopy(sseViewMode === 'raw' ? rawSSEText : extractedBody)} />
           </div>
         </div>
-        <div className="flex-1 min-h-0">
+        <div className="flex-1 min-h-0" data-testid="response-body">
           {sseViewMode === 'raw' && isSSE ? (
             <pre className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary overflow-auto whitespace-pre-wrap break-words" style={{ backgroundColor: '#08090a' }}>
               {rawSSEText}
@@ -1006,6 +1007,7 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
               return (
                 <ContextListItem
                   key={i}
+                  role={roleLabel}
                   label={`${roleLabel} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`}
                   isSelected={selected?.type === 'message' && selected?.index === i}
                   onClick={() => setSelected({ type: 'message', index: i })}
@@ -1026,6 +1028,7 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
           >
             {data.systemPrompt && (
               <ContextListItem
+                role="system"
                 label="System"
                 isSelected={selected?.type === 'systemPrompt'}
                 onClick={() => setSelected({ type: 'systemPrompt' })}
@@ -1046,6 +1049,7 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
             {data.tools.map((tool, i) => (
               <ContextListItem
                 key={i}
+                role="tool"
                 label={tool.name}
                 isSelected={selected?.type === 'tool' && selected?.index === i}
                 onClick={() => setSelected({ type: 'tool', index: i })}
@@ -1111,17 +1115,21 @@ function ContextCollapsibleGroup({
 
 function ContextListItem({
   label,
+  role,
   isSelected,
   onClick,
   color,
 }: {
   label: string;
+  role?: string;
   isSelected: boolean;
   onClick: () => void;
   color: string;
 }) {
   return (
     <button
+      data-testid="context-item"
+      data-role={role}
       onClick={onClick}
       className={`w-full px-3 py-1.5 pl-6 text-left text-sm transition-colors ${
         isSelected

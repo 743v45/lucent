@@ -165,10 +165,22 @@ npm run verify:e2e
 4. 覆盖 12 个场景：预设供应商三种协议转发 + 自定义供应商（带/不带 `/v1`）+ 测试连接三种协议 + 三种 404 边界 + 测试连接 vs 代理转发路径一致性
 
 **怎么看**：
-- ✅ `12/12 通过, 0 失败` + 退出码 `0` = 绿
+- ✅ `14/14 通过, 0 失败` + 退出码 `0` = 绿
 - ❌ 任何 `✗ FAIL` + 非 0 退出码 = 红，失败项会标出实际值
 
 脚本对应 [`openspec/specs/e2e-verification`](openspec/specs/e2e-verification/spec.md)（spec 化的验收契约）。
+
+### 协议链路验收（含 Web UI 渲染）
+
+`verify:e2e` 只覆盖路由/URL 拼接层。**协议格式 + 日志 + API + Web UI 渲染**这条完整链路需要更深的验收：
+
+```bash
+npm run verify:anthropic   # anthropic-messages 全链路（流式 SSE + 非流式 JSON × 5 环节 × UI）
+```
+
+这条命令启动真后端 + vite dev + mock 上游 + playwright headless 浏览器，断言 10 个验收点（含 Web UI data-testid 渲染匹配）。
+
+契约见 [`openspec/specs/protocol-chain-verification`](openspec/specs/protocol-chain-verification/spec.md)。当前覆盖 anthropic-messages；openai-chat / openai-responses 待补（复制此脚本改协议即可）。
 
 ## 参考
 

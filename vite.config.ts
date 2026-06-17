@@ -6,11 +6,15 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   base: './',
   server: {
-    port: 5173,
-    strictPort: true,
+    // 验收脚本用 VITE_PORT 指定随机端口；默认 5173 strictPort
+    port: parseInt(process.env.VITE_PORT || '5173', 10),
+    strictPort: !process.env.VITE_PORT,
     proxy: {
       '/api': {
-        target: 'http://localhost:7049',
+        // 验收脚本用 LUCENT_WEB_PORT 指向后端随机端口；默认 7049
+        target: process.env.LUCENT_WEB_PORT
+          ? `http://localhost:${process.env.LUCENT_WEB_PORT}`
+          : 'http://localhost:7049',
         changeOrigin: true,
       },
     },
