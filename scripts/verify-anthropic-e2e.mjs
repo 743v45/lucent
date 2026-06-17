@@ -56,13 +56,18 @@ const upstream = createServer((req, res) => {
 
 function respondAnthropicSSE(res) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+  // 完整 8 事件 (按 docs/protocols/01-anthropic-messages.md § 3)
+  // message_start → content_block_start → content_block_delta →
+  // content_block_stop → message_delta → message_stop → ping → error (mock 8 个)
   const events = [
-    `event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_v', type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0 } } })}\n\n`,
+    `event: message_start\ndata: ${JSON.stringify({ type: 'message_start', message: { id: 'msg_v', type: 'message', role: 'assistant', model: 'claude-sonnet-4-5', content: [], stop_reason: null, stop_sequence: null, usage: { input_tokens: 10, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0, cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 }, output_tokens_details: { thinking_tokens: 0 }, server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 }, service_tier: 'standard', inference_geo: 'us-east-1' } } })}\n\n`,
     `event: content_block_start\ndata: ${JSON.stringify({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } })}\n\n`,
     `event: content_block_delta\ndata: ${JSON.stringify({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello! How can I help?' } })}\n\n`,
     `event: content_block_stop\ndata: ${JSON.stringify({ type: 'content_block_stop', index: 0 })}\n\n`,
-    `event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 5 } })}\n\n`,
+    `event: message_delta\ndata: ${JSON.stringify({ type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 5, output_tokens_details: { thinking_tokens: 0 } } })}\n\n`,
     `event: message_stop\ndata: ${JSON.stringify({ type: 'message_stop' })}\n\n`,
+    `event: ping\ndata: ${JSON.stringify({ type: 'ping' })}\n\n`,
+    `event: error\ndata: ${JSON.stringify({ type: 'error', error: { type: 'overloaded_error', message: 'Overloaded' } })}\n\n`,
   ];
   let i = 0;
   const iv = setInterval(() => {
@@ -72,11 +77,22 @@ function respondAnthropicSSE(res) {
 }
 
 function respondAnthropicJSON(res) {
+  // 完整 schema 按 docs/protocols/01-anthropic-messages.md § 2
   const payload = {
     id: 'msg_v_json', type: 'message', role: 'assistant', model: 'claude-sonnet-4-5',
     content: [{ type: 'text', text: 'Hello! How can I help?' }],
     stop_reason: 'end_turn', stop_sequence: null,
-    usage: { input_tokens: 10, output_tokens: 5 },
+    container: null, stop_details: null,
+    usage: {
+      input_tokens: 10, output_tokens: 5,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+      output_tokens_details: { thinking_tokens: 0 },
+      server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 },
+      service_tier: 'standard',
+      inference_geo: 'us-east-1',
+    },
   };
   const data = JSON.stringify(payload);
   res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) });
@@ -220,9 +236,17 @@ try {
 
   // ① 请求构造 + ② 真实响应（SSE）
   const sseRes = await post(`${PROXY}/custom/hxy/v1/messages`, ANTH_HEADERS, REQ_BODY);
-  check('SSE-①② 客户端收到 SSE 流(含 message_start/content_block_delta/message_stop)',
-    sseRes.body.includes('message_start') && sseRes.body.includes('content_block_delta') && sseRes.body.includes('message_stop'),
-    `status=${sseRes.status} body 前 80: ${sseRes.body.slice(0, 80)}`);
+  // 验证完整 8 事件链 (按 docs/protocols/01-anthropic-messages.md § 3)
+  const anthEventTypes = [
+    'message_start', 'content_block_start', 'content_block_delta',
+    'content_block_stop', 'message_delta', 'message_stop',
+    'ping', 'error',
+  ];
+  const anthAllEventsOk = anthEventTypes.every(t => sseRes.body.includes('event: ' + t));
+  const anthFrameCount = (sseRes.body.match(/^event: /gm) || []).length;
+  check(`SSE-①② 客户端收到完整 8 事件链(共 ${anthFrameCount} 帧)`,
+    anthAllEventsOk && anthFrameCount >= 8,
+    `状态=${sseRes.status}, 事件数=${anthFrameCount}, 完整链=${anthAllEventsOk ? '✓' : '✗'}`);
 
   await new Promise(r => setTimeout(r, 600));  // 等流式日志落盘
   const sseEntries = readLogEntries().filter(e => e.providerName === 'hxy');
@@ -298,6 +322,14 @@ try {
   check('JSON-③ 日志 response.body 是完整 JSON(含 content text)',
     jsonLogBody?.content?.[0]?.text === 'Hello! How can I help?' && jsonLogBody?.type === 'message',
     `content.text=${jsonLogBody?.content?.[0]?.text}`);
+
+  // JSON 模式 usage 详细字段 (按 docs § 2 Usage 完整结构)
+  const hasCacheCreation = jsonLogBody?.usage?.cache_creation_input_tokens !== undefined;
+  const hasCacheRead = jsonLogBody?.usage?.cache_read_input_tokens !== undefined;
+  const hasServiceTier = jsonLogBody?.usage?.service_tier === 'standard';
+  check('JSON-③ usage 详细字段存在(cache_creation/cache_read/service_tier)',
+    hasCacheCreation && hasCacheRead && hasServiceTier,
+    `cache_creation=${hasCacheCreation} cache_read=${hasCacheRead} service_tier=${hasServiceTier}`);
 
   // ④ /api/logs
   const apiRes2 = await fetch(`${WEB}/api/logs?limit=50`);

@@ -49,10 +49,19 @@ const upstream = createServer((req, res) => {
 
 function respondResponsesSSE(res) {
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache', connection: 'keep-alive' });
+  // 完整 8 事件链 (按 docs/protocols/03-openai-responses.md § 3)
+  // created → output_item.added → content_part.added → output_text.delta × 2 →
+  // output_text.done → content_part.done → output_item.done → response.completed
   const events = [
-    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'Hello!' })}\n\n`,
-    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: ' World.' })}\n\n`,
-    `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', response: { id: 'resp-v', object: 'response', status: 'completed', output: [{ type: 'message', content: [{ type: 'output_text', text: 'Hello! World.' }] }], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 } } })}\n\n`,
+    `event: response.created\ndata: ${JSON.stringify({ type: 'response.created', sequence_number: 0, response: { id: 'resp-v', object: 'response', status: 'in_progress', model: 'gpt-4o' } })}\n\n`,
+    `event: response.output_item.added\ndata: ${JSON.stringify({ type: 'response.output_item.added', output_index: 0, sequence_number: 1, item: { id: 'msg_e2e', type: 'message', role: 'assistant', status: 'in_progress', content: [] } })}\n\n`,
+    `event: response.content_part.added\ndata: ${JSON.stringify({ type: 'response.content_part.added', content_index: 0, item_id: 'msg_e2e', output_index: 0, sequence_number: 2, part: { type: 'output_text', text: '', annotations: [] } })}\n\n`,
+    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', content_index: 0, delta: 'Hello!', item_id: 'msg_e2e', output_index: 0, sequence_number: 3, logprobs: [] })}\n\n`,
+    `event: response.output_text.delta\ndata: ${JSON.stringify({ type: 'response.output_text.delta', content_index: 0, delta: ' World.', item_id: 'msg_e2e', output_index: 0, sequence_number: 4, logprobs: [] })}\n\n`,
+    `event: response.output_text.done\ndata: ${JSON.stringify({ type: 'response.output_text.done', content_index: 0, text: 'Hello! World.', item_id: 'msg_e2e', output_index: 0, sequence_number: 5, logprobs: [] })}\n\n`,
+    `event: response.content_part.done\ndata: ${JSON.stringify({ type: 'response.content_part.done', content_index: 0, item_id: 'msg_e2e', output_index: 0, sequence_number: 6, part: { type: 'output_text', text: 'Hello! World.', annotations: [] } })}\n\n`,
+    `event: response.output_item.done\ndata: ${JSON.stringify({ type: 'response.output_item.done', output_index: 0, sequence_number: 7, item: { id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello! World.', annotations: [] }] } })}\n\n`,
+    `event: response.completed\ndata: ${JSON.stringify({ type: 'response.completed', sequence_number: 8, response: { id: 'resp-v', object: 'response', status: 'completed', model: 'gpt-4o', output: [{ id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello! World.', annotations: [] }] }], usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } } } })}\n\n`,
   ];
   let i = 0;
   const iv = setInterval(() => {
@@ -64,8 +73,17 @@ function respondResponsesSSE(res) {
 function respondResponsesJSON(res) {
   const payload = {
     id: 'resp-v-json', object: 'response', status: 'completed', model: 'gpt-4o',
-    output: [{ type: 'message', content: [{ type: 'output_text', text: 'Hello! World.' }] }],
-    usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    created_at: 1700000000, completed_at: 1700000005,
+    parallel_tool_calls: true, temperature: 1, top_p: 1, tools: [],
+    instructions: null, max_output_tokens: null, metadata: null, store: false, background: false,
+    output_text: 'Hello! World.',
+    output: [{ id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello! World.', annotations: [] }] }],
+    usage: {
+      input_tokens: 10, output_tokens: 5, total_tokens: 15,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    },
+    error: null, incomplete_details: null,
   };
   const data = JSON.stringify(payload);
   res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) });
@@ -113,7 +131,17 @@ function check(name, cond, detail = '') {
 async function post(url, headers, body) {
   try {
     const res = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) });
-    return { status: res.status, body: await res.text() };
+    // 显式读流(res.text() 可能提前 resolve, 丢 SSE 后续帧)
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let bodyText = '';
+    const start = Date.now();
+    while (Date.now() - start < 10000) {  // 10s timeout 防止挂起
+      const { value, done } = await reader.read();
+      if (done) break;
+      bodyText += decoder.decode(value, { stream: true });
+    }
+    return { status: res.status, body: bodyText };
   } catch (e) { return { status: 0, body: String(e) }; }
 }
 
@@ -163,14 +191,40 @@ try {
   upstreamMode = 'sse';
   upstreamHits.length = 0;
 
-  const sseRes = await post(`${PROXY}/openai/v1/responses`, OAI_HEADERS, REQ_BODY);
-  check('SSE-①② 客户端收到 Responses SSE 流(含 response.output_text.delta + response.completed)',
-    sseRes.body.includes('response.output_text.delta') && sseRes.body.includes('response.completed'),
-    `status=${sseRes.status} body 前 80: ${sseRes.body.slice(0, 80)}`);
+  const sseRes = await post(`${PROXY}/custom/openai/v1/responses`, OAI_HEADERS, REQ_BODY);
+  // 验证完整事件链 8 事件 (按 docs/protocols/03-openai-responses.md)
+  // response.created → output_item.added → content_part.added →
+  // output_text.delta × 多 → output_text.done →
+  // content_part.done → output_item.done → response.completed
+  const eventTypesExpected = [
+    'response.created',
+    'response.output_item.added',
+    'response.content_part.added',
+    'response.output_text.delta',
+    'response.output_text.done',
+    'response.content_part.done',
+    'response.output_item.done',
+    'response.completed',
+  ];
+  const allEventsOk = eventTypesExpected.every(t => sseRes.body.includes(t));
+  const eventCount = (sseRes.body.match(/^event: /gm) || []).length;
+  check(`SSE-①② 客户端收到完整 8 事件链(共 ${eventCount} 帧)`,
+    allEventsOk && eventCount >= 8,
+    `状态=${sseRes.status}, 事件数=${eventCount}, 完整链=${allEventsOk ? '✓' : '✗'}`);
 
-  await new Promise(r => setTimeout(r, 600));
+  // 验证共用字段: type/sequence_number/output_index/item_id
+  const hasSeq = /"sequence_number":\d/.test(sseRes.body);
+  const hasOutIdx = /"output_index":\d/.test(sseRes.body);
+  const hasItemId = /"item_id":"msg_/.test(sseRes.body);
+  check(`SSE-② 事件共用字段存在(sequence_number + output_index + item_id)`,
+    hasSeq && hasOutIdx && hasItemId,
+    `seq=${hasSeq} outIdx=${hasOutIdx} itemId=${hasItemId}`);
+
+  // 等日志落盘: 流式响应经 extractInBackground 处理需要时间
+  await new Promise(r => setTimeout(r, 2000));
   const sseEntries = readLogEntries().filter(e => e.providerName === 'openai' && e.endpointType === 'openai-responses');
   const sseLog = sseEntries[sseEntries.length - 1];
+  if (!sseLog) { console.log('  [WARN] sseLog 未找到, entries count:', sseEntries.length); }
 
   // 关键: openai-responses body 用 input, 不是 messages
   check('SSE-③ 日志 body.input 保留(string) + response 是 sse_raw',
@@ -184,6 +238,10 @@ try {
     apiSseEntry?.request?.body?.input === 'What is latin for Ant?', `input=${apiSseEntry?.request?.body?.input}`);
 
   {
+    if (!sseLog) {
+      // 落盘失败时无法做 UI 验证
+      check('SSE-⑤a Request tab 渲染(跳过: 无 log)', false, 'sseLog 为 undefined');
+    } else {
     const browser = await chromium.launch();
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${VITE_PORT}/?log=${sseLog.id}&tab=request`);
@@ -207,6 +265,7 @@ try {
     const rowCount = await page.getByTestId('log-row').count();
     check('SSE-⑤c 日志列表渲染 log-row', rowCount >= 1, `rows=${rowCount}`);
     await browser.close();
+    }
   }
 
   // ============================================================
@@ -214,14 +273,15 @@ try {
   upstreamMode = 'json';
   upstreamHits.length = 0;
 
-  const jsonRes = await post(`${PROXY}/openai/v1/responses`, OAI_HEADERS, REQ_BODY);
+  const jsonRes = await post(`${PROXY}/custom/openai/v1/responses`, OAI_HEADERS, REQ_BODY);
   check('JSON-①② 客户端收到完整 Responses JSON(含 output + output_text)',
     jsonRes.status === 200 && jsonRes.body.includes('"output"') && jsonRes.body.includes('Hello! World.'),
     `status=${jsonRes.status} body 前 80: ${jsonRes.body.slice(0, 80)}`);
 
-  await new Promise(r => setTimeout(r, 400));
+  await new Promise(r => setTimeout(r, 2000));
   const jsonEntries = readLogEntries().filter(e => e.providerName === 'openai' && e.endpointType === 'openai-responses');
   const jsonLog = jsonEntries[jsonEntries.length - 1];
+  if (!jsonLog) { console.log('  [WARN] jsonLog 未找到'); }
   const jsonLogBody = jsonLog?.response?.body;
   check('JSON-③ 日志 response.body.output[0].content[0].text 完整',
     jsonLogBody?.output?.[0]?.content?.[0]?.text === 'Hello! World.' && jsonLogBody?.object === 'response',
@@ -235,6 +295,9 @@ try {
     `text=${apiJsonEntry?.response?.body?.output?.[0]?.content?.[0]?.text}`);
 
   {
+    if (!jsonLog) {
+      check('JSON-⑤ Response tab 渲染(跳过: 无 log)', false, 'jsonLog 为 undefined');
+    } else {
     const browser = await chromium.launch();
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${VITE_PORT}/?log=${jsonLog.id}&tab=response`);
@@ -243,7 +306,16 @@ try {
     const respText = respVisible ? (await page.getByTestId('response-body').textContent()) : '';
     check('JSON-⑤ Response tab 渲染 response-body 含 "output"',
       respVisible && respText.includes('output'), `visible=${respVisible}`);
+
+    // 新增断言: JSON 模式 usage 详细字段 (按 docs § 2 ResponseUsage)
+    // 含 input_tokens_details.cached_tokens + output_tokens_details.reasoning_tokens
+    const hasCachedTokens = jsonLog?.response?.body?.usage?.input_tokens_details?.cached_tokens !== undefined;
+    const hasReasoningTokens = jsonLog?.response?.body?.usage?.output_tokens_details?.reasoning_tokens !== undefined;
+    check('JSON-⑤ usage 详细字段存在(cached_tokens + reasoning_tokens)',
+      hasCachedTokens && hasReasoningTokens,
+      `cached=${hasCachedTokens} reasoning=${hasReasoningTokens}`);
     await browser.close();
+    }
   }
 
 } finally {

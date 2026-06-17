@@ -53,7 +53,7 @@ function respondChatSSE(res) {
     `data: ${JSON.stringify({ id: 'chatcmpl-v', object: 'chat.completion.chunk', model: 'gpt-4o', choices: [{ index: 0, delta: { role: 'assistant', content: '' } }] })}\n\n`,
     `data: ${JSON.stringify({ id: 'chatcmpl-v', object: 'chat.completion.chunk', model: 'gpt-4o', choices: [{ index: 0, delta: { content: 'Hello! ' } }] })}\n\n`,
     `data: ${JSON.stringify({ id: 'chatcmpl-v', object: 'chat.completion.chunk', model: 'gpt-4o', choices: [{ index: 0, delta: { content: 'How can I help?' } }] })}\n\n`,
-    `data: ${JSON.stringify({ id: 'chatcmpl-v', object: 'chat.completion.chunk', model: 'gpt-4o', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 } })}\n\n`,
+    `data: ${JSON.stringify({ id: 'chatcmpl-v', object: 'chat.completion.chunk', model: 'gpt-4o', choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18, prompt_tokens_details: { cached_tokens: 0, audio_tokens: 0 }, completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0 } } })}\n\n`,
     `data: [DONE]\n\n`,
   ];
   let i = 0;
@@ -64,10 +64,16 @@ function respondChatSSE(res) {
 }
 
 function respondChatJSON(res) {
+  // 完整 schema 按 docs/protocols/02-openai-chat-completions.md
   const payload = {
     id: 'chatcmpl-v-json', object: 'chat.completion', model: 'gpt-4o',
-    choices: [{ index: 0, message: { role: 'assistant', content: 'Hello! How can I help?' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    service_tier: 'default', system_fingerprint: 'fp_e2e',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'Hello! How can I help?', refusal: null }, finish_reason: 'stop', logprobs: null }],
+    usage: {
+      prompt_tokens: 10, completion_tokens: 5, total_tokens: 15,
+      prompt_tokens_details: { cached_tokens: 0, audio_tokens: 0 },
+      completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0 },
+    },
   };
   const data = JSON.stringify(payload);
   res.writeHead(200, { 'content-type': 'application/json', 'content-length': Buffer.byteLength(data) });
@@ -233,6 +239,13 @@ try {
   check('JSON-③ 日志 response.body.choices[0].message.content 完整',
     jsonLogBody?.choices?.[0]?.message?.content === 'Hello! How can I help?' && jsonLogBody?.object === 'chat.completion',
     `content=${jsonLogBody?.choices?.[0]?.message?.content}`);
+
+  // JSON 模式 usage 详细字段 (按 docs § 2 CompletionUsage)
+  const hasCachedTokens = jsonLogBody?.usage?.prompt_tokens_details?.cached_tokens !== undefined;
+  const hasReasoningTokens = jsonLogBody?.usage?.completion_tokens_details?.reasoning_tokens !== undefined;
+  check('JSON-③ usage 详细字段存在(cached_tokens + reasoning_tokens)',
+    hasCachedTokens && hasReasoningTokens,
+    `cached=${hasCachedTokens} reasoning=${hasReasoningTokens}`);
 
   const apiRes2 = await fetch(`${WEB}/api/logs?limit=50`);
   const apiJson2 = await apiRes2.json();
