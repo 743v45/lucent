@@ -114,6 +114,9 @@ POST /v1/messages
 
 ### `Usage` 完整结构
 
+> 权威源: `@anthropic-ai/sdk` `resources/messages/messages.d.ts:1395` `interface Usage`
+> SDK 顶层 8 字段; 此处文档多列 `output_tokens_details`（thinking 扩展字段, SDK 某些版本 + 官方示例会出现）。fixture 实现按 9 字段完整对齐。
+
 ```typescript
 {
   input_tokens: number,
@@ -135,6 +138,21 @@ POST /v1/messages
 ```
 
 注: Total input tokens = `input_tokens + cache_creation_input_tokens + cache_read_input_tokens`
+
+### `MessageDeltaUsage` 结构（`message_delta` 事件的累计 usage）
+
+> 权威源: `messages.d.ts:659` `interface MessageDeltaUsage`
+> ⚠️ 所有字段都是**累计值（cumulative）**, 与非流式 `Usage` 不同——`input_tokens`/`cache_*` 在 `MessageDeltaUsage` 里是 `number | null`（首帧后可能不再变化）, `output_tokens` 是 `number`（持续累加）。
+
+```typescript
+{
+  input_tokens: number | null,
+  output_tokens: number,
+  cache_creation_input_tokens: number | null,
+  cache_read_input_tokens: number | null,
+  server_tool_use: ServerToolUsage | null,
+}
+```
 
 ### `ContentBlock`（响应）类型
 
@@ -185,6 +203,17 @@ POST /v1/messages
 | `input_json_delta` | `partial_json`（分片 JSON 字符串）|
 | `thinking_delta` | `thinking` |
 | `signature_delta` | `signature`（thinking 块最后一帧，验证完整性用）|
+
+**`SignatureDelta` 精确结构**（权威源 `messages.d.ts`）:
+```typescript
+{ signature: string, type: 'signature_delta' }
+```
+
+**thinking 块的 `content_block_start.content_block` 必须带 `signature` 字段**（权威源 `messages.d.ts` `interface ThinkingBlock`）:
+```typescript
+{ type: 'thinking', thinking: string, signature: string }
+```
+即 thinking 块的 `content_block_start` 帧 content_block 也应含 `signature: ''`（占位）, thinking_delta 帧填充 thinking 内容, 最后 signature_delta 帧填充 signature。
 
 **`content_block_stop`**:
 ```json
@@ -262,7 +291,7 @@ POST /v1/messages
 - `type`: 固定为 `"error"`
 - `error.type`: 上述 9 种 ErrorType 之一
 - `error.message`: 人类可读错误消息
-- `request_id`: 形如 `req_01xxxxxxxxxxxx` 的 ID
+- `request_id`: 形如 `req_` + 24 字符 base62 的 ID（官方示例 `req_011CSHoEeqs5C35K2UUqR7Fy` 总长 28 字符）
 
 **Header 还携带 `request-id`** (同格式)，AWS 部署时还会包含 `x-amzn-requestid`。
 
