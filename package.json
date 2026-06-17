@@ -24,7 +24,8 @@
     "verify:anthropic": "node scripts/verify-anthropic-e2e.mjs",
     "verify:openai-chat": "node scripts/verify-openai-chat-e2e.mjs",
     "verify:openai-responses": "node scripts/verify-openai-responses-e2e.mjs",
-    "verify:custom": "node scripts/verify-custom-providers-e2e.mjs"
+    "verify:custom": "node scripts/verify-custom-providers-e2e.mjs",
+    "verify:custom-errors": "node scripts/verify-custom-errors-e2e.mjs"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",
