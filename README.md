@@ -175,12 +175,14 @@ npm run verify:e2e
 `verify:e2e` 只覆盖路由/URL 拼接层。**协议格式 + 日志 + API + Web UI 渲染**这条完整链路需要更深的验收：
 
 ```bash
-npm run verify:anthropic   # anthropic-messages 全链路（流式 SSE + 非流式 JSON × 5 环节 × UI）
+npm run verify:anthropic       # anthropic-messages 全链路（流式 SSE + 非流式 JSON × 5 环节 × UI）
+npm run verify:openai-chat     # openai-chat 同样覆盖
+npm run verify:openai-responses # openai-responses 同样覆盖（注意：请求用 input 不是 messages）
 ```
 
-这条命令启动真后端 + vite dev + mock 上游 + playwright headless 浏览器，断言 10 个验收点（含 Web UI data-testid 渲染匹配）。
+每条命令启动真后端 + vite dev + mock 上游 + playwright headless 浏览器，断言 10 个验收点（含 Web UI data-testid 渲染匹配）。三个协议 × 10 = **30 个验收点**全覆盖。
 
-契约见 [`openspec/specs/protocol-chain-verification`](openspec/specs/protocol-chain-verification/spec.md)。当前覆盖 anthropic-messages；openai-chat / openai-responses 待补（复制此脚本改协议即可）。
+契约见 [`openspec/specs/protocol-chain-verification`](openspec/specs/protocol-chain-verification/spec.md)。
 
 ## 参考
 
