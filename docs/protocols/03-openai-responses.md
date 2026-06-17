@@ -245,120 +245,165 @@ POST /v1/responses
 
 ## 3. SSE 流式事件 (50 种)
 
-`ResponseStreamEvent = ResponseAudioDeltaEvent | ResponseAudioDoneEvent | ...` (50 个)
+`ResponseStreamEvent` 是 **50 个事件 interface 的联合** (来源: `openai@6.26.0` SDK `responses.ts:5765`)。
 
-### 完整事件类型分类
+### 共用字段（所有事件都有）
 
-#### Response 生命周期
-- `response.created`
-- `response.in_progress`
-- `response.completed`
-- `response.failed`
-- `response.incomplete`
-- `response.queued`
-- `response.error`
-
-#### Output Item 增删
-- `response.output_item.added`
-- `response.output_item.done`
-
-#### Content Part 增删
-- `response.content_part.added`
-- `response.content_part.done`
-
-#### 文本增量（最常用）
-- `response.output_text.delta` (type 是 `response.output_text.delta`)
-- `response.output_text.done`
-- `response.text.delta`
-- `response.text.done`
-
-#### Refusal（拒绝）
-- `response.refusal.delta`
-- `response.refusal.done`
-
-#### Function Call
-- `response.function_call_arguments.delta`
-- `response.function_call_arguments.done`
-
-#### Reasoning（推理过程）
-- `response.reasoning.delta`
-- `response.reasoning.done`
-- `response.reasoning_summary_part.added`
-- `response.reasoning_summary_part.done`
-- `response.reasoning_summary_text.delta`
-- `response.reasoning_summary_text.done`
-
-#### Audio
-- `response.audio.delta`
-- `response.audio.done`
-- `response.audio_transcript.delta`
-- `response.audio_transcript.done`
-
-#### MCP
-- `response.mcp_call_arguments.delta`
-- `response.mcp_call_arguments.done`
-- `response.mcp_call.in_progress`
-- `response.mcp_call.completed`
-- `response.mcp_call.failed`
-- `response.mcp_list_tools.in_progress`
-- `response.mcp_list_tools.completed`
-- `response.mcp_list_tools.failed`
-
-#### Web Search
-- `response.web_search_call.in_progress`
-- `response.web_search_call.searching`
-- `response.web_search_call.completed`
-
-#### File Search
-- `response.file_search_call.in_progress`
-- `response.file_search_call.searching`
-- `response.file_search_call.completed`
-
-#### Code Interpreter
-- `response.code_interpreter_call.in_progress`
-- `response.code_interpreter_call.code_delta`
-- `response.code_interpreter_call.code_done`
-- `response.code_interpreter_call.completed`
-- `response.code_interpreter_call.interpreting`
-
-#### Image Generation
-- `response.image_generation_call.in_progress`
-- `response.image_generation_call.generating`
-- `response.image_generation_call.completed`
-- `response.image_generation_call.partial_image`
-
-#### Custom Tool
-- `response.custom_tool_call_input.delta`
-- `response.custom_tool_call_input.done`
-
-#### Annotation
-- `response.output_text.annotation.added`
-
-### `ResponseTextDeltaEvent` schema (示例, 大部分事件类似结构)
+每个事件 data 帧都有这 4 个**共用字段**（SDK 模式）:
 
 ```typescript
 {
+  type: string,                    // 事件名，如 "response.output_text.delta"
+  sequence_number: number,         // 全局递增序号
+  output_index: number,            // output[] 数组中的索引
+  item_id: string,                 // 关联的 output item 的 id
+  // + 各自 payload 字段
+}
+```
+
+> **注**: 共用字段在每个事件 interface 中**重复声明**（SDK 风格）。mock fixture 实现时应提取为 TypeScript utility type `ResponseStreamEventBase` 复用。
+
+### 事件名分类（50 种）
+
+| 类别 | 事件名 |
+|---|---|
+| **Response 生命周期** | `response.created`, `response.in_progress`, `response.completed`, `response.failed`, `response.incomplete`, `response.queued`, `response.error` |
+| **Output Item 增删** | `response.output_item.added`, `response.output_item.done` |
+| **Content Part 增删** | `response.content_part.added`, `response.content_part.done` |
+| **文本增量** | `response.output_text.delta`, `response.output_text.done`, `response.text.delta`, `response.text.done` |
+| **Refusal** | `response.refusal.delta`, `response.refusal.done` |
+| **Function Call** | `response.function_call_arguments.delta`, `response.function_call_arguments.done` |
+| **Reasoning** | `response.reasoning.delta`, `response.reasoning.done`, `response.reasoning_summary_part.added`, `response.reasoning_summary_part.done`, `response.reasoning_summary_text.delta`, `response.reasoning_summary_text.done` |
+| **Audio** | `response.audio.delta`, `response.audio.done`, `response.audio_transcript.delta`, `response.audio_transcript.done` |
+| **MCP** | `response.mcp_call_arguments.delta`, `response.mcp_call_arguments.done`, `response.mcp_call.in_progress`, `response.mcp_call.completed`, `response.mcp_call.failed`, `response.mcp_list_tools.in_progress`, `response.mcp_list_tools.completed`, `response.mcp_list_tools.failed` |
+| **Web Search** | `response.web_search_call.in_progress`, `response.web_search_call.searching`, `response.web_search_call.completed` |
+| **File Search** | `response.file_search_call.in_progress`, `response.file_search_call.searching`, `response.file_search_call.completed` |
+| **Code Interpreter** | `response.code_interpreter_call.in_progress`, `response.code_interpreter_call.code_delta`, `response.code_interpreter_call.code_done`, `response.code_interpreter_call.completed`, `response.code_interpreter_call.interpreting` |
+| **Image Generation** | `response.image_generation_call.in_progress`, `response.image_generation_call.generating`, `response.image_generation_call.completed`, `response.image_generation_call.partial_image` |
+| **Custom Tool** | `response.custom_tool_call_input.delta`, `response.custom_tool_call_input.done` |
+| **Annotation** | `response.output_text.annotation.added` |
+
+### 核心事件 data 字段完整 schema
+
+下列 5 个事件是**最常用**且**字段最多**的（覆盖所有 mock 场景）。其余 45 个事件结构类似（共用字段 + 1-3 个额外字段）。
+
+#### `response.created` (SDK: `ResponseCreatedEvent`)
+
+```typescript
+{
+  type: 'response.created',
+  sequence_number: number,
+  // **特殊**: payload 是完整 Response 对象
+  response: Response,            // 见 § 2 Response schema
+}
+```
+
+#### `response.output_item.added` (SDK: `ResponseOutputItemAddedEvent`)
+
+```typescript
+{
+  type: 'response.output_item.added',
+  output_index: number,
+  sequence_number: number,
+  // payload: 完整的 output item
+  item: ResponseOutputItem,     // 见 § 2 ResponseOutputItem union (20 种)
+}
+```
+
+#### `response.content_part.added` (SDK: `ResponseContentPartAddedEvent`)
+
+```typescript
+{
+  type: 'response.content_part.added',
   content_index: number,
-  delta: string,
   item_id: string,
   output_index: number,
   sequence_number: number,
-  type: 'response.output_text.delta',
-  logprobs?: Array<Logprob>,
+  // payload: ResponseOutputText | ResponseOutputRefusal | ReasoningText
+  part: ResponseOutputText | ResponseOutputRefusal | { type: 'reasoning_text', text: string },
 }
 ```
 
-### `ResponseErrorEvent` schema (流式错误事件)
+#### `response.output_text.delta` (SDK: `ResponseTextDeltaEvent`)
 
 ```typescript
 {
-  code: string | null,             // 任意字符串（与非流式精确枚举不同）
+  type: 'response.output_text.delta',
+  content_index: number,
+  delta: string,                  // 关键: 文本增量片段
+  item_id: string,
+  logprobs?: Array<Logprob>,     // 可选 logprobs
+  output_index: number,
+  sequence_number: number,
+}
+```
+
+#### `response.error` (SDK: `ResponseErrorEvent`)
+
+```typescript
+{
+  type: 'error',                  // 注意: 这个 type 是 'error'，不带 response. 前缀
+  code: string | null,            // 任意字符串（与非流式精确枚举不同）
   message: string,
   param: string | null,
   sequence_number: number,
-  type: 'error',
 }
 ```
+
+### 其他事件 payload 速查
+
+| 事件 | 额外 payload 字段 |
+|---|---|
+| `response.output_item.done` | `item: ResponseOutputItem`, `output_index`, `sequence_number` |
+| `response.content_part.done` | `part: ResponseOutputText \| ...`, `content_index`, `item_id`, `output_index`, `sequence_number` |
+| `response.output_text.done` | `text: string` (完整文本), `item_id`, `output_index`, `sequence_number`, `content_index`, `logprobs?` |
+| `response.text.delta` | `delta: string`, `item_id`, `output_index`, `sequence_number`, `content_index`, `logprobs?` |
+| `response.text.done` | `text: string`, 同上 |
+| `response.refusal.delta` | `delta: string`, `item_id`, `output_index`, `sequence_number`, `content_index` |
+| `response.refusal.done` | `refusal: string`, 同上 |
+| `response.function_call_arguments.delta` | `delta: string` (partial JSON), `item_id`, `output_index`, `sequence_number` |
+| `response.function_call_arguments.done` | `arguments: string` (完整 JSON), 同上 |
+| `response.reasoning.delta` | `delta: string`, `item_id`, `output_index`, `sequence_number`, `content_index` |
+| `response.reasoning.done` | `text: string`, 同上 |
+| `response.reasoning_summary_part.added` | `part: ReasoningText`, `item_id`, `output_index`, `sequence_number` |
+| `response.reasoning_summary_part.done` | `part: ReasoningText`, 同上 |
+| `response.reasoning_summary_text.delta` | `delta: string`, `item_id`, `output_index`, `sequence_number`, `content_index` |
+| `response.reasoning_summary_text.done` | `text: string`, 同上 |
+| `response.audio.delta` | `delta: string` (base64 音频), `item_id`, `output_index`, `sequence_number`, `content_index` |
+| `response.audio.done` | `audio: string` (base64 完整音频), 同上 |
+| `response.audio_transcript.delta` | `delta: string`, 同上 |
+| `response.audio_transcript.done` | `transcript: string`, 同上 |
+| `response.mcp_call_arguments.delta` | `delta: string`, `item_id`, `output_index`, `sequence_number` |
+| `response.mcp_call_arguments.done` | `arguments: string`, 同上 |
+| `response.mcp_call.in_progress` | `item_id`, `output_index`, `sequence_number` |
+| `response.mcp_call.completed` | `item_id`, `output_index`, `sequence_number` |
+| `response.mcp_call.failed` | `item_id`, `output_index`, `sequence_number` |
+| `response.mcp_list_tools.in_progress` | `item_id`, `output_index`, `sequence_number` |
+| `response.mcp_list_tools.completed` | `tools: Array<{name, description?, input_schema?, annotations?}>` |
+| `response.mcp_list_tools.failed` | `item_id`, `output_index`, `sequence_number` |
+| `response.web_search_call.in_progress` | `item_id`, `output_index`, `sequence_number` |
+| `response.web_search_call.searching` | `item_id`, `output_index`, `sequence_number` |
+| `response.web_search_call.completed` | `item_id`, `output_index`, `sequence_number` |
+| `response.file_search_call.in_progress` | `item_id`, `output_index`, `sequence_number` |
+| `response.file_search_call.searching` | `item_id`, `output_index`, `sequence_number` |
+| `response.file_search_call.completed` | `item_id`, `output_index`, `sequence_number` |
+| `response.code_interpreter_call.in_progress` | `item_id`, `output_index`, `sequence_number` |
+| `response.code_interpreter_call.code_delta` | `delta: string`, 同上 |
+| `response.code_interpreter_call.code_done` | `code: string`, 同上 |
+| `response.code_interpreter_call.completed` | `item_id`, `output_index`, `sequence_number` |
+| `response.code_interpreter_call.interpreting` | `item_id`, `output_index`, `sequence_number` |
+| `response.image_generation_call.in_progress` | `item_id`, `output_index`, `sequence_number` |
+| `response.image_generation_call.generating` | `item_id`, `output_index`, `sequence_number` |
+| `response.image_generation_call.completed` | `item_id`, `output_index`, `sequence_number` |
+| `response.image_generation_call.partial_image` | `partial_image_b64: string`, `item_id`, `output_index`, `sequence_number` |
+| `response.custom_tool_call_input.delta` | `delta: string`, `item_id`, `output_index`, `sequence_number` |
+| `response.custom_tool_call_input.done` | `input: string`, 同上 |
+| `response.output_text.annotation.added` | `annotation: Annotation`, `annotation_index: number`, `content_index`, `item_id`, `output_index`, `sequence_number` |
+| `response.queued` | `response: Response`, `sequence_number` |
+| `response.in_progress` | `response: Response`, `sequence_number` |
+| `response.completed` | `response: Response`, `sequence_number` |
+| `response.failed` | `response: Response`, `sequence_number` |
+| `response.incomplete` | `response: Response`, `sequence_number` |
 
 ---
 
