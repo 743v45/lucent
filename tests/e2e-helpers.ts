@@ -226,10 +226,10 @@ export async function createMockUpstream(opts?: { name?: string; format?: MockFo
         case 'chat-tool-calls':   respondSSE(res, openaiChatToolCallsSSEEvents()); break;
         case 'responses-sse':     respondSSE(res, openaiResponsesSSEEvents()); break;
         case 'responses-json':    respondJSON(res, 200, openaiResponsesJsonBody()); break;
-        case 'error-400':         respondJSON(res, 400, openaiErrorBody('invalid_request_error', 'Invalid model')); break;
-        case 'error-401':         respondJSON(res, 401, openaiErrorBody('invalid_api_key', 'Incorrect API key')); break;
-        case 'error-429':         respondJSON(res, 429, openaiErrorBody('rate_limit_exceeded', 'Rate limit exceeded')); break;
-        case 'error-500':         respondJSON(res, 500, openaiErrorBody('server_error', 'Internal server error')); break;
+        case 'error-400':         respondJSON(res, 400, openaiErrorByStatus(400, 'invalid_request_error', 'Invalid model')); break;
+        case 'error-401':         respondJSON(res, 401, openaiErrorByStatus(401, 'invalid_api_key', 'Incorrect API key')); break;
+        case 'error-429':         respondJSON(res, 429, openaiErrorByStatus(429, 'rate_limit_exceeded', 'Rate limit exceeded')); break;
+        case 'error-500':         respondJSON(res, 500, openaiErrorByStatus(500, 'server_error', 'Internal server error')); break;
       }
     } else {
       switch (mode as AnthropicResponseMode) {
@@ -301,6 +301,7 @@ function respondJSON(res: ServerResponse, status: number, body: object): void {
 }
 
 /** 标准 Anthropic 文本 SSE 事件序列 */
+/** 完整 schema 按 docs/protocols/01-anthropic-messages.md: message_start 含 cache + service_tier + inference_geo */
 function anthropicTextSSEEvents(): string[] {
   return [
     'event: message_start\ndata: ' + JSON.stringify({
@@ -309,7 +310,16 @@ function anthropicTextSSEEvents(): string[] {
         id: 'msg_e2e_test', type: 'message', role: 'assistant',
         model: 'claude-sonnet-4-20250514', content: [],
         stop_reason: null, stop_sequence: null,
-        usage: { input_tokens: 258, output_tokens: 0 },
+        usage: {
+          input_tokens: 258, output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+          output_tokens_details: { thinking_tokens: 0 },
+          server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 },
+          service_tier: 'standard',
+          inference_geo: 'us-east-1',
+        },
       },
     }) + '\n\n',
     'event: content_block_start\ndata: ' + JSON.stringify({
@@ -424,15 +434,27 @@ function anthropicJsonResponse(): object {
     model: 'claude-sonnet-4-20250514',
     content: [{ type: 'text', text: 'Hello from JSON response.' }],
     stop_reason: 'end_turn', stop_sequence: null,
-    usage: { input_tokens: 100, output_tokens: 10 },
+    container: null,
+    stop_details: null,
+    usage: {
+      input_tokens: 100, output_tokens: 10,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+      output_tokens_details: { thinking_tokens: 0 },
+      server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 },
+      service_tier: 'standard',
+      inference_geo: 'us-east-1',
+    },
   };
 }
 
 /** Anthropic 标准错误响应 */
-function anthropicErrorBody(errorType: string, message: string): object {
+function anthropicErrorBody(errorType: string, message: string, requestId?: string): object {
   return {
     type: 'error',
     error: { type: errorType, message },
+    request_id: requestId ?? 'req_' + Math.random().toString(36).slice(2, 18).padEnd(17, '0'),
   };
 }
 
@@ -457,7 +479,12 @@ function openaiChatSSEEvents(): string[] {
     'data: ' + JSON.stringify({
       id: 'chatcmpl-e2e', object: 'chat.completion.chunk', model: 'gpt-4o',
       choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-      usage: { prompt_tokens: 10, completion_tokens: 8, total_tokens: 18 },
+      usage: {
+        prompt_tokens: 10, completion_tokens: 8, total_tokens: 18,
+        prompt_tokens_details: { cached_tokens: 0, audio_tokens: 0 },
+        completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0 },
+      },
+      service_tier: 'default',
     }) + '\n\n',
     'data: [DONE]\n\n',
   ];
@@ -477,51 +504,112 @@ function openaiChatToolCallsSSEEvents(): string[] {
     'data: ' + JSON.stringify({
       id: 'chatcmpl-e2e-tool', object: 'chat.completion.chunk', model: 'gpt-4o',
       choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
-      usage: { prompt_tokens: 50, completion_tokens: 20, total_tokens: 70 },
+      usage: {
+        prompt_tokens: 50, completion_tokens: 20, total_tokens: 70,
+        prompt_tokens_details: { cached_tokens: 0, audio_tokens: 0 },
+        completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0 },
+      },
     }) + '\n\n',
     'data: [DONE]\n\n',
   ];
 }
 
 /** 非流式 chat.completion JSON */
+/** 完整 schema 按 docs/protocols/02-openai-chat-completions.md */
 function openaiChatJsonBody(): object {
   return {
     id: 'chatcmpl-e2e-json', object: 'chat.completion', model: 'gpt-4o',
-    choices: [{ index: 0, message: { role: 'assistant', content: 'Hello from JSON.' }, finish_reason: 'stop' }],
-    usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+    service_tier: 'default',
+    system_fingerprint: 'fp_e2e',
+    choices: [{ index: 0, message: { role: 'assistant', content: 'Hello from JSON.', refusal: null }, finish_reason: 'stop', logprobs: null }],
+    usage: {
+      prompt_tokens: 10, completion_tokens: 5, total_tokens: 15,
+      prompt_tokens_details: { cached_tokens: 0, audio_tokens: 0 },
+      completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0 },
+    },
   };
 }
 
-/** Responses API SSE 流 */
+/** Responses API 完整事件链 (按 docs/protocols/03-openai-responses.md) */
+/** 事件顺序: response.created → output_item.added → content_part.added → output_text.delta × 多 → text.done → content_part.done → output_item.done → response.completed (8 个事件) */
 function openaiResponsesSSEEvents(): string[] {
   return [
-    'event: response.output_text.delta\ndata: ' + JSON.stringify({
-      type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: 'Hello!',
+    'event: response.created\ndata: ' + JSON.stringify({
+      type: 'response.created', sequence_number: 0,
+      response: { id: 'resp-e2e', object: 'response', status: 'in_progress', model: 'gpt-4o' },
+    }) + '\n\n',
+    'event: response.output_item.added\ndata: ' + JSON.stringify({
+      type: 'response.output_item.added', output_index: 0, sequence_number: 1,
+      item: { id: 'msg_e2e', type: 'message', role: 'assistant', status: 'in_progress', content: [] },
+    }) + '\n\n',
+    'event: response.content_part.added\ndata: ' + JSON.stringify({
+      type: 'response.content_part.added', content_index: 0, item_id: 'msg_e2e', output_index: 0, sequence_number: 2,
+      part: { type: 'output_text', text: '', annotations: [] },
     }) + '\n\n',
     'event: response.output_text.delta\ndata: ' + JSON.stringify({
-      type: 'response.output_text.delta', output_index: 0, content_index: 0, delta: ' World.',
+      type: 'response.output_text.delta', content_index: 0, delta: 'Hello!', item_id: 'msg_e2e', output_index: 0, sequence_number: 3, logprobs: [],
+    }) + '\n\n',
+    'event: response.output_text.delta\ndata: ' + JSON.stringify({
+      type: 'response.output_text.delta', content_index: 0, delta: ' World.', item_id: 'msg_e2e', output_index: 0, sequence_number: 4, logprobs: [],
+    }) + '\n\n',
+    'event: response.output_text.done\ndata: ' + JSON.stringify({
+      type: 'response.output_text.done', content_index: 0, text: 'Hello! World.', item_id: 'msg_e2e', output_index: 0, sequence_number: 5, logprobs: [],
+    }) + '\n\n',
+    'event: response.content_part.done\ndata: ' + JSON.stringify({
+      type: 'response.content_part.done', content_index: 0, item_id: 'msg_e2e', output_index: 0, sequence_number: 6,
+      part: { type: 'output_text', text: 'Hello! World.', annotations: [] },
+    }) + '\n\n',
+    'event: response.output_item.done\ndata: ' + JSON.stringify({
+      type: 'response.output_item.done', output_index: 0, sequence_number: 7,
+      item: { id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello! World.', annotations: [] }] },
     }) + '\n\n',
     'event: response.completed\ndata: ' + JSON.stringify({
-      type: 'response.completed',
+      type: 'response.completed', sequence_number: 8,
       response: {
-        id: 'resp-e2e', object: 'response', status: 'completed',
-        output: [{ type: 'message', content: [{ type: 'output_text', text: 'Hello! World.' }] }],
-        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+        id: 'resp-e2e', object: 'response', status: 'completed', model: 'gpt-4o',
+        output: [{ id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello! World.', annotations: [] }] }],
+        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
       },
     }) + '\n\n',
   ];
 }
 
 /** 非流式 Responses JSON */
+/** 完整 schema 按 docs/protocols/03-openai-responses.md § 2 */
 function openaiResponsesJsonBody(): object {
   return {
     id: 'resp-e2e-json', object: 'response', status: 'completed', model: 'gpt-4o',
-    output: [{ type: 'message', content: [{ type: 'output_text', text: 'Hello from JSON.' }] }],
-    usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15 },
+    created_at: 1700000000, completed_at: 1700000005,
+    parallel_tool_calls: true, temperature: 1, top_p: 1, tools: [],
+    instructions: null, max_output_tokens: null, metadata: null, store: false, background: false,
+    output_text: 'Hello from JSON.',
+    output: [{ id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello from JSON.', annotations: [] }] }],
+    usage: {
+      input_tokens: 10, output_tokens: 5, total_tokens: 15,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens_details: { reasoning_tokens: 0 },
+    },
+    error: null, incomplete_details: null,
   };
 }
 
 /** OpenAI 标准错误响应 */
-function openaiErrorBody(code: string, message: string): object {
-  return { error: { message, type: 'invalid_request_error', code } };
+/** 完整 schema 按 docs/protocols/02-openai-chat-completions.md § 4 ErrorObject */
+function openaiErrorBody(code: string, message: string, type?: string): object {
+  return { error: { message, type: type ?? 'invalid_request_error', code, param: null } };
+}
+
+/** 按 HTTP status 自动映射到正确 type (per docs) */
+function openaiErrorByStatus(status: number, code: string, message: string): object {
+  const typeByStatus: Record<number, string> = {
+    400: 'invalid_request_error',
+    401: 'authentication_error',
+    403: 'permission_error',
+    404: 'not_found_error',
+    413: 'request_too_large',
+    429: 'rate_limit_error',
+    500: 'api_error',
+    529: 'overloaded_error',
+  };
+  return openaiErrorBody(code, message, typeByStatus[status] ?? 'invalid_request_error');
 }
