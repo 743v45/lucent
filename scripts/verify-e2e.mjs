@@ -18,7 +18,7 @@
 
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -260,6 +260,48 @@ try {
   }
   if (consistent) {
     check('10. 三种 endpoint 测试连接路径 == 代理转发路径(完全一致)', true);
+  }
+
+  // ---- 场景 11-12: 日志完整性(对应 openspec/specs/log-integrity) ----
+  console.log('');
+  await new Promise(r => setTimeout(r, 600));  // 等日志落盘
+  const logDir = join(CONFIG_DIR, 'logs');
+  let lastEntries = [];
+  try {
+    const files = readdirSync(logDir).filter(f => f.endsWith('.jsonl')).sort();
+    if (files.length > 0) {
+      const content = readFileSync(join(logDir, files[files.length - 1]), 'utf-8');
+      lastEntries = content.split('\n---\n').filter(s => s.trim().startsWith('{')).map(s => JSON.parse(s));
+    }
+  } catch (e) {
+    lastEntries = [];
+  }
+  const deltaFields = ['_deltaFormat', '_isCheckpoint', '_totalMessageCount', '_conversationId', '_inPlaceReplaceDetected'];
+
+  // 场景 11: 连续 anthropic 请求的日志 body.messages 必须完整(无 delta 清空)
+  {
+    const fooEntries = lastEntries.filter(e => e.providerName === 'foo' && e.endpointType === 'anthropic-messages');
+    const last2 = fooEntries.slice(-2);
+    let ok11 = last2.length >= 2;
+    let detail11 = '';
+    if (ok11) {
+      const m1 = last2[0]?.body?.messages;
+      const m2 = last2[1]?.body?.messages;
+      const lenOk = Array.isArray(m1) && m1.length > 0 && Array.isArray(m2) && m2.length > 0 && m1.length === m2.length;
+      ok11 = lenOk;
+      if (!lenOk) detail11 = '条目1 msgs.len=' + (m1?.length) + ' 条目2 msgs.len=' + (m2?.length);
+    } else {
+      detail11 = 'foo 条目不足, 仅 ' + last2.length + ' 条';
+    }
+    check('11. 连续 anthropic 请求日志 body.messages 完整(无 delta 清空)', ok11, detail11);
+  }
+
+  // 场景 12: 所有日志条目无 delta 残留字段
+  {
+    const withDelta = lastEntries.filter(e => deltaFields.some(f => f in e));
+    const ok12 = withDelta.length === 0;
+    check('12. 所有日志条目无 delta 残留字段(_deltaFormat/_isCheckpoint/...)', ok12,
+      ok12 ? '' : withDelta.length + ' 条带 delta 字段');
   }
 
 } finally {
