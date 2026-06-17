@@ -374,6 +374,49 @@ describe('Provider E2E 测试', () => {
       expect(entry?.providerName).toBe('glm');
       expect(entry?.endpointType).toBe('anthropic-messages');
     });
+
+    // ===== Delta 机制移除测试（曾因全局状态串话导致 body.messages 被清空）=====
+    // 对应 openspec/specs/provider-baseurl 同源的日志完整性要求:
+    // 每次请求的 body.messages 必须原样落盘, 不允许被 delta 逻辑截短或清空
+
+    it('连续两次发相同 messages, 两次日志的 body.messages 都必须完整(不被 delta 清空)', async () => {
+      const messages = [
+        { role: 'user', content: 'What is latin for Ant?' },
+        { role: 'assistant', content: 'The answer is (' },
+      ];
+
+      // 第一次请求
+      await requestViaProxy('glm', '/v1/messages', {
+        headers: { 'x-api-key': 'sk-test', 'anthropic-version': '2023-06-01' },
+        body: { model: 'claude-sonnet-4-5', max_tokens: 1, messages },
+      });
+      await new Promise(r => setTimeout(r, 400));
+
+      // 第二次请求(相同 messages, 独立请求, 非会话延续)
+      await requestViaProxy('glm', '/v1/messages', {
+        headers: { 'x-api-key': 'sk-test', 'anthropic-version': '2023-06-01' },
+        body: { model: 'claude-sonnet-4-5', max_tokens: 1, messages },
+      });
+      await new Promise(r => setTimeout(r, 500));
+
+      const logs = await readLatestLog(LOG_DIR);
+      expect(logs).not.toBeNull();
+      const glmEntries = logs!.filter(l => l.providerName === 'glm' && l.endpointType === 'anthropic-messages');
+      // 至少有这两次请求的记录
+      expect(glmEntries.length).toBeGreaterThanOrEqual(2);
+
+      // 取最后两条(本次测试发的)
+      const lastTwo = glmEntries.slice(-2);
+      for (const [i, entry] of lastTwo.entries()) {
+        const bodyMessages = (entry as any)?.body?.messages;
+        expect(bodyMessages).toBeDefined();
+        expect(Array.isArray(bodyMessages)).toBe(true);
+        // 关键断言: 必须是完整的 2 条, 不能被 delta 清空为 []
+        expect(bodyMessages.length).toBe(2);
+        expect(bodyMessages[0]).toEqual(messages[0]);
+        expect(bodyMessages[1]).toEqual(messages[1]);
+      }
+    });
   });
 });
 

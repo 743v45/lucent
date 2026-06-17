@@ -1,6 +1,5 @@
 /**
  * 会话识别器：用「首条 user 指纹 + messages 前缀校验」给 main 请求打 threadId。
- * 与 delta-storage（存储压缩）独立，identify 必须收完整原始 body（delta slice 之前）。
  */
 import { CHECKPOINT_KEY_CONTENT_LENGTH, MAX_SESSIONS } from './constants.js';
 import { extractContext } from './context-extractors.js';

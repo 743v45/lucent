@@ -9,14 +9,12 @@
  * - 支持流式响应捕获
  *
  * SSE 提取 → sse-extractor.ts
- * Delta 存储 → delta-storage.ts
  * Header 脱敏 → utils.ts
  */
 
 import { resolveEffectiveConfig } from './config.js';
 import { sanitizeHeaders } from './utils.js';
 import { extractInBackground } from './sse-extractor.js';
-import { processDelta, commitDeltaState } from './delta-storage.js';
 import * as LogWriter from './services/log-writer.js';
 import {
   INTERNAL_HEADERS,
@@ -128,11 +126,6 @@ function isTestRequest(body: unknown): boolean {
 
 // ==================== 响应处理 ====================
 
-interface DeltaState {
-  originalMessagesLength: number;
-  originalTailFp: string;
-}
-
 function buildResponseBase(response: Response): {
   status: number;
   statusText: string;
@@ -148,7 +141,6 @@ function buildResponseBase(response: Response): {
 function handleStreamingResponse(
   response: Response,
   entry: RawLogEntry,
-  deltaState: DeltaState,
 ): Response {
   entry.response = {
     ...buildResponseBase(response),
@@ -161,7 +153,7 @@ function handleStreamingResponse(
   const [clientBody, logBody] = response.body.tee();
   const task = extractInBackground(logBody, entry,
     (e) => LogWriter.writeLogEntry(e),
-    () => commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp),
+    () => {},
   );
   pendingSSETasks.add(task);
   task.finally(() => pendingSSETasks.delete(task));
@@ -178,20 +170,17 @@ function handleStreamingResponse(
 function handleStreamingFailure(
   response: Response,
   entry: RawLogEntry,
-  deltaState: DeltaState,
 ): void {
   entry.response = {
     ...buildResponseBase(response),
     body: '[Streaming Response - Capture failed]',
   };
   LogWriter.writeLogEntry(entry);
-  commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);
 }
 
 async function handleNormalResponse(
   response: Response,
   entry: RawLogEntry,
-  deltaState: DeltaState,
 ): Promise<void> {
   const cloned = response.clone();
   const text = await cloned.text();
@@ -210,7 +199,6 @@ async function handleNormalResponse(
 
   entry.tokenUsage = extractTokenUsage(body);
   LogWriter.writeLogEntry(entry);
-  commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);
 }
 
 // ==================== 请求处理 ====================
@@ -265,15 +253,6 @@ function buildRequestEntry(
   };
 }
 
-function processDeltaForMainAgent(entry: RawLogEntry, body: unknown): DeltaState {
-  const defaultState: DeltaState = { originalMessagesLength: 0, originalTailFp: '' };
-  if (!entry.mainAgent || !Array.isArray((body as any)?.messages)) {
-    return defaultState;
-  }
-  const { deltaOriginalMessagesLength, deltaOriginalTailFp } = processDelta(entry, body as any);
-  return { originalMessagesLength: deltaOriginalMessagesLength, originalTailFp: deltaOriginalTailFp };
-}
-
 // ==================== 拦截器安装 ====================
 
 export function setupInterceptor(): void {
@@ -319,7 +298,6 @@ export function setupInterceptor(): void {
     // 构建请求日志
     const body = parseRequestBody(options?.body as string | undefined);
     const entry = buildRequestEntry(urlStr, options, body, startTime, providerName, endpointType);
-    const deltaState = processDeltaForMainAgent(entry, body);
 
     // 主 Agent 检查日志轮转
     if (entry.mainAgent) {
@@ -337,17 +315,16 @@ export function setupInterceptor(): void {
 
       if (isStreamResponse) {
         try {
-          return handleStreamingResponse(response, entry, deltaState);
+          return handleStreamingResponse(response, entry);
         } catch {
-          handleStreamingFailure(response, entry, deltaState);
+          handleStreamingFailure(response, entry);
           return response;
         }
       } else {
         try {
-          await handleNormalResponse(response, entry, deltaState);
+          await handleNormalResponse(response, entry);
         } catch {
           LogWriter.writeLogEntry(entry);
-          commitDeltaState(deltaState.originalMessagesLength, deltaState.originalTailFp);
         }
         return response;
       }

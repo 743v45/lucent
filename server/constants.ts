@@ -51,10 +51,6 @@ export function unescapeLogContent(text: string): string {
   return text.replace(/\\n---\\n/g, '\n---\n');
 }
 
-// ==================== Delta 存储 ====================
-/** 每隔多少条 SSE delta 事件保存一次完整快照（用于上下文重建） */
-export const DELTA_CHECKPOINT_INTERVAL = 10;
-
 // ==================== 上下文窗口大小 ====================
 export const DEFAULT_CONTEXT_SIZE = 200000;  // 200K — 普通模型的默认上下文长度
 export const LARGE_CONTEXT_SIZE = 1000000;   // 1M — 大上下文模型的上下文长度
