@@ -143,6 +143,33 @@ npm run dev     # 启动开发服务器 (HMR)
 npm run build   # 构建生产版本
 ```
 
+### 测试
+
+```bash
+npm run test:run       # 跑全量 vitest 单测/e2e 套件
+npm run verify:e2e     # 启动真后端 + mock 上游的端到端验收
+```
+
+### 端到端验收
+
+**何时跑**：任何改动 URL 拼接、请求路由、provider 模型、协议处理、首次启动默认值的代码后，**必须**跑 `npm run verify:e2e` 才能算完成。这是 [`openspec/specs/verification-workflow`](openspec/specs/verification-workflow/spec.md) 第 3 条 Requirement 的落地工具。
+
+```bash
+npm run verify:e2e
+```
+
+脚本会：
+1. 在临时目录创建隔离配置（不碰 `~/.lucent/config.json`）+ 随机端口启动 mock 上游
+2. spawn 真后端进程（`npx tsx server/index.ts`）
+3. 发真实 HTTP 请求穿越 proxy → mock 上游，断言上游收到的内容
+4. 覆盖 12 个场景：预设供应商三种协议转发 + 自定义供应商（带/不带 `/v1`）+ 测试连接三种协议 + 三种 404 边界 + 测试连接 vs 代理转发路径一致性
+
+**怎么看**：
+- ✅ `12/12 通过, 0 失败` + 退出码 `0` = 绿
+- ❌ 任何 `✗ FAIL` + 非 0 退出码 = 红，失败项会标出实际值
+
+脚本对应 [`openspec/specs/e2e-verification`](openspec/specs/e2e-verification/spec.md)（spec 化的验收契约）。
+
 ## 参考
 
 本项目参考了 [cc-viewer](https://github.com/weiesky/cc-viewer) 的功能交互与页面排版设计。
