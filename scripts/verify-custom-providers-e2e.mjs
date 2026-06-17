@@ -303,6 +303,41 @@ async function verifyOneCombo(provider, protocol, mode) {
   check(`⑤ ${provider} ${protocol} ${mode}: Web UI 渲染 request-body 含 "${protocolKey}"`,
     reqVisible && reqText.includes(protocolKey), `visible=${reqVisible}`);
 
+  // ⑤ 补充: JsonBlock 默认折叠到 level 2 (数组里对象折叠成 {})，
+  // 点「展开全部」按钮后数组内字段完全可见(防 JsonBlock 折叠 bug 回归)
+  // 注意: openai-responses 用 string input (无对象嵌套)，不需要折叠断言
+  if (protocol !== 'openai-responses') {
+    const collapsedRegex = /messages:\[\{\},\{\}\]/;
+    const collapsedHasBraces = collapsedRegex.test(reqText);
+    check(`⑤ ${provider} ${protocol} ${mode}: JsonBlock 默认折叠(level 2)`,
+      collapsedHasBraces, `messages 部分: ${reqText.match(/messages:\[[^\]]*\]/)?.[0]}`);
+  }
+  // 点展开全部(对所有 3 协议都验)
+  const expandBtn = page.getByTestId('expand-all');
+  const expandBtnVisible = await expandBtn.isVisible().catch(() => false);
+  if (expandBtnVisible) {
+    await expandBtn.click();
+    await page.waitForTimeout(400);
+    const expandedText = await page.getByTestId('request-body').textContent();
+    // 展开后数组里能看到 role/input 等字段(不是 {})
+    // anthropic/openai-chat: messages 数组里能看到 role
+    // openai-responses: input 字段可见(string 或 array 都行)
+    let expandedOk = false;
+    let expandedDetail = '';
+    if (protocol === 'openai-responses') {
+      // input 是 string (e.g. "What is latin for Ant?") 或 array of items
+      expandedOk = expandedText?.includes('input:') || expandedText?.includes('"input"');
+      expandedDetail = `含 input=${expandedOk}`;
+    } else {
+      const roleVisible = expandedText?.includes('"role"') || expandedText?.includes('role:');
+      const noBraces = !/messages:\[\{\},\{\}\]/.test(expandedText);
+      expandedOk = roleVisible && noBraces;
+      expandedDetail = `role=${roleVisible} noBraces=${noBraces}`;
+    }
+    check(`⑤ ${provider} ${protocol} ${mode}: 点「展开全部」后内字段可见(无 JsonBlock 折叠 bug)`,
+      expandedOk, expandedDetail);
+  }
+
   // 列表 log-row 也得能看见(点开过详情就能回来)
   await page.goto(`http://127.0.0.1:${VITE_PORT}/`);
   await page.waitForTimeout(300);
