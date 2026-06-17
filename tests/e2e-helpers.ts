@@ -357,7 +357,16 @@ function anthropicToolUseSSEEvents(): string[] {
         id: 'msg_e2e_tool', type: 'message', role: 'assistant',
         model: 'claude-sonnet-4-20250514', content: [],
         stop_reason: null, stop_sequence: null,
-        usage: { input_tokens: 400, output_tokens: 0 },
+        usage: {
+          input_tokens: 400, output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+          output_tokens_details: { thinking_tokens: 0 },
+          server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 },
+          service_tier: 'standard',
+          inference_geo: 'us-east-1',
+        },
       },
     }) + '\n\n',
     'event: content_block_start\ndata: ' + JSON.stringify({
@@ -391,16 +400,29 @@ function anthropicThinkingSSEEvents(): string[] {
         id: 'msg_e2e_think', type: 'message', role: 'assistant',
         model: 'claude-sonnet-4-20250514', content: [],
         stop_reason: null, stop_sequence: null,
-        usage: { input_tokens: 300, output_tokens: 0 },
+        usage: {
+          input_tokens: 300, output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 0,
+          cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+          output_tokens_details: { thinking_tokens: 0 },
+          server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 },
+          service_tier: 'standard',
+          inference_geo: 'us-east-1',
+        },
       },
     }) + '\n\n',
     'event: content_block_start\ndata: ' + JSON.stringify({
       type: 'content_block_start', index: 0,
-      content_block: { type: 'thinking', thinking: '' },
+      content_block: { type: 'thinking', thinking: '', signature: '' },
     }) + '\n\n',
     'event: content_block_delta\ndata: ' + JSON.stringify({
       type: 'content_block_delta', index: 0,
       delta: { type: 'thinking_delta', thinking: 'Let me analyze...' },
+    }) + '\n\n',
+    'event: content_block_delta\ndata: ' + JSON.stringify({
+      type: 'content_block_delta', index: 0,
+      delta: { type: 'signature_delta', signature: 'WaUjzwoIxt7DT4F4...' },
     }) + '\n\n',
     'event: content_block_stop\ndata: ' + JSON.stringify({
       type: 'content_block_stop', index: 0,
@@ -450,11 +472,14 @@ function anthropicJsonResponse(): object {
 }
 
 /** Anthropic 标准错误响应 */
+/** request_id 格式: req_ + 24 字符 base62 (官方示例 req_011CSHoEeqs5C35K2UUqR7Fy), per docs § 4 */
 function anthropicErrorBody(errorType: string, message: string, requestId?: string): object {
   return {
     type: 'error',
     error: { type: errorType, message },
-    request_id: requestId ?? 'req_' + Math.random().toString(36).slice(2, 18).padEnd(17, '0'),
+    request_id: requestId ?? ('req_' + Array.from({ length: 24 }, () =>
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'[Math.floor(Math.random() * 62)]
+    ).join('')),
   };
 }
 
@@ -509,6 +534,7 @@ function openaiChatToolCallsSSEEvents(): string[] {
         prompt_tokens_details: { cached_tokens: 0, audio_tokens: 0 },
         completion_tokens_details: { reasoning_tokens: 0, audio_tokens: 0 },
       },
+      service_tier: 'default',
     }) + '\n\n',
     'data: [DONE]\n\n',
   ];
@@ -532,11 +558,18 @@ function openaiChatJsonBody(): object {
 
 /** Responses API 完整事件链 (按 docs/protocols/03-openai-responses.md) */
 /** 事件顺序: response.created → output_item.added → content_part.added → output_text.delta × 多 → text.done → content_part.done → output_item.done → response.completed (8 个事件) */
+/** response.created/completed 的 response 子对象必须是完整 Response schema (per doc § 2 + § 3 SDK: ResponseCreatedEvent.response / ResponseCompletedEvent.response 均为完整 Response) */
 function openaiResponsesSSEEvents(): string[] {
+  const createdResponse = openaiResponsesResponseObject('resp-e2e', 'in_progress', [], null);
+  const completedResponse = openaiResponsesResponseObject(
+    'resp-e2e', 'completed',
+    [{ id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello! World.', annotations: [] }] }],
+    1700000005,
+  );
   return [
     'event: response.created\ndata: ' + JSON.stringify({
       type: 'response.created', sequence_number: 0,
-      response: { id: 'resp-e2e', object: 'response', status: 'in_progress', model: 'gpt-4o' },
+      response: createdResponse,
     }) + '\n\n',
     'event: response.output_item.added\ndata: ' + JSON.stringify({
       type: 'response.output_item.added', output_index: 0, sequence_number: 1,
@@ -565,13 +598,39 @@ function openaiResponsesSSEEvents(): string[] {
     }) + '\n\n',
     'event: response.completed\ndata: ' + JSON.stringify({
       type: 'response.completed', sequence_number: 8,
-      response: {
-        id: 'resp-e2e', object: 'response', status: 'completed', model: 'gpt-4o',
-        output: [{ id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello! World.', annotations: [] }] }],
-        usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
-      },
+      response: completedResponse,
     }) + '\n\n',
   ];
+}
+
+/**
+ * 构造完整 Response 对象 (doc § 2 schema)
+ * - created (in_progress): completed_at = null, output = []
+ * - completed: completed_at 有值, output 填充, output_text 合并
+ */
+function openaiResponsesResponseObject(id: string, status: string, output: object[], completedAt: number | null): object {
+  const outputText = output
+    .flatMap((item: any) => (item.content || [])
+      .filter((c: any) => c.type === 'output_text')
+      .map((c: any) => c.text))
+    .join('');
+  return {
+    id, object: 'response', status, model: 'gpt-4o',
+    created_at: 1700000000,
+    completed_at: completedAt,
+    parallel_tool_calls: true, temperature: 1, top_p: 1, tools: [],
+    instructions: null, max_output_tokens: null, metadata: null, store: false, background: false,
+    output_text: outputText || '',
+    output,
+    previous_response_id: null, prompt: null, reasoning: null,
+    text: null, tool_choice: 'auto', truncation: 'disabled',
+    prompt_cache_key: null, prompt_cache_retention: null,
+    safety_identifier: null, service_tier: 'default',
+    usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, input_tokens_details: { cached_tokens: 0 }, output_tokens_details: { reasoning_tokens: 0 } },
+    user: null,
+    error: null, incomplete_details: null,
+    conversation: null,
+  };
 }
 
 /** 非流式 Responses JSON */
