@@ -178,9 +178,10 @@ npm run verify:e2e
 npm run verify:anthropic       # anthropic-messages 全链路（流式 SSE + 非流式 JSON × 5 环节 × UI）
 npm run verify:openai-chat     # openai-chat 同样覆盖
 npm run verify:openai-responses # openai-responses 同样覆盖（注意：请求用 input 不是 messages）
+npm run verify:custom           # 自定义供应商(hxy + hxy2) 配齐 3 协议 × 5 环节 = 60 验收点
 ```
 
-每条命令启动真后端 + vite dev + mock 上游 + playwright headless 浏览器，断言 10 个验收点（含 Web UI data-testid 渲染匹配）。三个协议 × 10 = **30 个验收点**全覆盖。
+每条命令启动真后端 + vite dev + mock 上游 + playwright headless 浏览器，断言 10-60 个验收点（含 Web UI data-testid 渲染匹配）。`verify:custom` 用 1 个 mock upstream 同时处理 3 协议，遍历 2 个自定义供应商 × 3 协议 × 2 模式。
 
 契约见 [`openspec/specs/protocol-chain-verification`](openspec/specs/protocol-chain-verification/spec.md)。
 
