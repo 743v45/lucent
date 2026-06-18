@@ -5,6 +5,8 @@
  */
 
 import type { EndpointType } from './types.js';
+import { inferEndpointTypeFromPath, getStrippedPaths } from './endpoint-registry.js';
+import { PROTOCOL_IDS } from '../shared/protocols.js';
 import createDebug from 'debug';
 const log = createDebug('lucent:context');
 
@@ -43,22 +45,28 @@ export interface ExtractedContext {
 export function detectEndpointType(url: string): EndpointType | null {
   if (!url || typeof url !== 'string') return null;
 
-  // /custom/{name}/{rest} 格式 → 从 rest 解析
+  // /custom/{name}/{rest} 格式 → 剥出 strippedPath 后委托 registry 推断
+  // (path 字面量单源取自 PROTOCOL_REGISTRY,protocol-model spec Req 3)
   const customMatch = /^\/custom\/[a-zA-Z0-9_-]+(\/.*)$/.exec(new URL(url, 'http://x').pathname);
   if (customMatch) {
-    const rest = customMatch[1];
-    if (rest === '/v1/messages') return 'anthropic-messages';
-    if (rest === '/v1/chat/completions' || rest === '/v1/completions') return 'openai-chat';
-    if (rest === '/v1/responses') return 'openai-responses';
-    return null;
+    const strippedPath = stripLeadingV1(customMatch[1]);
+    return inferEndpointTypeFromPath(strippedPath);
   }
 
-  // 老路径 → 直接检测（兼容历史日志）
-  if (url.includes('/v1/messages')) return 'anthropic-messages';
-  if (url.includes('/v1/chat/completions') || url.includes('/v1/completions')) return 'openai-chat';
-  if (url.includes('/v1/responses')) return 'openai-responses';
+  // 老路径 → 直接检测（兼容历史日志:旧日志无 endpointType 字段,需从 URL 反推）
+  // 匹配常量从 registry 派生,不再手写字面量。
+  for (const id of PROTOCOL_IDS) {
+    for (const p of getStrippedPaths(id)) {
+      if (url.includes(`/v1${p}`)) return id;
+    }
+  }
 
   return null;
+}
+
+/** 去掉单个前导 /v1 段(与 proxy.ts 的 strip 逻辑一致) */
+function stripLeadingV1(rest: string): string {
+  return rest.startsWith('/v1/') ? rest.slice(3) : rest;
 }
 
 // 兼容旧调用（detectApiType 已废弃，用 detectEndpointType）

@@ -7,6 +7,7 @@
 
 import type { EndpointType, ExtractedInfo } from './types.js';
 import type { ExtractedContext, NormalizedMessage, NormalizedTool } from './context-extractors.js';
+import { PROTOCOL_REGISTRY } from '../shared/protocols.js';
 
 // ==================== Handler 接口 ====================
 
@@ -54,6 +55,15 @@ export function inferEndpointTypeFromPath(strippedPath: string): EndpointType | 
     if (handler.matchPath(strippedPath)) return type;
   }
   return null;
+}
+
+/**
+ * 返回某协议的所有 strippedPaths(单源取自 PROTOCOL_REGISTRY)。
+ * 供 endpoint-handlers.matchPath / context-extractors / 测试连接共用,
+ * 避免 path 字面量散落(protocol-model spec Req 3)。
+ */
+export function getStrippedPaths(type: EndpointType): readonly string[] {
+  return PROTOCOL_REGISTRY[type].strippedPaths;
 }
 
 /**

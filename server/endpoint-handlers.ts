@@ -7,7 +7,7 @@
  * 在服务启动时调用 registerAllEndpointHandlers() 即可。
  */
 
-import { registerEndpoint } from './endpoint-registry.js';
+import { registerEndpoint, getStrippedPaths } from './endpoint-registry.js';
 import { ENDPOINT_TYPES } from './types.js';
 import type { ExtractedInfo } from './types.js';
 import type { ExtractedContext } from './context-extractors.js';
@@ -16,7 +16,7 @@ import type { ExtractedContext } from './context-extractors.js';
 
 registerEndpoint('anthropic-messages', {
   matchPath(strippedPath: string): boolean {
-    return strippedPath === '/messages';
+    return getStrippedPaths('anthropic-messages').includes(strippedPath);
   },
 
   extractSSE(eventType: string, data: any, acc: ExtractedInfo): void {
@@ -89,7 +89,7 @@ registerEndpoint('anthropic-messages', {
 
 registerEndpoint('openai-chat', {
   matchPath(strippedPath: string): boolean {
-    return strippedPath === '/chat/completions' || strippedPath === '/completions';
+    return getStrippedPaths('openai-chat').includes(strippedPath);
   },
 
   extractSSE(_eventType: string, data: any, acc: ExtractedInfo): void {
@@ -163,7 +163,7 @@ registerEndpoint('openai-chat', {
 
 registerEndpoint('openai-responses', {
   matchPath(strippedPath: string): boolean {
-    return strippedPath === '/responses';
+    return getStrippedPaths('openai-responses').includes(strippedPath);
   },
 
   extractSSE(_eventType: string, data: any, acc: ExtractedInfo): void {
