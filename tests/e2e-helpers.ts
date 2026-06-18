@@ -175,8 +175,21 @@ export type OpenAIResponseMode =
   | 'error-429'
   | 'error-500';
 
-/** mock 上游响应格式 */
-export type MockFormat = 'anthropic' | 'openai';
+/** mock 上游响应格式
+ * - 'anthropic' / 'openai': 固定单协议（mode 带协议前缀如 chat-sse / responses-sse）
+ * - 'auto': 按 URL 自动分派协议（/messages→anthropic, /chat/completions→openai-chat,
+ *   /responses→openai-responses），一个实例同时服务三协议，mode 用统一的 AutoResponseMode
+ */
+export type MockFormat = 'anthropic' | 'openai' | 'auto';
+
+/** auto 模式下的统一响应 mode（协议由 URL 决定，mode 不带协议前缀） */
+export type AutoResponseMode =
+  | 'sse'               // 流式（protocol by URL: anthropic→sse-text, chat→chat-sse, responses→responses-sse）
+  | 'json'              // 非流式 JSON
+  | 'error-400'
+  | 'error-401'
+  | 'error-429'
+  | 'error-500';
 
 /** Mock 上游实例 */
 export interface MockUpstream {
@@ -186,8 +199,8 @@ export interface MockUpstream {
   requests: CapturedRequest[];
   /** 清空已记录的请求（替代 beforeEach 手动 length=0） */
   reset(): void;
-  /** 切换响应模式（Anthropic: sse-text 等；OpenAI: chat-sse 等） */
-  setMode(mode: AnthropicResponseMode | OpenAIResponseMode): void;
+  /** 切换响应模式（Anthropic: sse-text 等；OpenAI: chat-sse 等；auto: sse/json/error-*） */
+  setMode(mode: AnthropicResponseMode | OpenAIResponseMode | AutoResponseMode): void;
   /** 关闭并释放端口 */
   close(): Promise<void>;
 }
@@ -205,7 +218,42 @@ export interface MockUpstream {
 export async function createMockUpstream(opts?: { name?: string; format?: MockFormat }): Promise<MockUpstream> {
   const requests: CapturedRequest[] = [];
   const format: MockFormat = opts?.format ?? 'anthropic';
-  let mode: AnthropicResponseMode | OpenAIResponseMode = format === 'openai' ? 'chat-sse' : 'sse-text';
+  let mode: AnthropicResponseMode | OpenAIResponseMode | AutoResponseMode =
+    format === 'openai' ? 'chat-sse' : format === 'auto' ? 'sse' : 'sse-text';
+
+  /** auto 模式下按 URL 决定 protocol, 然后按 mode 响应 */
+  const respondAuto = (url: string, m: AutoResponseMode, res: ServerResponse): boolean => {
+    const isAnthropic = url.includes('/messages');
+    const isChat = url.includes('/chat/completions');
+    const isResponses = url.includes('/responses');
+    if (!isAnthropic && !isChat && !isResponses) {
+      res.writeHead(404); res.end(); return false;
+    }
+    // error mode 三协议共用 status 映射, body 各自协议格式
+    if (m === 'error-400' || m === 'error-401' || m === 'error-429' || m === 'error-500') {
+      const status = Number(m.split('-')[1]);
+      if (isAnthropic) {
+        const typeMap: Record<number, string> = { 400: 'invalid_request_error', 401: 'authentication_error', 429: 'rate_limit_error', 500: 'api_error' };
+        respondJSON(res, status, anthropicErrorBody(typeMap[status], `mock ${status}`));
+      } else {
+        const codeMap: Record<number, string> = { 400: 'invalid_request_error', 401: 'invalid_api_key', 429: 'rate_limit_exceeded', 500: 'server_error' };
+        const msgMap: Record<number, string> = { 400: 'Invalid model', 401: 'Incorrect API key', 429: 'Rate limit exceeded', 500: 'Internal server error' };
+        respondJSON(res, status, openaiErrorByStatus(status, codeMap[status], msgMap[status]));
+      }
+      return true;
+    }
+    // sse / json mode
+    if (m === 'sse') {
+      if (isAnthropic) respondSSE(res, anthropicTextSSEEvents());
+      else if (isChat) respondSSE(res, openaiChatSSEEvents());
+      else respondSSE(res, openaiResponsesSSEEvents());
+    } else { // json
+      if (isAnthropic) respondJSON(res, 200, anthropicJsonResponse());
+      else if (isChat) respondJSON(res, 200, openaiChatJsonBody());
+      else respondJSON(res, 200, openaiResponsesJsonBody());
+    }
+    return true;
+  };
 
   const handler = async (req: IncomingMessage, res: ServerResponse) => {
     const chunks: Buffer[] = [];
@@ -219,7 +267,9 @@ export async function createMockUpstream(opts?: { name?: string; format?: MockFo
       body,
     });
 
-    if (format === 'openai') {
+    if (format === 'auto') {
+      respondAuto(req.url || '/', mode as AutoResponseMode, res);
+    } else if (format === 'openai') {
       switch (mode as OpenAIResponseMode) {
         case 'chat-sse':          respondSSE(res, openaiChatSSEEvents()); break;
         case 'chat-json':         respondJSON(res, 200, openaiChatJsonBody()); break;
@@ -260,7 +310,7 @@ export async function createMockUpstream(opts?: { name?: string; format?: MockFo
     port,
     requests,
     reset() { requests.length = 0; },
-    setMode(m: AnthropicResponseMode | OpenAIResponseMode) { mode = m; },
+    setMode(m: AnthropicResponseMode | OpenAIResponseMode | AutoResponseMode) { mode = m; },
     close() {
       return new Promise<void>((resolve) => {
         server.close(() => resolve());
@@ -636,20 +686,11 @@ function openaiResponsesResponseObject(id: string, status: string, output: objec
 /** 非流式 Responses JSON */
 /** 完整 schema 按 docs/protocols/03-openai-responses.md § 2 */
 function openaiResponsesJsonBody(): object {
-  return {
-    id: 'resp-e2e-json', object: 'response', status: 'completed', model: 'gpt-4o',
-    created_at: 1700000000, completed_at: 1700000005,
-    parallel_tool_calls: true, temperature: 1, top_p: 1, tools: [],
-    instructions: null, max_output_tokens: null, metadata: null, store: false, background: false,
-    output_text: 'Hello from JSON.',
-    output: [{ id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello from JSON.', annotations: [] }] }],
-    usage: {
-      input_tokens: 10, output_tokens: 5, total_tokens: 15,
-      input_tokens_details: { cached_tokens: 0 },
-      output_tokens_details: { reasoning_tokens: 0 },
-    },
-    error: null, incomplete_details: null,
-  };
+  return openaiResponsesResponseObject(
+    'resp-e2e-json', 'completed',
+    [{ id: 'msg_e2e', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'Hello from JSON.', annotations: [] }] }],
+    1700000005,
+  );
 }
 
 /** OpenAI 标准错误响应 */
@@ -671,4 +712,211 @@ function openaiErrorByStatus(status: number, code: string, message: string): obj
     529: 'overloaded_error',
   };
   return openaiErrorBody(code, message, typeByStatus[status] ?? 'invalid_request_error');
+}
+
+// ==================== Schema 校验函数 ====================
+// 校验 verify 脚本拿到的实际响应（SSE 原始文本 或 JSON parsed object）。
+// 返回 { ok, errors }，errors 非空 → 断言 FAIL，证明 fixture 或链路有问题。
+// 目的：让 verify 断言验「格式完整」而非「关键字存在」，消除假绿。
+
+export interface SchemaResult { ok: boolean; errors: string[]; }
+
+/** 把 SSE 原始文本拆成 [{event, data}]，data 已 parse */
+function parseSSEEvents(raw: string): Array<{ event: string; data: any }> {
+  const events: Array<{ event: string; data: any }> = [];
+  const frames = raw.split('\n\n');
+  for (const frame of frames) {
+    const lines = frame.split('\n');
+    let event = '';
+    let dataStr = '';
+    for (const line of lines) {
+      if (line.startsWith('event: ')) event = line.slice(7);
+      else if (line.startsWith('data: ')) dataStr += line.slice(6);
+    }
+    if (event || dataStr) {
+      let data: any = null;
+      try { data = JSON.parse(dataStr); } catch { data = dataStr; }
+      events.push({ event, data });
+    }
+  }
+  return events;
+}
+
+function checkFields(obj: any, fields: string[], path: string, errors: string[]): void {
+  if (obj == null || typeof obj !== 'object') {
+    errors.push(`${path} 不是对象`);
+    return;
+  }
+  for (const f of fields) {
+    if (!(f in obj)) errors.push(`${path}.${f} 缺失`);
+  }
+}
+
+/**
+ * 校验 Anthropic 协议响应
+ * @param input SSE 原始文本（string）或 JSON parsed object
+ * @param kind  'sse' | 'json' | 'error'
+ */
+export function validateAnthropicBody(input: string | object, kind: 'sse' | 'json' | 'error'): SchemaResult {
+  const errors: string[] = [];
+  if (kind === 'error') {
+    const body = typeof input === 'string' ? JSON.parse(input) : input;
+    if (body.type !== 'error') errors.push('error body type !== "error"');
+    if (!body.error || typeof body.error.type !== 'string') errors.push('error.type 缺失/非 string');
+    if (!body.error || typeof body.error.message !== 'string') errors.push('error.message 缺失/非 string');
+    if (typeof body.request_id !== 'string' || !/^req_[A-Za-z0-9]{24}$/.test(body.request_id)) {
+      errors.push(`request_id 格式错误: ${body.request_id} (应为 req_+24 base62)`);
+    }
+    return { ok: errors.length === 0, errors };
+  }
+  if (kind === 'sse') {
+    const events = parseSSEEvents(input as string);
+    const requiredEventTypes = ['message_start', 'content_block_start', 'content_block_delta', 'content_block_stop', 'message_delta', 'message_stop'];
+    const seen = new Set(events.map(e => e.event));
+    for (const t of requiredEventTypes) {
+      if (!seen.has(t)) errors.push(`SSE 缺事件: ${t}`);
+    }
+    // message_start.message.usage 必须 9 字段
+    const startEv = events.find(e => e.event === 'message_start');
+    if (startEv?.data?.message?.usage) {
+      const usageFields = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'cache_creation', 'inference_geo', 'output_tokens_details', 'server_tool_use', 'service_tier'];
+      checkFields(startEv.data.message.usage, usageFields, 'message_start.usage', errors);
+    } else {
+      errors.push('message_start.message.usage 缺失');
+    }
+    // thinking 块的 content_block_start 必须带 signature
+    for (const e of events) {
+      if (e.event === 'content_block_start' && e.data?.content_block?.type === 'thinking') {
+        if (!('signature' in e.data.content_block)) errors.push('thinking content_block_start 缺 signature 字段');
+      }
+    }
+    // thinking 块必须有 signature_delta 事件（非 omitted 场景）
+    const hasThinkingBlock = events.some(e => e.event === 'content_block_start' && e.data?.content_block?.type === 'thinking');
+    if (hasThinkingBlock) {
+      const hasSigDelta = events.some(e => e.event === 'content_block_delta' && e.data?.delta?.type === 'signature_delta');
+      if (!hasSigDelta) errors.push('thinking 块缺 signature_delta 事件');
+    }
+    return { ok: errors.length === 0, errors };
+  }
+  // json
+  const body = typeof input === 'string' ? JSON.parse(input) : input;
+  if (body.type !== 'message') errors.push('JSON type !== "message"');
+  if (body.role !== 'assistant') errors.push('JSON role !== "assistant"');
+  if (!Array.isArray(body.content)) errors.push('JSON content 非数组');
+  if (typeof body.model !== 'string') errors.push('JSON model 非 string');
+  const usageFields = ['input_tokens', 'output_tokens', 'cache_creation_input_tokens', 'cache_read_input_tokens', 'cache_creation', 'inference_geo', 'output_tokens_details', 'server_tool_use', 'service_tier'];
+  if (body.usage) checkFields(body.usage, usageFields, 'usage', errors);
+  else errors.push('JSON usage 缺失');
+  return { ok: errors.length === 0, errors };
+}
+
+/**
+ * 校验 OpenAI Chat 协议响应
+ * @param input SSE 原始文本（string）或 JSON parsed object
+ * @param kind  'sse' | 'json' | 'error'
+ */
+export function validateOpenAIChatBody(input: string | object, kind: 'sse' | 'json' | 'error'): SchemaResult {
+  const errors: string[] = [];
+  if (kind === 'error') {
+    const body = typeof input === 'string' ? JSON.parse(input) : input;
+    if (!body.error) { errors.push('error 对象缺失'); return { ok: false, errors }; }
+    if (typeof body.error.message !== 'string') errors.push('error.message 非string');
+    if (typeof body.error.code !== 'string') errors.push('error.code 非string');
+    if (typeof body.error.type !== 'string') errors.push('error.type 非string');
+    if (!('param' in body.error)) errors.push('error.param 缺失(应为 null)');
+    return { ok: errors.length === 0, errors };
+  }
+  if (kind === 'sse') {
+    const events = parseSSEEvents(input as string);
+    // chunk 事件无 event 字段（data 直接是 chunk object），按 data.object 判断
+    const chunks = events.filter(e => e.data?.object === 'chat.completion.chunk');
+    if (chunks.length === 0) errors.push('SSE 无 chat.completion.chunk 帧');
+    // 末帧(带 usage 的)必须有 service_tier
+    const withUsage = chunks.filter(c => c.data?.usage);
+    if (withUsage.length === 0) {
+      errors.push('SSE 无带 usage 的 chunk');
+    } else {
+      const last = withUsage[withUsage.length - 1];
+      if (!('service_tier' in last.data)) errors.push('带 usage 的末 chunk 缺 service_tier');
+      if (last.data.usage) {
+        if (!last.data.usage.prompt_tokens_details) errors.push('usage 缺 prompt_tokens_details');
+        if (!last.data.usage.completion_tokens_details) errors.push('usage 缺 completion_tokens_details');
+      }
+    }
+    if (!input.includes('[DONE]')) errors.push('SSE 缺 [DONE] 终止帧');
+    return { ok: errors.length === 0, errors };
+  }
+  // json
+  const body = typeof input === 'string' ? JSON.parse(input) : input;
+  if (body.object !== 'chat.completion') errors.push('JSON object !== "chat.completion"');
+  if (!Array.isArray(body.choices) || body.choices.length === 0) errors.push('JSON choices 非数组/空');
+  else {
+    const msg = body.choices[0]?.message;
+    if (!msg || typeof msg.role !== 'string') errors.push('choices[0].message.role 缺失');
+  }
+  if (typeof body.model !== 'string') errors.push('JSON model 非string');
+  if (typeof body.service_tier !== 'string') errors.push('JSON 缺 service_tier');
+  if (body.usage) {
+    if (!body.usage.prompt_tokens_details) errors.push('usage 缺 prompt_tokens_details');
+    if (!body.usage.completion_tokens_details) errors.push('usage 缺 completion_tokens_details');
+  } else errors.push('JSON usage 缺失');
+  return { ok: errors.length === 0, errors };
+}
+
+/**
+ * 校验 OpenAI Responses 协议响应
+ * @param input SSE 原始文本（string）或 JSON parsed object
+ * @param kind  'sse' | 'json' | 'error'
+ */
+export function validateOpenAIResponsesBody(input: string | object, kind: 'sse' | 'json' | 'error'): SchemaResult {
+  const errors: string[] = [];
+  if (kind === 'error') {
+    return validateOpenAIChatBody(input, 'error'); // 同 schema
+  }
+  // Response 完整字段集（doc § 2）
+  const responseRequiredFields = [
+    'id', 'object', 'status', 'model', 'created_at', 'completed_at',
+    'parallel_tool_calls', 'temperature', 'top_p', 'tools',
+    'instructions', 'max_output_tokens', 'metadata', 'store', 'background',
+    'output_text', 'output', 'previous_response_id', 'prompt', 'reasoning',
+    'text', 'tool_choice', 'truncation', 'prompt_cache_key', 'prompt_cache_retention',
+    'safety_identifier', 'service_tier', 'usage', 'user',
+    'error', 'incomplete_details', 'conversation',
+  ];
+  if (kind === 'sse') {
+    const events = parseSSEEvents(input as string);
+    // 共用字段: 非 lifecycle 事件必须有 sequence_number
+    const lifecycleEvents = new Set(['response.created', 'response.completed', 'response.incomplete', 'response.failed']);
+    for (const e of events) {
+      if (e.data?.type && e.data.type.startsWith('response.') && !lifecycleEvents.has(e.data.type)) {
+        if (typeof e.data.sequence_number !== 'number') errors.push(`${e.data.type} 缺 sequence_number`);
+      }
+    }
+    // output_text.delta / output_item.added / content_part.added 必须有 item_id + output_index
+    for (const e of events) {
+      const t = e.data?.type;
+      if (t === 'response.output_text.delta' || t === 'response.output_item.added' || t === 'response.content_part.added') {
+        if (typeof e.data.item_id !== 'string' && t !== 'response.output_item.added') errors.push(`${t} 缺 item_id`);
+        if (typeof e.data.output_index !== 'number') errors.push(`${t} 缺 output_index`);
+      }
+    }
+    // response.created / completed 的 response 子对象必须是完整 Response
+    for (const e of events) {
+      if (e.data?.type === 'response.created' || e.data?.type === 'response.completed') {
+        checkFields(e.data.response, responseRequiredFields, `${e.data.type}.response`, errors);
+      }
+    }
+    // 完整事件链
+    const requiredChain = ['response.created', 'response.output_item.added', 'response.content_part.added', 'response.output_text.delta', 'response.output_text.done', 'response.content_part.done', 'response.output_item.done', 'response.completed'];
+    const seen = new Set(events.map(e => e.data?.type));
+    for (const t of requiredChain) {
+      if (!seen.has(t)) errors.push(`SSE 缺事件: ${t}`);
+    }
+    return { ok: errors.length === 0, errors };
+  }
+  // json
+  const body = typeof input === 'string' ? JSON.parse(input) : input;
+  if (body.object !== 'response') errors.push('JSON object !== "response"');
+  checkFields(body, responseRequiredFields, 'response', errors);
+  return { ok: errors.length === 0, errors };
 }
