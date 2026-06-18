@@ -53,6 +53,12 @@ function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): voi
     if (delta?.content) {
       acc.text += delta.content;
     }
+    // reasoning（OpenAI o1/o3 的 reasoning_content + DeepSeek 等 API 的 reasoning）
+    if (delta?.reasoning_content) {
+      acc.thinking += delta.reasoning_content;
+    } else if (delta?.reasoning) {
+      acc.thinking += delta.reasoning;
+    }
     if (delta?.tool_calls) {
       for (const tc of delta.tool_calls) {
         if (tc.index !== undefined) {
@@ -80,6 +86,10 @@ function extractFromEvent(eventType: string, data: any, acc: ExtractedInfo): voi
   else if (data.type && typeof data.type === 'string' && data.type.startsWith('response.')) {
     if (data.type === 'response.output_text.delta') {
       acc.text += data.delta || '';
+    }
+    // reasoning 内容计入 thinking（标准 + 慧星云兼容两种格式）
+    if (data.type === 'response.reasoning.delta') {
+      acc.thinking += data.delta || '';
     }
     // 慧星云兼容格式：reasoning 内容计入 thinking
     if (data.type === 'response.reasoning_text.delta') {

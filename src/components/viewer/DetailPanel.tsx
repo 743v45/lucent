@@ -555,7 +555,8 @@ function sseLinesToRawText(lines: SSERawLine[]): string {
 
 function ResponseTab({ log, bodyCollapsed, expandAll, onToggleCollapsed, onToggleExpandAll, onCopy }: ResponseTabProps): JSX.Element {
   const response = log.response;
-  const [sseViewMode, setSseViewMode] = useState<SSEViewMode>('extracted');
+  // 默认 raw：原始 SSE 文本完整可见(含 ping/error 等元事件)，结构化视图丢失这些事件
+  const [sseViewMode, setSseViewMode] = useState<SSEViewMode>('raw');
 
   // 判断是否为 SSE 原始数据
   const isSSE = response.body != null
