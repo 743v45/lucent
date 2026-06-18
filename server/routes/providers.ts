@@ -21,11 +21,12 @@ import {
 } from '../config.js';
 import {
   ANTHROPIC_API_VERSION,
-  TEST_MODELS,
   TEST_REQUEST_CONTENT,
   TEST_MAX_TOKENS,
 } from '../constants.js';
 import { isEndpointType, PRESET_NAMES, type EndpointType, type Provider } from '../types.js';
+import { PROTOCOL_REGISTRY } from '../../shared/protocols.js';
+import { getStrippedPaths } from '../endpoint-registry.js';
 import createDebug from 'debug';
 const dbg = createDebug('lucent:routes:providers');
 
@@ -197,28 +198,29 @@ export function createProvidersRouter(): Router {
 
       // baseUrl 已含版本路径（与 presets 一致：如 https://api.anthropic.com/v1），
       // 此处只补协议路径，不重复加 /v1。与 proxy 主转发（proxy.ts:211 strip 下游 /v1 后拼 baseUrl）同源。
+      // path 单源:从 registry 取首个 strippedPath 拼到 baseUrl 后(protocol-model spec Req 3)。
+      // model 单源:从 registry 取 defaultTestModel(Req 6)。
+      const strippedPath = getStrippedPaths(endpointType)[0];
+      testUrl = `${baseUrl}${strippedPath}`;
       switch (endpointType) {
         case 'anthropic-messages':
-          testUrl = `${baseUrl}/messages`;
           headers['anthropic-version'] = ANTHROPIC_API_VERSION;
           testBody = {
-            model: TEST_MODELS['anthropic-messages'],
+            model: PROTOCOL_REGISTRY['anthropic-messages'].defaultTestModel,
             max_tokens: TEST_MAX_TOKENS,
             messages: [{ role: 'user', content: TEST_REQUEST_CONTENT }],
           };
           break;
         case 'openai-chat':
-          testUrl = `${baseUrl}/chat/completions`;
           testBody = {
-            model: TEST_MODELS['openai-chat'],
+            model: PROTOCOL_REGISTRY['openai-chat'].defaultTestModel,
             max_tokens: TEST_MAX_TOKENS,
             messages: [{ role: 'user', content: TEST_REQUEST_CONTENT }],
           };
           break;
         case 'openai-responses':
-          testUrl = `${baseUrl}/responses`;
           testBody = {
-            model: TEST_MODELS['openai-responses'],
+            model: PROTOCOL_REGISTRY['openai-responses'].defaultTestModel,
             input: TEST_REQUEST_CONTENT,
           };
           break;

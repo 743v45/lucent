@@ -65,14 +65,6 @@ export const API_KEY_MASK_THRESHOLD = 12;  // key 长度超过此值才进行脱
 export const API_KEY_MASK_PREFIX = 8;      // 保留前 8 位明文
 export const API_KEY_MASK_SUFFIX = 4;      // 保留末 4 位明文
 
-// ==================== 测试连接模型 ====================
-/** 各 API 类型用于「测试连接」功能的廉价模型 */
-export const TEST_MODELS = {
-  'anthropic-messages': 'claude-sonnet-4-20250514',
-  'openai-chat': 'gpt-4o-mini',
-  'openai-responses': 'gpt-4o-mini',
-} as const;
-
 export const TEST_REQUEST_CONTENT = 'hi';  // 测试连接时发送的消息内容
 export const TEST_MAX_TOKENS = 1;           // 测试连接时请求的最大 token 数（最小化消耗）
 
