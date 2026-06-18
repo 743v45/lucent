@@ -46,3 +46,6 @@ logs/
 
 .claude/
 .superpowers/
+
+# Git worktrees (local isolated workspaces)
+.worktrees/
