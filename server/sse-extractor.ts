@@ -179,8 +179,11 @@ export function extractFromSSELines(lines: SSERawLine[]): ExtractedInfo {
 
 // ==================== 后台收集原始 SSE 行 ====================
 
-/** SSE 后台收集超时时间（毫秒） */
-const SSE_COLLECT_TIMEOUT_MS = 60_000; // 1 分钟
+/** SSE 后台收集超时时间（毫秒）
+ * 3 分钟：覆盖 LLM 长输出 / thinking 流的常见时长。
+ * 这是日志收集副链路（tee 出的副本）的超时，不影响主链路对客户端的透传。
+ * 超时后写入已收集的部分数据并标记 truncated=true。 */
+const SSE_COLLECT_TIMEOUT_MS = 180_000; // 3 分钟
 
 /** SSE 原始行累计字节上限（防止超长流导致 OOM） */
 const SSE_COLLECT_MAX_BYTES = 2 * 1024 * 1024; // 2MB
