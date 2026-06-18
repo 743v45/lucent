@@ -21,11 +21,11 @@
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "verify:e2e": "node scripts/verify-e2e.mjs",
-    "verify:anthropic": "node scripts/verify-anthropic-e2e.mjs",
-    "verify:openai-chat": "node scripts/verify-openai-chat-e2e.mjs",
-    "verify:openai-responses": "node scripts/verify-openai-responses-e2e.mjs",
-    "verify:custom": "node scripts/verify-custom-providers-e2e.mjs",
-    "verify:custom-errors": "node scripts/verify-custom-errors-e2e.mjs"
+    "verify:anthropic": "tsx scripts/verify-anthropic-e2e.ts",
+    "verify:openai-chat": "tsx scripts/verify-openai-chat-e2e.ts",
+    "verify:openai-responses": "tsx scripts/verify-openai-responses-e2e.ts",
+    "verify:custom": "tsx scripts/verify-custom-providers-e2e.ts",
+    "verify:custom-errors": "tsx scripts/verify-custom-errors-e2e.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",
