@@ -6,10 +6,14 @@
 
 // ==================== 端点协议类型 ====================
 
-export type EndpointType = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+// 协议身份维度单源:见 shared/protocols.ts。EndpointType 等全部从 registry 派生,
+// 禁止手写协议联合字面量(protocol-model spec Req 2)。
+import { ProtocolId, PROTOCOL_IDS } from '../shared/protocols.js';
 
-/** 所有支持的端点协议类型 */
-export const ENDPOINT_TYPES: EndpointType[] = ['openai-chat', 'openai-responses', 'anthropic-messages'];
+export type EndpointType = ProtocolId;
+
+/** 所有支持的端点协议类型(派生自 PROTOCOL_REGISTRY) */
+export const ENDPOINT_TYPES: EndpointType[] = PROTOCOL_IDS;
 
 /** 类型守卫：判断字符串是否为合法的 EndpointType */
 export function isEndpointType(s: string): s is EndpointType {

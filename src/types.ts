@@ -251,20 +251,22 @@ export interface ContextWindowInfo {
 
 // ==================== 端点协议类型 ====================
 
+// 协议身份维度单源:见 shared/protocols.ts。EndpointType 等全部从 registry 派生,
+// 禁止手写协议联合字面量(protocol-model spec Req 2)。
+import { ProtocolId, PROTOCOL_IDS, PROTOCOL_REGISTRY } from '../shared/protocols.js';
+
 /**
- * 端点协议类型
+ * 端点协议类型(派生自 PROTOCOL_REGISTRY)
  */
-export type EndpointType = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+export type EndpointType = ProtocolId;
 
-/** 所有支持的端点协议类型 */
-export const ENDPOINT_TYPES: EndpointType[] = ['anthropic-messages', 'openai-chat', 'openai-responses'];
+/** 所有支持的端点协议类型(派生自 PROTOCOL_REGISTRY) */
+export const ENDPOINT_TYPES: EndpointType[] = PROTOCOL_IDS;
 
-/** 端点协议类型的友好名称 */
-export const ENDPOINT_LABELS: Record<EndpointType, string> = {
-  'openai-chat': 'OpenAI Chat',
-  'openai-responses': 'OpenAI Responses',
-  'anthropic-messages': 'Anthropic Messages',
-};
+/** 端点协议类型的友好名称(派生自 PROTOCOL_REGISTRY) */
+export const ENDPOINT_LABELS = Object.fromEntries(
+  PROTOCOL_IDS.map(id => [id, PROTOCOL_REGISTRY[id].label])
+) as Record<EndpointType, string>;
 
 /** 类型守卫：判断字符串是否为合法的 EndpointType */
 export function isEndpointType(s: string): s is EndpointType {
