@@ -35,3 +35,4 @@ openspec/changes/<YYYY-MM-DD>-<slug>/
 - [`verification-workflow`](openspec/specs/verification-workflow/spec.md) — 完成声明与验证纪律
 - [`provider-baseurl`](openspec/specs/provider-baseurl/spec.md) — baseUrl 含版本路径 + `/v1` 去重
 - [`e2e-verification`](openspec/specs/e2e-verification/spec.md) — 端到端验收脚本契约
+- [`protocol-model`](openspec/specs/protocol-model/spec.md) — 三协议身份维度单源(PROTOCOL_REGISTRY)
