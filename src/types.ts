@@ -9,7 +9,6 @@ export interface LogEntry {
   request: RequestData;
   response: ResponseData;
   agentType: AgentType;
-  subAgentType?: SubAgentType;
   apiType?: EndpointType;
   clientType?: ClientType;
   duration: number;
@@ -28,8 +27,6 @@ export interface LogEntry {
 }
 
 export type AgentType = 'main' | 'sub';
-
-export type SubAgentType = 'plan' | 'search' | 'bash' | 'workflow' | 'unknown';
 
 export type ClientType = 'claude-code' | 'opencode' | 'codex' | 'cursor' | 'windsurf' | 'test-client' | 'unknown';
 

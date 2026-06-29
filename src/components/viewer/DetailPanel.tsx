@@ -1313,13 +1313,6 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
             value={log.agentType === 'main' ? 'MainAgent' : 'SubAgent'}
             description="请求的发起方类型。MainAgent 为主代理（用户直接交互），SubAgent 为子代理（由主代理调度）"
           />
-          {log.subAgentType && (
-            <MetaRow
-              label="子类型"
-              value={log.subAgentType}
-              description="SubAgent 的功能分类，如 plan（规划）、search（搜索）、bash（命令执行）、workflow（工作流）"
-            />
-          )}
           <MetaRow
             label="客户端类型"
             value={log.clientType || 'unknown'}

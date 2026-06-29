@@ -22,7 +22,7 @@ import {
   MAX_BODY_PARSE_FAILURE_LENGTH,
   MAX_RESPONSE_BODY_LENGTH,
 } from './constants.js';
-import { extractTokenUsage, identifyClient } from './agent-identifier.js';
+import { extractTokenUsage, identifyClient, classifyAgent } from './agent-identifier.js';
 import { globalSessionTracker } from './session-tracker.js';
 import type { EndpointType, RawLogEntry } from './types.js';
 import createDebug from 'debug';
@@ -56,44 +56,6 @@ export async function drainPendingSSETasks(): Promise<void> {
 }
 
 // ==================== 工具函数 ====================
-
-function isMainAgentRequest(body: any): boolean {
-  if (!body || typeof body !== 'object') return false;
-  const messages = body.messages;
-  if (!Array.isArray(messages)) return false;
-  if (messages.length >= 2) return true;
-  return messages.some((m: any) => m.role === 'assistant');
-}
-
-function parseAgentType(body: any, isMain: boolean): { agentType: 'main' | 'sub'; subAgentType?: 'plan' | 'search' | 'bash' | 'workflow' | 'unknown' } {
-  if (isMain) return { agentType: 'main' };
-  if (!body || !body.messages) return { agentType: 'sub', subAgentType: 'unknown' };
-
-  const messages = body.messages || [];
-  const firstMessage = messages[0] as any;
-  const content = firstMessage?.content;
-
-  if (typeof content === 'string') {
-    if (content.includes('plan') || content.includes('strategy') || content.includes('implementation plan')) {
-      return { agentType: 'sub', subAgentType: 'plan' };
-    }
-  }
-
-  const tools = body.tools || [];
-  if (Array.isArray(tools)) {
-    if (tools.some((t: any) => typeof t.name === 'string' && t.name.includes('search'))) {
-      return { agentType: 'sub', subAgentType: 'search' };
-    }
-    if (tools.some((t: any) => t.name === 'bash')) {
-      return { agentType: 'sub', subAgentType: 'bash' };
-    }
-    if (tools.some((t: any) => t.name === 'workflow')) {
-      return { agentType: 'sub', subAgentType: 'workflow' };
-    }
-  }
-
-  return { agentType: 'sub', subAgentType: 'unknown' };
-}
 
 function parseRequestBody(bodyRaw: string | undefined): unknown {
   if (!bodyRaw) return null;
@@ -213,9 +175,9 @@ function buildRequestEntry(
 ): RawLogEntry {
   const headers = normalizeHeaders(options?.headers);
   const safeHeaders = sanitizeHeaders(headers);
-  const isMain = isMainAgentRequest(body);
-  const { agentType, subAgentType } = parseAgentType(body, isMain);
-  const threadId = agentType === 'main'
+  const agentType = classifyAgent(body);
+  const isMain = agentType === 'main';
+  const threadId = isMain
     ? globalSessionTracker.identify(body, urlStr, new Date().toISOString())
     : undefined;
   const model = (body as any)?.model || 'unknown';
@@ -224,10 +186,10 @@ function buildRequestEntry(
 
   const requestId = `${startTime}_${Math.random().toString(36).substring(2, 11)}`;
 
-  dbg('拦截 %s %s provider=%s endpoint=%s agentType=%s subAgentType=%s clientType=%s model=%s stream=%s isTest=%s',
+  dbg('拦截 %s %s provider=%s endpoint=%s agentType=%s clientType=%s model=%s stream=%s isTest=%s',
     options?.method || 'GET', urlStr,
     providerName ?? '-', endpointType ?? '-',
-    agentType, subAgentType ?? '-', clientType, model,
+    agentType, clientType, model,
     (body as any)?.stream === true, isTest);
 
   return {
@@ -243,7 +205,6 @@ function buildRequestEntry(
     isStream: (body as any)?.stream === true,
     mainAgent: isMain,
     agentType,
-    subAgentType,
     apiType: endpointType || undefined,
     clientType,
     isTest,

@@ -50,7 +50,6 @@ export type ClientType = 'claude-code' | 'opencode' | 'codex' | 'cursor' | 'wind
 // ==================== Agent 类型 ====================
 
 export type AgentType = 'main' | 'sub';
-export type SubAgentType = 'plan' | 'search' | 'bash' | 'workflow' | 'unknown';
 
 // ==================== 日志条目（前端格式） ====================
 
@@ -101,7 +100,6 @@ export interface LogEntry {
     body: unknown;
   } | null;
   agentType: AgentType;
-  subAgentType?: SubAgentType;
   apiType?: EndpointType;
   clientType?: ClientType;
   duration: number;
@@ -183,7 +181,6 @@ export interface RawLogEntry {
   mainAgent: boolean;
   inProgress?: boolean;
   agentType?: AgentType;
-  subAgentType?: SubAgentType;
   apiType?: EndpointType;
   clientType?: ClientType;
   isTest?: boolean;
@@ -252,7 +249,6 @@ export interface LogsQuery {
   limit?: number;
   offset?: number;
   agentType?: AgentType | 'all';
-  subAgentType?: string;
   startDate?: string;
   endDate?: string;
   search?: string;

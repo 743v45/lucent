@@ -45,7 +45,6 @@ interface FixtureInput {
   timestamp: string;
   agentType: AgentType;
   threadId?: string;
-  subAgentType?: string;
   model?: string;
   userText?: string;
 }
@@ -87,7 +86,6 @@ function fixtureLine(input: FixtureInput): string {
     isStream: false,
     mainAgent: input.agentType === 'main',
     agentType: input.agentType,
-    ...(input.subAgentType ? { subAgentType: input.subAgentType } : {}),
     apiType: 'anthropic-messages',
     tokenUsage: { input_tokens: 100, output_tokens: 20 },
     ...(input.threadId ? { threadId: input.threadId } : {}),
@@ -158,7 +156,7 @@ describe('会话视图 E2E — threadId 数据流 + 分组', () => {
         { id: 't-group-m1', timestamp: '2026-06-15T11:00:00.000Z', agentType: 'main', threadId: 'thread_group_a', userText: '帮我分析代码' },
         { id: 't-group-m2', timestamp: '2026-06-15T11:00:10.000Z', agentType: 'main', threadId: 'thread_group_a' },
         // sub 无 threadId，时间晚于 thread_group_a 首条 main → 附属到该组
-        { id: 't-group-s1', timestamp: '2026-06-15T11:00:05.000Z', agentType: 'sub', subAgentType: 'bash' },
+        { id: 't-group-s1', timestamp: '2026-06-15T11:00:05.000Z', agentType: 'sub' },
       ]),
       'utf-8',
     );
@@ -190,7 +188,7 @@ describe('会话视图 E2E — threadId 数据流 + 分组', () => {
         { id: 't-aff-m1', timestamp: '2026-06-15T12:00:00.000Z', agentType: 'main', threadId: 'thread_aff_1' },
         { id: 't-aff-m2', timestamp: '2026-06-15T12:00:30.000Z', agentType: 'main', threadId: 'thread_aff_2' },
         // sub 时间在 thread_aff_2 首条 main 之后 → 附属 thread_aff_2（最近的不晚于它的 main）
-        { id: 't-aff-s1', timestamp: '2026-06-15T12:00:35.000Z', agentType: 'sub', subAgentType: 'search' },
+        { id: 't-aff-s1', timestamp: '2026-06-15T12:00:35.000Z', agentType: 'sub' },
       ]),
       'utf-8',
     );
@@ -225,7 +223,7 @@ describe('会话视图 E2E — threadId 数据流 + 分组', () => {
       LOG_FILE,
       fixtureContent([
         // 仅一条 sub，无任何 main，无 threadId → 无法附属 → ungrouped
-        { id: 't-iso-s1', timestamp: '2026-06-15T13:00:00.000Z', agentType: 'sub', subAgentType: 'workflow' },
+        { id: 't-iso-s1', timestamp: '2026-06-15T13:00:00.000Z', agentType: 'sub' },
       ]),
       'utf-8',
     );

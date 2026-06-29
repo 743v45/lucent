@@ -82,7 +82,6 @@ export async function getLogs(params?: { limit?: number; offset?: number }): Pro
       };
     };
     agentType: string;
-    subAgentType?: string;
     duration: number;
     metadata: {
       model: string;
