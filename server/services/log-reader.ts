@@ -12,7 +12,6 @@ import {
   DEFAULT_LOG_QUERY_LIMIT,
   MAX_LOG_FILES_TO_READ,
   LOG_SPLIT_REGEX,
-  unescapeLogContent,
 } from '../constants.js';
 import { extractContext } from '../context-extractors.js';
 import { extractCachedContent, getContextSizeForModel } from '../kvcache.js';
@@ -75,7 +74,11 @@ async function readFileEntries(filename: string): Promise<LogEntry[]> {
     const line = chunk.trim();
     if (!line) continue;
     try {
-      const raw = JSON.parse(unescapeLogContent(line));
+      // 注意：不再调用 unescapeLogContent，因为 JSON.parse 本身能正确处理 \n 转义序列。
+      // 写入时 escapeLogContent 把真实的 "\n---\n" 变成字符串形式的 "\\n---\\n"，
+      // 这是为了防止内容里的分隔符被误认为条目边界。读取时 JSON.parse 会自动把
+      // "\\n" 解析成字符串里的换行符，不需要手动还原。
+      const raw = JSON.parse(line);
       entries.push(normalizeLogEntry(raw));
     } catch {
       // 忽略解析失败的行
