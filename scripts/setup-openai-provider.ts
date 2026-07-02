@@ -30,14 +30,22 @@ if (!OPENAI_BASE_URL) {
   process.exit(2);
 }
 
+// baseUrl 形态提示：proxy 路径拼接假设 baseUrl 含 /v1，缺了运行时会 404。只 warn 不阻断。
+if (!/\/v\d+\/?$/.test(OPENAI_BASE_URL)) {
+  console.warn(`[setup:openai] 警告：OPENAI_BASE_URL=${OPENAI_BASE_URL} 不含 /v1。Lucent 代理假设 baseUrl 含版本路径，缺了请求会 404——确认地址无误再继续。`);
+}
+
 // 1. 确保 config 存在（不存在 → 建默认，含 anthropic 种子 provider）
 loadConfig();
 const cfg = getConfig();
 
-// 2. 已有 openai → 跳过（幂等 + 尊重现有配置）
-if (findProviderByName(cfg, 'openai')) {
+// 2. 已有 openai → 跳过（幂等 + 尊重现有配置），亮出现有地址方便核对
+const existing = findProviderByName(cfg, 'openai');
+if (existing) {
+  const cur = existing.endpoints['openai-chat'];
+  const match = cur === OPENAI_BASE_URL ? '（一致）' : '（不一致，要对齐请删后重跑）';
   console.log(`[setup:openai] 已有 openai provider，未覆盖（尊重现有配置）。`);
-  console.log(`  如要对齐到 ${OPENAI_BASE_URL}，先在 Web UI 或 config.json 删掉它再重跑。`);
+  console.log(`  现有 openai-chat → ${cur ?? '(null)'}；本次 OPENAI_BASE_URL=${OPENAI_BASE_URL} ${match}`);
   process.exit(0);
 }
 
