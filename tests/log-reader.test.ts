@@ -92,4 +92,39 @@ describe('buildContextFromRequest — contextWindow 口径', () => {
 
     expect(log.kvCache?.cacheReadTokens).toBe(29184);
   });
+
+  it('OpenAI 多轮 tool-use：assistant content:null 不原样透传（前端按数组解构会崩）', () => {
+    const log = {
+      id: 'test-null-content',
+      timestamp: '2026-06-12T00:00:00.000Z',
+      request: {
+        method: 'POST',
+        url: 'https://api.openai.com/v1/chat/completions',
+        headers: {},
+        body: {
+          model: 'gpt-4o',
+          messages: [
+            { role: 'user', content: '东京天气？' },
+            { role: 'assistant', content: null, tool_calls: [{ id: 'call_1', type: 'function', function: { name: 'get_weather', arguments: '{"location":"Tokyo"}' } }] },
+            { role: 'tool', tool_call_id: 'call_1', content: '{"temp":23}' },
+          ],
+        },
+      },
+      response: { status: 200, statusText: 'OK', headers: {}, body: {} },
+      agentType: 'main',
+      duration: 0,
+      metadata: { model: 'gpt-4o', provider: 'openai', stream: false },
+      endpointType: 'openai-chat',
+    } as unknown as LogEntry;
+
+    buildContextFromRequest(log);
+
+    const msgs = log.context!.messages!;
+    // 三条消息都进 context，assistant 的 content 被规范成数组（非 null），前端可安全 .map
+    expect(msgs).toHaveLength(3);
+    const asst = msgs.find(m => m.role === 'assistant')!;
+    expect(asst.content).toEqual([]);
+    // tool 角色计入统计
+    expect(log.context!.summary!.toolMessages).toBe(1);
+  });
 });
