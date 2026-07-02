@@ -81,11 +81,16 @@ writeFileSync(join(CONFIG_DIR, 'config.json'), JSON.stringify({
 
 // ==================== 启动后端（serve dist/ + proxy）====================
 
+// Lucent 是透明代理，本身不需要客户端密钥；从 backend env 剔掉 OPENAI_API_KEY，
+// 避免把密钥无谓下发给 Lucent 进程（key 只在驱动侧的 fetch header 里用）
+const backendEnv: Record<string, string | undefined> = { ...process.env };
+delete backendEnv.OPENAI_API_KEY;
+
 const backend = spawn('npx', ['tsx', 'server/index.ts'], {
   cwd: REPO_ROOT,
   stdio: ['ignore', 'pipe', 'pipe'],
   env: {
-    ...process.env,
+    ...backendEnv,
     LUCENT_CONFIG_DIR: CONFIG_DIR,
     LUCENT_HOST: '127.0.0.1',
     LUCENT_PROXY_PORT: String(PROXY_PORT),
@@ -172,6 +177,59 @@ async function postStream(path: string, body: unknown) {
   return { status: res.status, body: acc, frames };
 }
 
+// ==================== 内容断言（兜住"回没回"，不只看 HTTP 200）====================
+//
+// 只看 status===200 && body 非空太松：reasoning 模型 max_tokens 给小了会
+// finish_reason=length / content 空串（issue 背景点名的故障模式），HTTP 照样 200、
+// body 是非空 JSON 壳子。这里每场景加一条内容断言，空答/截断会被抓到。
+type Scenario = { label: string; path: string; body: any; stream: boolean; expectEndpoint: string };
+type Res = { status: number; body: string; frames?: number };
+
+function evaluateContent(s: Scenario, res: Res): { ok: boolean; detail: string } {
+  if (res.status !== 200) return { ok: false, detail: `HTTP ${res.status}（非 200）` };
+
+  // chat 非流式：choices[0].message.content 非空 且 finish_reason !== 'length'
+  if (s.expectEndpoint === 'openai-chat' && !s.stream) {
+    let j: any; try { j = JSON.parse(res.body); } catch { return { ok: false, detail: '响应非合法 JSON' }; }
+    const content = j?.choices?.[0]?.message?.content;
+    const finish = j?.choices?.[0]?.finish_reason;
+    const ok = typeof content === 'string' && content.trim() !== '' && finish !== 'length';
+    return { ok, detail: `finish_reason=${finish} content="${String(content ?? '').slice(0, 40)}"` };
+  }
+
+  // responses 非流式：output 里有实际（非 reasoning）内容
+  if (s.expectEndpoint === 'openai-responses' && !s.stream) {
+    let j: any; try { j = JSON.parse(res.body); } catch { return { ok: false, detail: '响应非合法 JSON' }; }
+    const out: any[] = Array.isArray(j?.output) ? j.output : [];
+    const msg = out.find((o: any) => o.type === 'message');
+    const text = msg?.content?.find((c: any) => c.type === 'output_text')?.text;
+    const ok = typeof text === 'string' && text.trim() !== '';
+    return { ok, detail: `status=${j?.status ?? '?'} incomplete=${JSON.stringify(j?.incomplete_details)} text="${String(text ?? '').slice(0, 40)}"` };
+  }
+
+  // 流式（chat / responses）：frames>0 且至少出现一帧 content delta（不是只有 reasoning）
+  if (s.stream) {
+    let contentDeltas = 0;
+    for (const line of res.body.split('\n')) {
+      const m = line.match(/^data:\s*(.*)$/);
+      if (!m) continue;
+      const raw = m[1].trim();
+      if (!raw || raw === '[DONE]') continue;
+      let ev: any; try { ev = JSON.parse(raw); } catch { continue; }
+      if (s.expectEndpoint === 'openai-chat') {
+        const dc = ev?.choices?.[0]?.delta?.content;
+        if (typeof dc === 'string' && dc !== '') contentDeltas++;
+      } else { // openai-responses
+        if (ev?.type === 'response.output_text.delta') contentDeltas++;
+      }
+    }
+    const ok = (res.frames ?? 0) > 0 && contentDeltas >= 1;
+    return { ok, detail: `frames=${res.frames ?? 0} contentDeltas=${contentDeltas}` };
+  }
+
+  return { ok: false, detail: '未知场景' };
+}
+
 let browser: Awaited<ReturnType<typeof chromium.launch>> | null = null;
 let context: Awaited<ReturnType<NonNullable<typeof browser>['newContext']>> | null = null;
 
@@ -238,9 +296,10 @@ try {
     const t0 = Date.now();
     const res = s.stream ? await postStream(s.path, s.body) : await postJson(s.path, s.body);
     const dt = Date.now() - t0;
-    const ok = res.status === 200 && res.body.length > 0;
-    console.log(`  ← HTTP ${res.status}  ${dt}ms  body=${res.body.length}B${s.stream ? ` frames=${(res as any).frames}` : ''}`);
-    firedLocal.push({ label: s.label, endpoint: s.expectEndpoint, ok, detail: `status=${res.status} ${dt}ms` });
+    const ev = evaluateContent(s, res);   // 内容断言：HTTP 200 但空答/截断会被判 false
+    console.log(`  ← HTTP ${res.status}  ${dt}ms  body=${res.body.length}B${s.stream ? ` frames=${(res as any).frames}` : ''}  ${ev.ok ? '✓' : '✗'} ${ev.detail}`);
+    check(`内容 ${s.label}: ${s.stream ? '≥1 帧 content delta' : '有实际回答内容（非空、未 length 截断）'}`, ev.ok, ev.detail);
+    firedLocal.push({ label: s.label, endpoint: s.expectEndpoint, ok: ev.ok, detail: `HTTP ${res.status} ${dt}ms · ${ev.detail}` });
 
     await sleep(700);                       // 等日志落盘
     await refresh();                        // 刷新 → 列表新增一行（视频里逐条进入）
