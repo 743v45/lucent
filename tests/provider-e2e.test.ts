@@ -15,7 +15,7 @@ import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { readFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, readLatestLog, createMockUpstream, type MockUpstream, type TestEnv } from './e2e-helpers.js';
+import { createTestEnv, cleanTestDir, removeTestDir, writeTestConfig, startBackend, stopBackend, readLatestLog, createMockUpstream, type MockUpstream, type TestEnv } from './e2e-helpers.js';
 
 // ==================== 常量 ====================
 
@@ -91,10 +91,21 @@ async function apiRequest(
   }
 }
 
-async function readTestConfig(): Promise<ProxyConfig | null> {
-  if (!existsSync(CONFIG_PATH)) return null;
-  const content = await readFile(CONFIG_PATH, 'utf-8');
+async function readTestConfig(configPath: string = CONFIG_PATH): Promise<ProxyConfig | null> {
+  if (!existsSync(configPath)) return null;
+  const content = await readFile(configPath, 'utf-8');
   return JSON.parse(content);
+}
+
+/**
+ * process-group kill：杀整个进程组（tsx wrapper + node 子进程 + esbuild），不残留监听。
+ * 范式同 e2e/fixtures.ts：tsx 是 wrapper，单杀 wrapper 不杀 `node --require tsx/...`
+ * 子进程，子进程会残留并继续占端口。detached 启动 + kill(-pid) 连子进程一起带走。
+ */
+function killGroup(proc: ChildProcess | null): void {
+  if (!proc || proc.pid == null) return;
+  try { process.kill(-proc.pid, 'SIGTERM'); } catch { /* 组可能已空 */ }
+  try { proc.kill('SIGTERM'); } catch { /* noop */ }
 }
 
 // ==================== 测试套件 ====================
@@ -423,30 +434,34 @@ describe('Provider E2E 测试', () => {
 // ==================== 首次启动测试 ====================
 
 describe('首次启动:无配置时创建默认 anthropic 供应商', () => {
+  // 独立环境：自己的随机端口 + 自己的隔离目录，不与主套件 backend 抢端口
+  // （即便主 backend 的 stopBackend 只 SIGTERM 了 wrapper，standalone 也不会撞端口）
+  const bootEnv = createTestEnv('provider-e2e-boot');
   let standaloneBackend: ChildProcess | null = null;
 
   beforeAll(async () => {
     await stopBackend();
-    await cleanTestDir(testEnv);
+    await cleanTestDir(bootEnv);
   }, 10000);
 
   afterAll(async () => {
-    if (standaloneBackend) {
-      standaloneBackend.kill('SIGTERM');
-      await new Promise(resolve => setTimeout(resolve, 500));
-    }
-    await cleanTestDir(testEnv);
+    // process-group kill：带走 tsx wrapper + node 子进程，端口干净释放
+    killGroup(standaloneBackend);
+    standaloneBackend = null;
+    await new Promise(resolve => setTimeout(resolve, 500));
+    await removeTestDir(bootEnv);
   }, 10000);
 
   it('启动后应创建默认 anthropic 供应商', async () => {
     standaloneBackend = spawn('npx', ['tsx', 'server/index.ts'], {
+      detached: true, // 独立进程组，拆栈时 kill(-pid) 连 node 子进程一起带走
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
-        LUCENT_CONFIG_DIR: testEnv.configDir,
+        LUCENT_CONFIG_DIR: bootEnv.configDir,
         LUCENT_HOST: '127.0.0.1',
-        LUCENT_PROXY_PORT: String(19048),
-        LUCENT_WEB_PORT: String(19049),
+        LUCENT_PROXY_PORT: String(bootEnv.proxyPort),
+        LUCENT_WEB_PORT: String(bootEnv.webPort),
       },
     });
 
@@ -463,7 +478,7 @@ describe('首次启动:无配置时创建默认 anthropic 供应商', () => {
 
     await new Promise(resolve => setTimeout(resolve, 1000));
 
-    const config = await readTestConfig();
+    const config = await readTestConfig(bootEnv.configPath);
     expect(config).not.toBeNull();
     expect(config?.providers.length).toBeGreaterThan(0);
 
