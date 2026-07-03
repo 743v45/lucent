@@ -75,5 +75,11 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "overrides": {
+    "dompurify": ">=3.4.11",
+    "tsx": {
+      "esbuild": "^0.28.1"
+    }
   }
 }
