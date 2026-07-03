@@ -249,7 +249,7 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
 
   if (!log) {
     return (
-      <div className="flex-1 min-w-0 flex items-center justify-center h-full bg-bg-panel">
+      <div className="flex-1 min-w-0 flex items-center justify-center h-full bg-bg-panel" data-testid="detail-empty">
         <span className="text-text-quaternary text-base">选择一条记录查看详情</span>
       </div>
     );
@@ -285,7 +285,7 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
   };
 
   return (
-    <div className="flex-1 min-w-0 h-full flex flex-col bg-bg-panel p-3 gap-3">
+    <div className="flex-1 min-w-0 h-full flex flex-col bg-bg-panel p-3 gap-3" data-testid="detail-panel">
       {/* 头部信息区 */}
       <div className="border border-border-subtle rounded-lg px-5 py-4 flex items-center gap-6">
         {/* 左侧：请求基本信息 */}
