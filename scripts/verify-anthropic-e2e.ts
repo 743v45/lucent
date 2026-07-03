@@ -141,7 +141,9 @@ async function waitForPort(url: string, label: string, timeoutMs = 20000) {
     try {
       const res = await fetch(url);
       if (res.status > 0) return;
-    } catch {}
+    } catch {
+      // Port not ready yet, retry
+    }
     await new Promise(r => setTimeout(r, 300));
   }
   throw new Error(`${label} port never accepted: ${url}`);
@@ -299,7 +301,9 @@ try {
   vite.kill('SIGTERM');
   await upstream.close();
   await new Promise(r => setTimeout(r, 500));
-  try { rmSync(CONFIG_DIR, { recursive: true, force: true }); } catch {}
+  try { rmSync(CONFIG_DIR, { recursive: true, force: true }); } catch {
+    // Config dir may already be cleaned up
+  }
 }
 
 // ==================== 汇总 ====================
