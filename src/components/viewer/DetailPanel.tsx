@@ -79,14 +79,14 @@ function CollapseButton({ collapsed, onToggle }: { collapsed: boolean; onToggle:
   );
 }
 
-function ExpandAllButton({ expandAll, onToggle }: { expandAll: boolean; onToggle: () => void }) {
+function ExpandAllButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
   return (
     <button
       onClick={onToggle}
-      data-testid={expandAll ? 'collapse-all' : 'expand-all'}
+      data-testid={expanded ? 'collapse-all' : 'expand-all'}
       className="px-3 py-0.5 text-[13px] font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
     >
-      {expandAll ? '收起全部' : '展开全部'}
+      {expanded ? '收起全部' : '展开全部'}
     </button>
   );
 }
@@ -209,11 +209,6 @@ interface DetailPanelProps {
   onTabChange: (tab: TabType) => void;
 }
 
-interface BodyCollapsedState {
-  request: boolean;
-  response: boolean;
-}
-
 const TAB_CONFIG: { key: TabType; label: string }[] = [
   { key: 'request', label: 'Request' },
   { key: 'response', label: 'Response' },
@@ -223,24 +218,24 @@ const TAB_CONFIG: { key: TabType; label: string }[] = [
 ];
 
 export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): JSX.Element {
-  const [bodyCollapsed, setBodyCollapsed] = useState<BodyCollapsedState>({
-    request: true, // 默认折叠到 JSON_COLLAPSED_EXPAND_LEVEL，避免大 body 全展开卡顿
-    response: true,
-  });
-  const [expandAll, setExpandAll] = useState<{ request: boolean; response: boolean }>({
-    request: false, // 用户主动点「展开全部」时才全展开
+  // body 展开态（单一真相源）：false=折叠到 JSON_COLLAPSED_EXPAND_LEVEL（默认，避免大 body 全展开卡顿），
+  // true=全展开。CollapseButton 与 ExpandAllButton 共享这一份状态——历史上用 bodyCollapsed + expandAll
+  // 两个独立 boolean，会出现 desync（先「展开」把 collapsed 置 false，再「展开全部」，再「收起全部」时，
+  // expandAll 关掉后回落到 collapsed=false 即「全展开」，按钮写着「收起全部」却什么都不收起）；合成单个
+  // boolean 后两个按钮永远一致。
+  const [bodyExpanded, setBodyExpanded] = useState<{ request: boolean; response: boolean }>({
+    request: false,
     response: false,
   });
 
-  const toggleBodyCollapsed = useCallback((type: 'request' | 'response') => {
-    setBodyCollapsed(prev => ({
-      ...prev,
-      [type]: !prev[type],
-    }));
-  }, []);
+  // 切日志时重置展开态：与下方 key={log.id} 重建子树（重置 sseViewMode / Headers 折叠 / KV 折叠等）意图一致。
+  // 否则上一条日志的「全展开」会带到新日志，让大 body 一进来就全展开，违背默认折叠的防卡顿初衷。
+  useEffect(() => {
+    setBodyExpanded({ request: false, response: false });
+  }, [log?.id]);
 
-  const toggleExpandAll = useCallback((type: 'request' | 'response') => {
-    setExpandAll(prev => ({
+  const toggleBodyExpanded = useCallback((type: 'request' | 'response') => {
+    setBodyExpanded(prev => ({
       ...prev,
       [type]: !prev[type],
     }));
@@ -266,10 +261,8 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         return (
           <RequestTab
             log={log}
-            bodyCollapsed={bodyCollapsed.request}
-            expandAll={expandAll.request}
-            onToggleCollapsed={() => toggleBodyCollapsed('request')}
-            onToggleExpandAll={() => toggleExpandAll('request')}
+            expanded={bodyExpanded.request}
+            onToggle={() => toggleBodyExpanded('request')}
             onCopy={copyBody}
           />
         );
@@ -277,10 +270,8 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         return (
           <ResponseTab
             log={log}
-            bodyCollapsed={bodyCollapsed.response}
-            expandAll={expandAll.response}
-            onToggleCollapsed={() => toggleBodyCollapsed('response')}
-            onToggleExpandAll={() => toggleExpandAll('response')}
+            expanded={bodyExpanded.response}
+            onToggle={() => toggleBodyExpanded('response')}
             onCopy={copyBody}
           />
         );
@@ -434,12 +425,10 @@ function HeadersDisplay({ headers }: { headers: Record<string, string> | undefin
 
 function JsonBlock({
   data,
-  collapsed = false,
-  expandAll = false,
+  expanded = false,
 }: {
   data: unknown;
-  collapsed?: boolean;
-  expandAll?: boolean;
+  expanded?: boolean;
 }) {
   // JsonView 需要 object 或 array 类型，字符串需要包装
   const jsonData = typeof data === 'string' ? { text: data } : data as object;
@@ -451,7 +440,7 @@ function JsonBlock({
     >
       <JsonView
         data={jsonData}
-        shouldExpandNode={expandAll ? () => true : (level) => collapsed ? level < JSON_COLLAPSED_EXPAND_LEVEL : true}
+        shouldExpandNode={expanded ? () => true : (level) => level < JSON_COLLAPSED_EXPAND_LEVEL}
         {...darkStyles}
       />
     </div>
@@ -462,14 +451,12 @@ function JsonBlock({
 
 interface RequestTabProps {
   log: LogEntry;
-  bodyCollapsed: boolean;
-  expandAll: boolean;
-  onToggleCollapsed: () => void;
-  onToggleExpandAll: () => void;
+  expanded: boolean;
+  onToggle: () => void;
   onCopy: (data: unknown) => void;
 }
 
-function RequestTab({ log, bodyCollapsed, expandAll, onToggleCollapsed, onToggleExpandAll, onCopy }: RequestTabProps): JSX.Element {
+function RequestTab({ log, expanded, onToggle, onCopy }: RequestTabProps): JSX.Element {
   return (
     <div className="flex flex-col h-full bg-bg-deep">
       <div className="p-4">
@@ -483,13 +470,13 @@ function RequestTab({ log, bodyCollapsed, expandAll, onToggleCollapsed, onToggle
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
-            <ExpandAllButton expandAll={expandAll} onToggle={onToggleExpandAll} />
-            <CollapseButton collapsed={bodyCollapsed} onToggle={onToggleCollapsed} />
+            <ExpandAllButton expanded={expanded} onToggle={onToggle} />
+            <CollapseButton collapsed={!expanded} onToggle={onToggle} />
             <CopyButton onCopy={() => onCopy(log.request.body)} />
           </div>
         </div>
         <div className="flex-1 min-h-0" data-testid="request-body">
-          <JsonBlock data={log.request.body} collapsed={bodyCollapsed} expandAll={expandAll} />
+          <JsonBlock data={log.request.body} expanded={expanded} />
         </div>
       </div>
     </div>
@@ -531,10 +518,8 @@ function SSEViewToggle({ mode, onModeChange }: { mode: SSEViewMode; onModeChange
 
 interface ResponseTabProps {
   log: LogEntry;
-  bodyCollapsed: boolean;
-  expandAll: boolean;
-  onToggleCollapsed: () => void;
-  onToggleExpandAll: () => void;
+  expanded: boolean;
+  onToggle: () => void;
   onCopy: (data: unknown) => void;
 }
 
@@ -553,7 +538,7 @@ function sseLinesToRawText(lines: SSERawLine[]): string {
   }).join('\n\n');
 }
 
-function ResponseTab({ log, bodyCollapsed, expandAll, onToggleCollapsed, onToggleExpandAll, onCopy }: ResponseTabProps): JSX.Element {
+function ResponseTab({ log, expanded, onToggle, onCopy }: ResponseTabProps): JSX.Element {
   const response = log.response;
   // 默认 raw：原始 SSE 文本完整可见(含 ping/error 等元事件)，结构化视图丢失这些事件
   const [sseViewMode, setSseViewMode] = useState<SSEViewMode>('raw');
@@ -609,8 +594,8 @@ function ResponseTab({ log, bodyCollapsed, expandAll, onToggleCollapsed, onToggl
             {isSSE && (
               <SSEViewToggle mode={sseViewMode} onModeChange={setSseViewMode} />
             )}
-            <ExpandAllButton expandAll={expandAll} onToggle={onToggleExpandAll} />
-            <CollapseButton collapsed={bodyCollapsed} onToggle={onToggleCollapsed} />
+            <ExpandAllButton expanded={expanded} onToggle={onToggle} />
+            <CollapseButton collapsed={!expanded} onToggle={onToggle} />
             <CopyButton onCopy={() => onCopy(sseViewMode === 'raw' ? rawSSEText : extractedBody)} />
           </div>
         </div>
@@ -624,7 +609,7 @@ function ResponseTab({ log, bodyCollapsed, expandAll, onToggleCollapsed, onToggl
               <span className="text-text-quaternary text-base">无响应体</span>
             </div>
           ) : (
-            <JsonBlock data={extractedBody} collapsed={bodyCollapsed} expandAll={expandAll} />
+            <JsonBlock data={extractedBody} expanded={expanded} />
           )}
         </div>
       </div>
