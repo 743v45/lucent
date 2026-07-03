@@ -80,6 +80,29 @@ describe('buildAccessLines', () => {
     expect(buildAccessLines(HOST, PORT, [])).toEqual([]);
   });
 
+  it('openai 双端点(chat + responses)只生成一条 OPENAI 命令（去重，与 server banner 一致）', () => {
+    const lines = buildAccessLines(HOST, PORT, [
+      preset('openai', {
+        'openai-chat': 'https://api.openai.com/v1',
+        'openai-responses': 'https://api.openai.com/v1',
+        'anthropic-messages': '',
+      }),
+    ]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].cmd).toBe('export OPENAI_BASE_URL=http://127.0.0.1:7048/openai/v1');
+  });
+
+  it('openai 双端点但上游不同：仍只一条命令（单一 OPENAI_BASE_URL 由 proxy 按路径分流）', () => {
+    const lines = buildAccessLines(HOST, PORT, [
+      preset('hybrid-oai', {
+        'openai-chat': 'https://api.deepseek.com/v1',
+        'openai-responses': 'https://api.openai.com/v1',
+      }),
+    ]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0].cmd).toBe('export OPENAI_BASE_URL=http://127.0.0.1:7048/hybrid-oai/v1');
+  });
+
   it('端点 URL 为空的端点不生成指令', () => {
     const lines = buildAccessLines(HOST, PORT, [
       preset('p', { 'anthropic-messages': '', 'openai-chat': 'y' }),
