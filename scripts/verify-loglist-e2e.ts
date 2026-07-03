@@ -423,6 +423,53 @@ try {
   check('NEG3b 越界 offset: total 仍为真实总数', oobJson.total === totalJson.total && oobJson.total === 60, `oob.total=${oobJson.total} base.total=${totalJson.total}`);
   check('NEG3c 越界 offset: HTTP 200 不崩', oobRes.status === 200, `status=${oobRes.status}`);
 
+  // ============ I. 回归：筛选后匹配不足一屏仍能加载更多（TAE-65） ============
+  console.log('\n—— I. 回归：筛选少结果仍能翻页 ——');
+  // 构造 80 条：筛选 F=beta+openai-responses 在最新 50 条（首屏）只命中 2 条（撑不出滚动条），
+  // 但在第 2 页（更早）命中 8 条。旧实现只靠 onScroll，首屏无滚动条 → 翻不出更早的匹配；
+  // 修复后应自动补拉第 2 页，把这 8 条更早的匹配带出来。
+  const fewEntries: any[] = [];
+  const fewBaseT = Date.UTC(2026, 6, 3, 12, 0, 0);
+  for (let i = 0; i < 80; i++) {
+    let provider: 'alpha' | 'beta';
+    let endpoint: 'anthropic-messages' | 'openai-chat' | 'openai-responses';
+    if (i === 79 || i === 50) { provider = 'beta'; endpoint = 'openai-responses'; }   // 首屏 50 命中 2 条
+    else if (i < 8) { provider = 'beta'; endpoint = 'openai-responses'; }             // 第 2 页命中 8 条（r0..r7）
+    else { provider = 'alpha'; endpoint = 'openai-chat'; }                            // 非 F，避免误命中
+    fewEntries.push(mkEntry({
+      id: `r${i}`, ts: new Date(fewBaseT + i * 1000).toISOString(),
+      provider, endpoint, agent: 'main', status: 200, duration: 100,
+      model: endpoint === 'anthropic-messages' ? 'claude-sonnet-4-5' : 'gpt-4o',
+      content: `回归 ${i}`,
+    }));
+  }
+  writeConstructed(fewEntries);
+  await page.goto(`http://127.0.0.1:${VITE_PORT}/`);
+  await page.waitForTimeout(400);
+  // 同时设供应商=beta、协议=openai-responses，确定性复现「首屏仅 2 条匹配」
+  await page.evaluate(() => {
+    localStorage.setItem('lucent.providerFilter', 'beta');
+    localStorage.setItem('lucent.endpointFilter', 'openai-responses');
+  });
+  await page.reload();
+  await page.waitForTimeout(500);
+  // 等自动补拉把更早的匹配（r0）带出来；旧实现这里会超时
+  const olderShown = await page.waitForFunction(
+    () => !!document.querySelector('[data-testid="log-row"][data-logid="r0"]'),
+    { timeout: 8000 },
+  ).then(() => true).catch(() => false);
+  const fewIds = await renderedIds(page);
+  const page1Loaded = ['r50', 'r79'].every(id => fewIds.includes(id));
+  const olderLoaded = ['r0', 'r1', 'r2', 'r3', 'r4', 'r5', 'r6', 'r7'].every(id => fewIds.includes(id));
+  check('I1 筛选不足一屏: 首屏 2 条匹配在列', page1Loaded, `ids=${fewIds.length}`);
+  check('I2 自动补拉第 2 页: 更早 8 条匹配加载出来', olderShown && olderLoaded, `shown=${olderShown} older=${olderLoaded}`);
+  check('I3 匹配总数 = 10（首屏 2 + 第 2 页 8）', fewIds.length === 10, `rows=${fewIds.length}`);
+  // 数据耗尽（hasMore=false）后手动按钮不再显示
+  const btnAfterDone = await page.locator('[data-testid="load-more-btn"]').count();
+  check('I4 数据耗尽后无加载更多按钮', btnAfterDone === 0, `btn=${btnAfterDone}`);
+  await page.screenshot({ path: join(SHOT_DIR, 'I-few-filter-loadmore.png') });
+  check('I 截图: I-few-filter-loadmore.png', true);
+
   await page.close();
 } finally {
   if (browser) await browser.close();

@@ -295,6 +295,19 @@ export function LogListPanel({
     }
   };
 
+  // 滚动容器引用：用于检测「内容不足以产生纵向滚动条」
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // 方案 A（无感兜底）：筛选后匹配行太少、首屏撑不出滚动条时，onScroll 永不触发，
+  // 更早的匹配日志就翻不出来。这里在每次渲染后检测——若不可滚动且仍有更多数据，
+  // 自动补拉下一页，直到出现滚动条或数据耗尽。loadMore 自身有 loadingMore/hasMore 双守卫，不会重复加载。
+  useEffect(() => {
+    if (loading || loadingMore || !hasMore) return;
+    const el = scrollRef.current;
+    if (!el || el.scrollHeight > el.clientHeight) return; // 已能滚动，交给 onScroll
+    onLoadMore();
+  }, [logs, hasMore, loadingMore, loading, onLoadMore]);
+
   return (
     <div
       className="h-full flex flex-col border-r border-border-subtle bg-bg-panel shrink-0"
@@ -384,6 +397,7 @@ export function LogListPanel({
         </div>
       ) : (
         <div
+          ref={scrollRef}
           className="flex-1 overflow-y-auto p-2"
           onScroll={(e) => {
             const el = e.currentTarget;
@@ -406,6 +420,19 @@ export function LogListPanel({
           {loadingMore && (
             <div className="flex justify-center py-3">
               <Spin size="small" />
+            </div>
+          )}
+          {/* 方案 B（可控兜底）：手动「加载更多」按钮，hasMore 时显示。
+              即便自动补拉（方案 A）未覆盖到的场景，也给用户一个明确的「往下翻」出口。 */}
+          {hasMore && !loadingMore && (
+            <div className="flex justify-center pb-2">
+              <button
+                data-testid="load-more-btn"
+                onClick={onLoadMore}
+                className="px-3 py-1.5 rounded-md text-[13px] text-text-secondary border border-border-subtle hover:border-border-primary hover:text-text-primary transition-colors"
+              >
+                加载更多
+              </button>
             </div>
           )}
         </div>
