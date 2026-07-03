@@ -8,6 +8,11 @@ out/
 server/server/
 server/src/
 
+# Playwright outputs
+test-results/
+playwright-report/
+playwright/.cache/
+
 # Logs
 *.log
 npm-debug.log*
