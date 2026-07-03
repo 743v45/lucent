@@ -951,10 +951,13 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
       case 'message': {
         const msg = data.messages?.[selected.index];
         if (!msg) return null;
+        // content 可能是 string / ContentBlock[]，OpenAI 多轮 tool-use 的 assistant 消息
+        // 历史上为 null（仅发起 tool_calls）。统一兜底：非数组按空内容处理，避免 .map 崩溃。
+        const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
         const contentText =
           typeof msg.content === 'string'
             ? msg.content
-            : msg.content
+            : contentBlocks
                 .map((block) => {
                   if (block.type === 'text' && block.text) {
                     return block.text;

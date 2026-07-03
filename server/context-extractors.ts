@@ -119,7 +119,9 @@ export function extractOpenAIChat(body: any): ExtractedContext | null {
     }
     messages.push({
       role: msg.role || 'user',
-      content: msg.content,
+      // OpenAI 多轮 tool-use：assistant 仅发起工具调用时 content 为 null。
+      // 规范化为空数组，与 Anthropic 分支一致，避免前端按数组解构时崩溃。
+      content: msg.content == null ? [] : msg.content,
     });
   }
 
@@ -150,7 +152,8 @@ export function extractOpenAIResponses(body: any): ExtractedContext | null {
   } else if (Array.isArray(body.input)) {
     messages = body.input.map((item: any) => ({
       role: item.role || 'user',
-      content: item.content,
+      // input 项可能无 content（如 function_call / function_call_output）→ 规范化为空数组
+      content: item.content == null ? [] : item.content,
     }));
   }
 
