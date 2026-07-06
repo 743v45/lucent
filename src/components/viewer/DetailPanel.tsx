@@ -969,20 +969,25 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
         const contentText =
           typeof msg.content === 'string'
             ? msg.content
-            : msg.content
-                .map((block) => {
-                  if (block.type === 'text' && block.text) {
-                    return block.text;
-                  } else if (block.type === 'tool_use') {
-                    const toolBlock = block as { name?: string; input?: unknown };
-                    return `[工具调用: ${toolBlock.name ?? 'unknown'}]\n${JSON.stringify(toolBlock.input, null, 2)}`;
-                  } else if (block.type === 'tool_result') {
-                    const resultBlock = block as { content?: unknown };
-                    return `[工具结果]\n${extractToolResultContent(resultBlock.content)}`;
-                  }
-                  return '';
-                })
-                .join('\n\n');
+            : Array.isArray(msg.content)
+              ? msg.content
+                  .map((block) => {
+                    if (block.type === 'text' && block.text) {
+                      return block.text;
+                    } else if (block.type === 'tool_use') {
+                      const toolBlock = block as { name?: string; input?: unknown };
+                      return `[工具调用: ${toolBlock.name ?? 'unknown'}]\n${JSON.stringify(toolBlock.input, null, 2)}`;
+                    } else if (block.type === 'tool_result') {
+                      const resultBlock = block as { content?: unknown };
+                      return `[工具结果]\n${extractToolResultContent(resultBlock.content)}`;
+                    }
+                    return '';
+                  })
+                  .join('\n\n')
+              // 纵深防御：历史脏数据 content 为 null/undefined 时不再 .map() 崩溃。
+              // 服务端 extractor 已归一化（见 2026-06-18-fix-context-content-null），
+              // 这里只兜底未迁移的旧日志。
+              : String(msg.content ?? '');
         return {
           title: `${msg.role === 'user' ? '用户' : msg.role === 'assistant' ? '助手' : '工具'} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`,
           content: contentText,

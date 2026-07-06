@@ -127,7 +127,10 @@ export function extractOpenAIChat(body: any): ExtractedContext | null {
     }
     messages.push({
       role: msg.role || 'user',
-      content: msg.content,
+      // OpenAI Chat 允许 assistant 发起 tool_calls 时 content === null/undefined，
+      // 归一化为空数组，兑现 NormalizedMessage.content: string | ContentBlock[] 契约，
+      // 避免透传到前端 ContextTab 的 .map() 崩溃（见 2026-06-18-fix-context-content-null）。
+      content: msg.content == null ? [] : msg.content,
     });
   }
 
@@ -158,7 +161,9 @@ export function extractOpenAIResponses(body: any): ExtractedContext | null {
   } else if (Array.isArray(body.input)) {
     messages = body.input.map((item: any) => ({
       role: item.role || 'user',
-      content: item.content,
+      // OpenAI Responses 允许 item.content 缺省/null，归一化为空数组，
+      // 与 extractOpenAIChat / extractAnthropicMessages 一致（同上）。
+      content: item.content == null ? [] : item.content,
     }));
   }
 
