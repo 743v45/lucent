@@ -38,18 +38,18 @@ export const MAX_LOG_FILES = 50;                    // 日志轮转保留文件�
 export const LOG_RETENTION_DAYS = 30;               // 日志自动清理天数
 export const MAX_LOG_FILES_TO_READ = 20;             // Web 端查看日志时最多读取的文件数
 export const DEFAULT_LOG_QUERY_LIMIT = 100;         // 日志查询默认返回条数
-export const LOG_ENTRY_SEPARATOR = '\n---\n';       // 日志条目之间的分隔符（写入时使用）
-export const LOG_SPLIT_REGEX = /\n---\n?/;          // 解析日志时用于拆分条目的正则
 
-/** 转义 JSON 字符串中可能与日志分隔符冲突的序列 */
-export function escapeLogContent(json: string): string {
-  return json.replace(/\n---\n/g, '\\n---\\n');
-}
-
-/** 反转义：将转义后的序列还原 */
-export function unescapeLogContent(text: string): string {
-  return text.replace(/\\n---\\n/g, '\n---\n');
-}
+/**
+ * 日志格式：标准 JSON Lines
+ *
+ * 每条日志 = 一行 JSON + 行尾 '\n'。分隔符就是真实换行符，
+ * JSON.stringify 保证字符串值内不含裸换行，与内容天然不冲突。
+ *
+ * 历史版本曾用 '\n---\n' 分隔符 + escape/unescape 二次转义层，
+ * 但与 JSON 自身转义冲突：含 markdown / YAML frontmatter（字面
+ * '\n---\n'）的 body 会让 unescape 在 JSON.parse 之前破坏字符串值，
+ * 导致该条目及之后所有条目解析失败被静默丢弃。已废弃。
+ */
 
 // ==================== 上下文窗口大小 ====================
 export const DEFAULT_CONTEXT_SIZE = 200000;  // 200K — 普通模型的默认上下文长度

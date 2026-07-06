@@ -271,7 +271,8 @@ try {
     const files = readdirSync(logDir).filter(f => f.endsWith('.jsonl')).sort();
     if (files.length > 0) {
       const content = readFileSync(join(logDir, files[files.length - 1]), 'utf-8');
-      lastEntries = content.split('\n---\n').filter(s => s.trim().startsWith('{')).map(s => JSON.parse(s));
+      // 标准 JSONL：一行一条 JSON
+      lastEntries = content.split('\n').filter(s => s.trim().startsWith('{')).map(s => JSON.parse(s));
     }
   } catch (e) {
     lastEntries = [];

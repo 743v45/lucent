@@ -127,7 +127,7 @@ export async function stopBackend(): Promise<void> {
 // ==================== 日志读取 ====================
 
 /**
- * 读取最新的 JSONL 日志文件
+ * 读取最新的 JSONL 日志文件（标准 JSONL：一行一条 JSON）
  */
 export async function readLatestLog(logDir: string): Promise<Array<Record<string, unknown>> | null> {
   const files = await readdir(logDir);
@@ -135,9 +135,12 @@ export async function readLatestLog(logDir: string): Promise<Array<Record<string
   if (jsonlFiles.length === 0) return null;
 
   const content = await readFile(join(logDir, jsonlFiles[0]), 'utf-8');
-  return content.split(/\n---\n?/).filter(Boolean).map(line => {
-    try { return JSON.parse(line); } catch { return {}; }
-  });
+  return content
+    .split('\n')
+    .filter(line => line.trim().length > 0)
+    .map(line => {
+      try { return JSON.parse(line); } catch { return {}; }
+    });
 }
 
 // ==================== Mock 上游服务器 ====================

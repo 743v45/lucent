@@ -110,7 +110,8 @@ function readLogEntries(): any[] {
   const files = readdirSync(join(CONFIG_DIR, 'logs')).filter(f => f.endsWith('.jsonl')).sort();
   if (!files.length) return [];
   return readFileSync(join(CONFIG_DIR, 'logs', files[files.length - 1]), 'utf-8')
-    .split(/\n---\n/).filter(s => s.trim().startsWith('{')).map(s => JSON.parse(s));
+    // 标准 JSONL：一行一条 JSON
+    .split('\n').filter(s => s.trim().startsWith('{')).map(s => JSON.parse(s));
 }
 
 async function waitFor(proc: any, regex: RegExp, label: string, timeoutMs = 30000) {

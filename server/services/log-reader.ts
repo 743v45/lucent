@@ -11,8 +11,6 @@ import { join } from 'node:path';
 import {
   DEFAULT_LOG_QUERY_LIMIT,
   MAX_LOG_FILES_TO_READ,
-  LOG_SPLIT_REGEX,
-  unescapeLogContent,
 } from '../constants.js';
 import { extractContext } from '../context-extractors.js';
 import { extractCachedContent, getContextSizeForModel } from '../kvcache.js';
@@ -67,18 +65,18 @@ async function readFileEntries(filename: string): Promise<LogEntry[]> {
     return cached.entries;
   }
 
-  // 缓存未命中，解析文件
+  // 缓存未命中，解析文件（标准 JSONL：一行一条 JSON）
   const content = await readFile(filePath, 'utf-8');
   const entries: LogEntry[] = [];
-  const chunks = content.split(LOG_SPLIT_REGEX);
-  for (const chunk of chunks) {
-    const line = chunk.trim();
-    if (!line) continue;
+  const lines = content.split('\n');
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
     try {
-      const raw = JSON.parse(unescapeLogContent(line));
+      const raw = JSON.parse(trimmed);
       entries.push(normalizeLogEntry(raw));
     } catch {
-      // 忽略解析失败的行
+      // 忽略解析失败的行（含旧 escape 格式文件，按用户选择不做迁移）
     }
   }
 

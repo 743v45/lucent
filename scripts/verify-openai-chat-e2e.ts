@@ -118,7 +118,8 @@ function readLogEntries() {
   const files = readdirSync(logDir).filter(f => f.endsWith('.jsonl')).sort();
   if (files.length === 0) return [];
   const content = readFileSync(join(logDir, files[files.length - 1]), 'utf-8');
-  return content.split(/\n---\n/).filter(s => s.trim().startsWith('{')).map(s => JSON.parse(s));
+  // 标准 JSONL：一行一条 JSON
+  return content.split('\n').filter(s => s.trim().startsWith('{')).map(s => JSON.parse(s));
 }
 
 // ==================== 等待服务就绪 ====================

@@ -8,7 +8,6 @@
 import { appendFile, rename, stat, unlink, readdir } from 'node:fs/promises';
 import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { LOG_ENTRY_SEPARATOR, escapeLogContent } from '../constants.js';
 import type { RawLogEntry } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
@@ -93,7 +92,10 @@ export function writeLogEntry(entry: RawLogEntry): void {
     currentLogFile = generateLogFilePath();
   }
 
-  const line = escapeLogContent(JSON.stringify(entry)) + LOG_ENTRY_SEPARATOR;
+  // 标准 JSONL：一条日志 = 一行 JSON + '\n'。
+  // JSON.stringify 已保证字符串值内不含裸换行，分隔符即真实换行，
+  // 无需（也不可）叠加任何二次转义层。
+  const line = JSON.stringify(entry) + '\n';
   const file = currentLogFile;
 
   // 背压：队列超限时拒绝新条目入队（FIFO 保护已排队写入，防止 OOM）
