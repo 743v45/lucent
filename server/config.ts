@@ -479,3 +479,64 @@ export function deleteProvider(id: string): void {
   config.providers.splice(idx, 1);
   saveConfig(config);
 }
+
+// ==================== BodyRewrite CRUD ====================
+
+/**
+ * 获取全部 body 重写规则
+ */
+export function getBodyRewrites(): BodyRewriteRule[] {
+  return getConfig().bodyRewrites ?? [];
+}
+
+/**
+ * 新增一条 body 重写规则（自动生成 id）
+ *
+ * 失败抛 Error：fieldPath 非法 / pattern 非法正则 / 未知键 / flags 非法（信息带定位）。
+ */
+export function addBodyRewrite(input: Omit<BodyRewriteRule, 'id'>): BodyRewriteRule {
+  const config = getConfig();
+  const newRule: BodyRewriteRule = { id: randomUUID(), ...input };
+  const list = [...(config.bodyRewrites ?? []), newRule];
+  validateBodyRewrites(list);
+  config.bodyRewrites = list;
+  saveConfig(config);
+  return newRule;
+}
+
+/**
+ * 更新一条 body 重写规则（按 id），id 不可改。
+ *
+ * 失败抛 Error：规则不存在 / 校验失败。
+ */
+export function updateBodyRewrite(id: string, patch: Partial<Omit<BodyRewriteRule, 'id'>>): BodyRewriteRule {
+  const config = getConfig();
+  const list = config.bodyRewrites ?? [];
+  const idx = list.findIndex(r => r.id === id);
+  if (idx === -1) {
+    throw new Error(`Body rewrite rule not found: ${id}`);
+  }
+  const updated: BodyRewriteRule = { ...list[idx], ...patch, id };
+  list[idx] = updated;
+  validateBodyRewrites(list);
+  config.bodyRewrites = list;
+  saveConfig(config);
+  return updated;
+}
+
+/**
+ * 删除一条 body 重写规则（按 id）
+ *
+ * 失败抛 Error：规则不存在。
+ */
+export function deleteBodyRewrite(id: string): void {
+  const config = getConfig();
+  const list = config.bodyRewrites ?? [];
+  const idx = list.findIndex(r => r.id === id);
+  if (idx === -1) {
+    throw new Error(`Body rewrite rule not found: ${id}`);
+  }
+  list.splice(idx, 1);
+  config.bodyRewrites = list;
+  saveConfig(config);
+}

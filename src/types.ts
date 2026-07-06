@@ -309,6 +309,30 @@ export interface Provider {
   endpoints: Record<EndpointType, string | null>;
 }
 
+// ==================== Body 重写规则 ====================
+
+/**
+ * 单条请求 body 重写规则（与 server/types.ts 对齐）
+ *
+ * 语义：对 fieldPath 定位的字符串叶子值做子串替换
+ *   value.replace(new RegExp(pattern, flags ?? 'g'), replacement)
+ */
+export interface BodyRewriteRule {
+  id: string;
+  /** 人类可读名，可选 */
+  name?: string;
+  /** 是否启用，缺省 true */
+  enabled?: boolean;
+  /** 字段路径，如 "system[0].text" */
+  fieldPath: string;
+  /** JS 正则源串 */
+  pattern: string;
+  /** 正则 flags，仅 [gimsuy]*，缺省 'g' */
+  flags?: string;
+  /** 替换字符串，空串=删除匹配子串 */
+  replacement: string;
+}
+
 // ==================== 代理配置 ====================
 
 /**

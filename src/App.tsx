@@ -3,9 +3,10 @@ import { LogListPanel } from './components/dashboard/LogListPanel';
 import { DetailPanel } from './components/viewer/DetailPanel';
 import { SettingsContext } from './contexts/SettingsContext';
 import { SettingsModal } from './components/settings/SettingsModal';
+import { BodyRewriteModal } from './components/settings/BodyRewriteModal';
 import { UsageGuide } from './components/common/UsageGuide';
 import { useLogs } from './hooks/useLogs';
-import { ArrowPathIcon, Cog6ToothIcon, InformationCircleIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, Cog6ToothIcon, InformationCircleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import type { TabType, Provider } from './types';
 import {
   URL_PARAM_LOG_ID,
@@ -33,6 +34,7 @@ function App(): JSX.Element {
   );
   const [conversationView, setConversationView] = useState<'timeline' | 'session'>('timeline');
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [rewriteOpen, setRewriteOpen] = useState(false);
   const [usageGuideOpen, setUsageGuideOpen] = useState(false);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem(STORAGE_KEY_SIDEBAR_WIDTH);
@@ -194,6 +196,13 @@ function App(): JSX.Element {
             </button>
             <button
               className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
+              onClick={() => setRewriteOpen(true)}
+              title="Body 重写规则"
+            >
+              <WrenchScrewdriverIcon className="w-[18px] h-[18px]" />
+            </button>
+            <button
+              className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
               onClick={() => setSettingsOpen(true)}
               title="配置"
             >
@@ -234,6 +243,7 @@ function App(): JSX.Element {
         </div>
 
         <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
+        <BodyRewriteModal open={rewriteOpen} onClose={() => setRewriteOpen(false)} />
         <UsageGuide
           open={usageGuideOpen}
           onClose={() => setUsageGuideOpen(false)}

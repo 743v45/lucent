@@ -298,6 +298,24 @@ Proxy 读取请求 body（限制 `MAX_REQUEST_BODY_SIZE` = 50MB），透传给 `
 > 2. 🔴 **改变 agent 分类 / threadId**：interceptor 的 `classifyAgent` / `identify` 跑在重写后 body 上 → 激进脱敏可能误分类子 agent、切会话线索。
 > 3. 🟢 JSONL 日志记录的是**重写后** body（脱敏场景通常正合意图）；命中后 body 会被 `JSON.stringify` 紧凑化（空白变化）；用户自配 `pattern` 的 ReDoS 风险自负。
 
+### 7.3 UI 动态配置（BodyRewriteModal）
+
+引擎本身只读 `~/.lucent/config.json`，但手编 JSON 反馈链长、调正则无即时预览。所以叠加一层 Web UI 动态配置，**不改引擎语义**，只改配置入口：
+
+- **入口**：[`src/App.tsx`](../../../src/App.tsx) 顶栏独立按钮（`WrenchScrewdriverIcon`，`title="Body 重写规则"`），与 Settings 平级，点击打开 [`BodyRewriteModal`](../../../src/components/settings/BodyRewriteModal.tsx)。
+- **CRUD API**：[`server/routes/body-rewrites.ts`](../../../server/routes/body-rewrites.ts) 挂载在 [`server/routes/index.ts`](../../../server/routes/index.ts)，四端点：
+  - `GET /api/body-rewrites` → `BodyRewriteRule[]`
+  - `POST /api/body-rewrites` → 新增，`id` 后端生成、不接受客户端 id
+  - `PUT /api/body-rewrites/:id` → 更新，`id` 路径锁定不可改
+  - `DELETE /api/body-rewrites/:id` → 删除
+- **config helper**：[`server/config.ts`](../../../server/config.ts) 的 `getBodyRewrites`/`addBodyRewrite`/`updateBodyRewrite`/`deleteBodyRewrite` 复用 `validateBodyRewrites` + `saveConfig`，写回 `~/.lucent/config.json`。
+- **Modal 编辑**：列表式编辑 `name`/`enabled`/`fieldPath`/`pattern`/`flags`/`replacement`，字段**失焦自动 PUT 保存**；新增走 POST、删除走 DELETE。
+- **试跑预览**：Modal 内输入样例文本，前端用 `new RegExp(pattern, flags ?? 'g')` 本地 `replace` 即时显示结果——与后端引擎**同语义**（WYSIWYG）；非法正则 / 非法 flags 在预览区显示错误提示，不崩溃。
+- **生效**：CRUD 内部 `saveConfig` 落盘，proxy **每请求读最新 config** → 保存即对后续请求生效，**无需 reload**。
+- **前端封装**：[`src/utils/api.ts`](../../../src/utils/api.ts) 的 `listBodyRewrites`/`createBodyRewrite`/`updateBodyRewrite`/`deleteBodyRewrite` + [`src/types.ts`](../../../src/types.ts) 的 `BodyRewriteRule` 副本（与 [`server/types.ts`](../../../server/types.ts) 同构）。
+
+> ⚠️ UI 只是更方便地配置规则，**不消除**引擎固有的 KV-Cache / agent 分类副作用（见 §7.2）。对 `system[0].text` 类规则，cache 影响依然存在；前后端必须保持 `RegExp` 构造同语义，否则预览与实际效果不符。
+
 ---
 
 ## 8. 完整变换流水线
@@ -384,6 +402,7 @@ Client                         Proxy (:7048)                    Upstream
 |---|---|
 | Body 一字不改 | 代理是透明的，上游不应该感知经过代理 |
 | 可选 body 重写（opt-in `bodyRewrites`） | 脱敏等需求需出口，但保持默认透明：未配置/零命中字节级不变（原 buffer 引用），失败回退原 body 不阻断；严格校验禁未知键 |
+| UI 动态配置（BodyRewriteModal） | 引擎落地后需 Web 可视化增删改规则 + 试跑预览调正则：顶栏独立入口、失焦自动保存、前后端 RegExp 同语义、`saveConfig` 即生效无 reload |
 | `Accept-Encoding: identity` | 拦截器需要读取原始 body 做日志；如果上游 gzip，拦截器无法解析 |
 | `x-lucent-*` 临时头接力 | Proxy 和 Interceptor 在同一进程但不同模块，Header 是最轻量的通信方式 |
 | 发给上游前清除 `x-lucent-*` | 避免上游收到非标准头导致兼容性问题 |

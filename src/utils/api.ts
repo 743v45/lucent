@@ -2,7 +2,7 @@
  * API 工具函数
  */
 
-import type { Provider, EndpointType } from '../types';
+import type { Provider, EndpointType, BodyRewriteRule } from '../types';
 import { API_BASE_PATH } from '../constants';
 
 /**
@@ -269,5 +269,54 @@ export async function testProviderEndpoint(
   return request(`/providers/${encodeURIComponent(name)}/test`, {
     method: 'POST',
     body: JSON.stringify({ endpointType }),
+  });
+}
+
+// ==================== Body Rewrite API ====================
+
+/**
+ * 列出全部 body 重写规则
+ */
+export async function listBodyRewrites(): Promise<BodyRewriteRule[]> {
+  const data = await request<{ bodyRewrites: BodyRewriteRule[] }>('/body-rewrites');
+  return data.bodyRewrites;
+}
+
+/**
+ * 新增一条 body 重写规则（id 由后端生成）
+ */
+export async function createBodyRewrite(input: {
+  fieldPath: string;
+  pattern: string;
+  replacement: string;
+  name?: string;
+  enabled?: boolean;
+  flags?: string;
+}): Promise<BodyRewriteRule> {
+  return request('/body-rewrites', {
+    method: 'POST',
+    body: JSON.stringify(input),
+  });
+}
+
+/**
+ * 更新一条 body 重写规则（按 id，id 不可改）
+ */
+export async function updateBodyRewrite(
+  id: string,
+  patch: Partial<Omit<BodyRewriteRule, 'id'>>,
+): Promise<BodyRewriteRule> {
+  return request(`/body-rewrites/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: JSON.stringify(patch),
+  });
+}
+
+/**
+ * 删除一条 body 重写规则（按 id）
+ */
+export async function deleteBodyRewrite(id: string): Promise<void> {
+  await request(`/body-rewrites/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
   });
 }
