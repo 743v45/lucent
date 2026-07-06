@@ -24,7 +24,9 @@ export default defineConfig({
   use: {
     headless: true,
     actionTimeout: 10_000,
-    navigationTimeout: 15_000,
+    // 冷启动（vite 缓存冷）首次导航要触发按需编译整个源码模块图，15s 偏紧会假阳；
+    // 缓存热后远低于此值。放宽到 30s 给冷编译留余量，整体仍受 test timeout 60s 兜底。
+    navigationTimeout: 30_000,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
