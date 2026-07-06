@@ -125,7 +125,9 @@ async function post(url, headers, body) {
       body: typeof body === 'string' ? body : JSON.stringify(body),
     });
     let resBody = '';
-    try { resBody = await res.text(); } catch {}
+    try { resBody = await res.text(); } catch {
+      // Response body may not be available
+    }
     return { status: res.status, body: resBody };
   } catch (e) {
     return { status: 0, body: String(e) };
@@ -274,7 +276,7 @@ try {
       // 标准 JSONL：一行一条 JSON
       lastEntries = content.split('\n').filter(s => s.trim().startsWith('{')).map(s => JSON.parse(s));
     }
-  } catch (e) {
+  } catch {
     lastEntries = [];
   }
   const deltaFields = ['_deltaFormat', '_isCheckpoint', '_totalMessageCount', '_conversationId', '_inPlaceReplaceDetected'];
@@ -309,7 +311,9 @@ try {
   backend.kill('SIGTERM');
   upstream.close();
   await new Promise(r => setTimeout(r, 300));
-  try { rmSync(CONFIG_DIR, { recursive: true, force: true }); } catch {}
+  try { rmSync(CONFIG_DIR, { recursive: true, force: true }); } catch {
+    // Config dir may already be cleaned up
+  }
 }
 
 // ==================== 汇总 ====================

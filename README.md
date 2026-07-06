@@ -148,6 +148,7 @@ npm run build   # 构建生产版本
 ```bash
 npm run test:run       # 跑全量 vitest 单测/e2e 套件
 npm run verify:e2e     # 启动真后端 + mock 上游的端到端验收
+npm run e2e            # 统一验收 gate：verify:e2e + test:run + Web UI 交互 specs，任一失败非 0 退出
 ```
 
 ### 端到端验收
@@ -185,6 +186,44 @@ npm run verify:custom-errors    # 自定义供应商 3 协议 × 4 状态码(200
 每条命令启动真后端 + vite dev + mock 上游 + playwright headless 浏览器，断言 10-120 个验收点（含 Web UI data-testid 渲染匹配）。`verify:custom` / `verify:custom-errors` 用 1 个 mock upstream 同时处理 3 协议，遍历 2 个自定义供应商。
 
 契约见 [`openspec/specs/protocol-chain-verification`](openspec/specs/protocol-chain-verification/spec.md)。
+
+### 统一验收 gate（npm run e2e）
+
+把三层验收串成一条命令，任一阶段失败立即停并非 0 退出：
+
+```bash
+npm run e2e
+```
+
+三段互补：
+
+| 阶段 | 命令 | 验什么 |
+|------|------|--------|
+| 1 | `npm run verify:e2e` | 后端路由 / URL 拼接（协议链路） |
+| 2 | `npm run test:run` | vitest 全量单测 / 后端 e2e |
+| 3 | `npx playwright test` | Web UI 交互层 specs（下方） |
+
+前两层是既有资产，第三层是新增的 UI 交互地基。**何时跑**：改动 UI 交互、加验收
+点、或合并前自检。脚本：`scripts/e2e-gate.mjs`。
+
+### Web UI 交互层 e2e（Playwright）
+
+`verify:*` 脚本只验「渲染出没出来」（一次性断言）。Web UI 的**交互**——点日志行、
+切 detail tab——由 `e2e/` 下的 Playwright spec 覆盖：
+
+```bash
+npm run e2e:ui        # 只跑 UI 交互 specs
+```
+
+- `playwright.config.ts`：headless chromium，单 worker（栈串行，互不抢端口）。
+- `e2e/fixtures.ts`：每个 spec 自带隔离栈——临时 config + 随机端口 + mock 上游（复用
+  `tests/e2e-helpers.ts`）+ 起 backend + vite dev。拆栈用 process-group kill，不残留监听端口。
+- `e2e/seed.spec.ts`：种子样板，贯穿主流程（请求穿代理 → 出 `log-row` → 点开看
+  Request/Response tab）。F1–F6 的交互 spec 照这个结构写。
+- UI ↔ spec 的稳定契约是 `data-testid`（`log-row` / `request-body` / `response-body` /
+  `tab-${key}` / `detail-panel` / `detail-empty` 等），只按需补，不滥用。
+
+契约见 [`openspec/specs/ui-e2e-verification`](openspec/specs/ui-e2e-verification/spec.md)。
 
 ## 参考
 

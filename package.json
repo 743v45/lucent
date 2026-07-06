@@ -25,7 +25,12 @@
     "verify:openai-chat": "tsx scripts/verify-openai-chat-e2e.ts",
     "verify:openai-responses": "tsx scripts/verify-openai-responses-e2e.ts",
     "verify:custom": "tsx scripts/verify-custom-providers-e2e.ts",
-    "verify:custom-errors": "tsx scripts/verify-custom-errors-e2e.ts"
+    "verify:custom-errors": "tsx scripts/verify-custom-errors-e2e.ts",
+    "verify:loglist": "tsx scripts/verify-loglist-e2e.ts",
+    "setup:openai": "tsx scripts/setup-openai-provider.ts",
+    "e2e": "node scripts/e2e-gate.mjs",
+    "e2e:ui": "playwright test",
+    "record:newapi": "tsx scripts/record-newapi-e2e.ts"
   },
   "dependencies": {
     "@ant-design/icons": "^6.0.0",
@@ -70,5 +75,11 @@
   },
   "engines": {
     "node": ">=20.0.0"
+  },
+  "overrides": {
+    "dompurify": ">=3.4.11",
+    "tsx": {
+      "esbuild": "^0.28.1"
+    }
   }
 }

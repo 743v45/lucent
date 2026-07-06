@@ -141,18 +141,10 @@ export function groupLogsByAgent(logs: LogEntry[]): Map<string, LogEntry[]> {
 export function getAgentTypeStats(logs: LogEntry[]): {
   main: number;
   sub: number;
-  bySubType: Record<string, number>;
 } {
   const stats = {
     main: 0,
     sub: 0,
-    bySubType: {
-      bash: 0,
-      plan: 0,
-      search: 0,
-      workflow: 0,
-      unknown: 0,
-    } as Record<string, number>,
   };
 
   for (const log of logs) {
@@ -160,8 +152,6 @@ export function getAgentTypeStats(logs: LogEntry[]): {
       stats.main++;
     } else if (log.agentType === 'sub') {
       stats.sub++;
-      const subType = log.subAgentType || 'unknown';
-      stats.bySubType[subType] = (stats.bySubType[subType] || 0) + 1;
     }
   }
 
@@ -256,7 +246,7 @@ export function formatLogForDebug(log: LogEntry): string {
 
   lines.push(`📝 Log ID: ${log.id}`);
   lines.push(`🕐 Timestamp: ${log.timestamp}`);
-  lines.push(`🤖 Agent: ${log.agentType}${log.subAgentType ? ` (${log.subAgentType})` : ''}`);
+  lines.push(`🤖 Agent: ${log.agentType}`);
   lines.push(`⏱️ Duration: ${log.duration}ms`);
   lines.push(`📦 Model: ${log.metadata.model}`);
   lines.push(`🔌 Provider: ${log.metadata.provider}`);
@@ -309,13 +299,6 @@ export function printLogSummary(logs: LogEntry[]): void {
   console.log(`📊 总记录数: ${logs.length}`);
   console.log(`🤖 主Agent: ${agentStats.main}`);
   console.log(`🔧 子Agent: ${agentStats.sub}`);
-
-  if (Object.keys(agentStats.bySubType).length > 0) {
-    console.log(`\n子Agent类型分布:`);
-    for (const [type, count] of Object.entries(agentStats.bySubType)) {
-      console.log(`   - ${type}: ${count}`);
-    }
-  }
 
   console.log(`\n📊 Token使用:`);
   console.log(`   - 总输入: ${tokenStats.totalInput}`);

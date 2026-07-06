@@ -36,11 +36,12 @@ export default [
     },
   },
 
-  // ==================== 测试文件放宽（e2e 从 helpers 批量导入工具，未用部分属模板代码） ====================
+  // ==================== 测试文件放宽（e2e/tests 从 helpers 批量导入工具，未用部分属模板代码；Playwright fixture 无依赖时必须用 {} 解构） ====================
   {
-    files: ['tests/**'],
+    files: ['tests/**', 'e2e/**'],
     rules: {
       '@typescript-eslint/no-unused-vars': 'off',
+      'no-empty-pattern': 'off',
     },
   },
 ];

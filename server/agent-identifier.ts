@@ -1,17 +1,16 @@
 /**
  * Agent 识别模块
  *
- * 用于识别请求中的 Agent 类型和子类型
+ * 主/子 Agent 判定：基于 system prompt 的身份指纹 + Claude Code billing header 标记，
+ * 而非 messages 多轮性（主代理首请求也没有 assistant 历史，靠历史长度判定必然误判）。
+ *
+ * 判据移植自 cc-viewer 的 isMainAgentRequest，适配 lucent 多端点（OpenAI tools 在
+ * function.name，Anthropic 在 tool.name；OpenAI 格式 system 在 messages 内 role=system）。
  */
 
-import { AgentType, SubAgentType, ClientType } from './types.js';
+import { AgentType, ClientType } from './types.js';
 import createDebug from 'debug';
 const log = createDebug('lucent:agent-id');
-
-export interface AgentIdentification {
-  agentType: AgentType;
-  subAgentType?: SubAgentType;
-}
 
 export interface TokenUsage {
   input_tokens: number;
@@ -20,198 +19,111 @@ export interface TokenUsage {
   cache_creation_tokens?: number;
 }
 
-export interface ParsedRequest {
-  model?: string;
-  messages?: Array<{ role: string; content: string | unknown }>;
-  tools?: Array<{ name: string; description?: string }>;
-  system?: string;
-  stream?: boolean;
-}
+// ==================== 主/子 Agent 判定 ====================
+//
+// 三类「伪装成主代理的子代理」，须在正向判定前显式排除（均为 cc-viewer 实战踩坑积累）：
+//   ① cc_is_subagent=true —— Claude Code 2.1.181+ 在 billing header 显式标注的子代理。
+//      此类子代理继承完整 "You are Claude Code" prompt + Edit/Bash/Agent 工具，会误中正向判据。
+//      结尾 \b 锚定：仅匹配 `=true`（其后为 `;`/空白/串尾），避免 `=truex` 之类误匹配。
+//   ② specialist —— Claude Code 内置专用子代理（command execution / file search / planning 等）。
+//      注：「general-purpose agent」必须锚定身份句式（you are a general-purpose agent），不能裸匹配——
+//      Claude Code 主代理的 system 会枚举 Agent 工具可用类型，描述里含
+//      「general-purpose: General-purpose agent for ...」，裸串会误伤主代理。
+//   ③ teammate —— 同进程 Agent/Task 队友：system 注入团队协作标记但继承完整 "You are Claude Code"
+//      prompt + 工具，且不带 --agent-name 进程参数。须排除，否则其 thinking 污染主回复 overlay。
+const SUBAGENT_BILLING_RE = /cc_is_subagent=true\b/;
+const SUBAGENT_SPECIALIST_RE = /(?:command execution|file search|planning) specialist|you are a general-purpose agent|security monitor|performing a web search/i;
+const TEAMMATE_SYSTEM_RE = /running as an agent in a team|Agent Teammate Communication/i;
+
+/** Claude Code 主代理身份声明（真·主代理恒定带此串，子代理身份声明不同）。 */
+const MAIN_AGENT_IDENTITY = 'You are Claude Code';
 
 /**
- * 识别 Agent 类型和子类型
+ * 从请求体提取 system prompt 全文。
+ * 兼容三种端点协议：
+ *  - Anthropic Messages：顶层 `system`（string 或 content block 数组）
+ *  - OpenAI Chat：`messages` 内 role=system 的内容
+ *  - OpenAI Responses：顶层 `instructions`
  */
-export function identifyAgent(body: unknown): AgentIdentification {
-  if (!body || typeof body !== 'object') {
-    return { agentType: 'sub', subAgentType: 'unknown' };
+function getSystemText(body: unknown): string {
+  if (!body || typeof body !== 'object') return '';
+  const b = body as Record<string, unknown>;
+
+  // Anthropic：顶层 system
+  const sys = b.system;
+  if (typeof sys === 'string') return sys;
+  if (Array.isArray(sys)) {
+    return sys
+      .map((s) => (s && typeof s === 'object' && typeof (s as { text?: unknown }).text === 'string'
+        ? (s as { text: string }).text : ''))
+      .join('');
   }
 
-  const request = body as ParsedRequest;
-
-  // 主 Agent 识别：完整的 messages 数组且包含多轮对话
-  // 注意：1 轮 user+assistant 恰好 2 条也应识别为主 Agent（>= 2），
-  // 只要同时存在 user 与 assistant 消息即可视为完整对话上下文。
-  if (Array.isArray(request.messages) && request.messages.length >= 2) {
-    const hasUserMessage = request.messages.some(m => m.role === 'user');
-    const hasAssistantMessage = request.messages.some(m => m.role === 'assistant');
-
-    if (hasUserMessage && hasAssistantMessage) {
-      log('识别为主 Agent: messages=%d', request.messages.length);
-      return { agentType: 'main' };
+  // OpenAI Chat：messages 内 system
+  const messages = b.messages;
+  if (Array.isArray(messages)) {
+    const parts: string[] = [];
+    for (const m of messages) {
+      if (!m || typeof m !== 'object') continue;
+      if ((m as { role?: string }).role !== 'system') continue;
+      const c = (m as { content?: unknown }).content;
+      if (typeof c === 'string') {
+        parts.push(c);
+      } else if (Array.isArray(c)) {
+        parts.push(
+          c.map((b) => (b && typeof b === 'object' && typeof (b as { text?: unknown }).text === 'string'
+            ? (b as { text: string }).text : '')).join(''),
+        );
+      }
     }
+    if (parts.length) return parts.join('');
   }
 
-  // 辅 Agent 识别 - 通过分析特征识别子类型
-  return identifySubAgent(request);
+  // OpenAI Responses：instructions
+  if (typeof b.instructions === 'string') return b.instructions;
+
+  return '';
 }
 
 /**
- * 识别辅 Agent 子类型
+ * 判定请求是主 Agent 还是子 Agent。
+ *
+ * 决策顺序：
+ *  1. 权威排除：明确标记为子代理（cc_is_subagent / teammate / specialist）→ sub
+ *  2. Claude Code 主代理：system 含 "You are Claude Code"（且无 ① 标记）→ main
+ *  3. 兜底：无任何已知身份/标记 → main（非 Claude Code 的第三方请求先按主代理处理，
+ *     以后再细分）。子代理必须靠 ① 的明确标记命中，绝不靠「没有标记」推断为 sub。
  */
-function identifySubAgent(request: ParsedRequest): AgentIdentification {
-  const { messages, tools, system } = request;
+export function classifyAgent(body: unknown): AgentType {
+  const sysText = getSystemText(body);
 
-  // 优先级1: 从 system prompt 识别
-  const systemContent = typeof system === 'string' ? system : '';
-  if (systemContent) {
-    const subType = identifyFromSystemPrompt(systemContent);
-    if (subType) {
-      return { agentType: 'sub', subAgentType: subType };
+  // ① 权威排除：明确标记为子代理的，绝不升为主代理。
+  if (SUBAGENT_BILLING_RE.test(sysText)) {
+    log('识别为子 Agent（cc_is_subagent 标记）');
+    return 'sub';
+  }
+  if (TEAMMATE_SYSTEM_RE.test(sysText)) {
+    log('识别为子 Agent（teammate 标记）');
+    return 'sub';
+  }
+
+  // ② Claude Code 主代理：真·主代理恒带此身份声明（主代理首请求也能命中）。
+  //    specialist 子代理虽有 "You are Claude Code" 前缀但带专用角色短语 → 排除。
+  if (sysText.includes(MAIN_AGENT_IDENTITY)) {
+    if (SUBAGENT_SPECIALIST_RE.test(sysText)) {
+      log('识别为子 Agent（specialist）');
+      return 'sub';
     }
+    log('识别为主 Agent（You are Claude Code）');
+    return 'main';
   }
 
-  // 优先级2: 从第一个消息内容识别
-  const firstMessage = messages?.[0];
-  const firstContent = typeof firstMessage?.content === 'string' ? firstMessage.content : '';
-  if (firstContent) {
-    const subType = identifyFromContent(firstContent);
-    if (subType) {
-      return { agentType: 'sub', subAgentType: subType };
-    }
-  }
-
-  // 优先级3: 从工具列表识别
-  if (Array.isArray(tools) && tools.length > 0) {
-    const subType = identifyFromTools(tools);
-    if (subType) {
-      return { agentType: 'sub', subAgentType: subType };
-    }
-  }
-
-  // 默认：未知类型
-  return { agentType: 'sub', subAgentType: 'unknown' };
+  // ③ 兜底：无 Claude Code 身份声明、无子代理标记（含非 CC 第三方请求、无 system 请求）→ main。
+  log('识别为主 Agent（兜底：无已知身份标记，按主代理处理）');
+  return 'main';
 }
 
-/**
- * 从 system prompt 识别 Agent 类型
- */
-function identifyFromSystemPrompt(system: string): SubAgentType | null {
-  const lower = system.toLowerCase();
-
-  // Plan Agent
-  if (lower.includes('plan') && (lower.includes('strategy') || lower.includes('architecture'))) {
-    return 'plan';
-  }
-
-  // Search Agent
-  if (lower.includes('search') || lower.includes('find') || lower.includes('browse')) {
-    return 'search';
-  }
-
-  // Bash Agent
-  if (lower.includes('bash') || lower.includes('command') || lower.includes('execute')) {
-    return 'bash';
-  }
-
-  // Workflow Agent
-  if (lower.includes('workflow') || lower.includes('orchestrat') || lower.includes('pipeline')) {
-    return 'workflow';
-  }
-
-  return null;
-}
-
-/**
- * 从消息内容识别 Agent 类型
- */
-function identifyFromContent(content: string): SubAgentType | null {
-  const lower = content.toLowerCase();
-
-  // Plan Agent - 关键词识别
-  if (lower.includes('create a plan') ||
-      lower.includes('develop a strategy') ||
-      lower.includes('design approach') ||
-      lower.includes('implementation plan')) {
-    return 'plan';
-  }
-
-  // Search Agent - 关键词识别
-  if (lower.includes('search for') ||
-      lower.includes('find information') ||
-      lower.includes('look up') ||
-      lower.includes('browse the web')) {
-    return 'search';
-  }
-
-  // Bash Agent - 关键词识别
-  if (lower.includes('run command') ||
-      lower.includes('execute') ||
-      lower.includes('terminal') ||
-      lower.includes('shell command')) {
-    return 'bash';
-  }
-
-  // Workflow Agent - 关键词识别
-  if (lower.includes('workflow') ||
-      lower.includes('orchestrate') ||
-      lower.includes('coordinate agents') ||
-      lower.includes('parallel execution')) {
-    return 'workflow';
-  }
-
-  return null;
-}
-
-/**
- * 从工具列表识别 Agent 类型
- */
-function identifyFromTools(tools: Array<{ name: string }>): SubAgentType | null {
-  const toolNames = tools
-    .map(t => t.name)
-    .filter((name): name is string => typeof name === 'string')
-    .map(name => name.toLowerCase());
-
-  // Plan Agent - 设计和规划工具
-  if (toolNames.some(name =>
-    name.includes('plan') ||
-    name.includes('design') ||
-    name.includes('architect'))) {
-    return 'plan';
-  }
-
-  // Search Agent - 搜索相关工具
-  if (toolNames.some(name =>
-    name.includes('search') ||
-    name.includes('browse') ||
-    name.includes('web'))) {
-    return 'search';
-  }
-
-  // Bash Agent - 命令执行工具
-  if (toolNames.some(name =>
-    name.includes('bash') ||
-    name.includes('command') ||
-    name.includes('execute') ||
-    name.includes('shell'))) {
-    return 'bash';
-  }
-
-  // Workflow Agent - 编排和协调工具
-  if (toolNames.some(name =>
-    name.includes('workflow') ||
-    name.includes('orchestrat') ||
-    name.includes('pipeline') ||
-    name.includes('parallel') ||
-    name.includes('agent'))) {
-    return 'workflow';
-  }
-
-  return null;
-}
-
-/**
- * 提取 Token 使用情况
- */
+// ==================== Token 提取 ====================
 export function extractTokenUsage(responseBody: unknown): TokenUsage | undefined {
   if (!responseBody || typeof responseBody !== 'object') {
     return undefined;

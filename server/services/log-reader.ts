@@ -117,7 +117,6 @@ export function normalizeLogEntry(raw: any): LogEntry {
     },
     response: raw.response ?? null,
     agentType: raw.agentType || (raw.mainAgent ? 'main' : 'sub'),
-    subAgentType: raw.subAgentType,
     apiType: raw.apiType,
     clientType: raw.clientType || 'unknown',
     duration: raw.duration || 0,
@@ -279,7 +278,6 @@ export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[
     limit = DEFAULT_LOG_QUERY_LIMIT,
     offset = 0,
     agentType = 'all',
-    subAgentType,
     startDate,
     endDate,
     search,
@@ -337,10 +335,6 @@ export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[
     filteredLogs = filteredLogs.filter(log => log.agentType === agentType);
   }
 
-  if (subAgentType) {
-    filteredLogs = filteredLogs.filter(log => log.subAgentType === subAgentType);
-  }
-
   if (startDate) {
     const start = new Date(startDate).getTime();
     filteredLogs = filteredLogs.filter(log => new Date(log.timestamp).getTime() >= start);
@@ -358,7 +352,6 @@ export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[
       if ((log.request?.url ?? '').toLowerCase().includes(searchLower)) return true;
       if ((log.metadata?.model ?? '').toLowerCase().includes(searchLower)) return true;
       if (log.error?.toLowerCase().includes(searchLower)) return true;
-      if (log.subAgentType?.toLowerCase().includes(searchLower)) return true;
       if ((log.providerName ?? '').toLowerCase().includes(searchLower)) return true;
       return false;
     });

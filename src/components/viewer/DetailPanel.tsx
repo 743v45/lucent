@@ -79,6 +79,18 @@ function CollapseButton({ collapsed, onToggle }: { collapsed: boolean; onToggle:
   );
 }
 
+function ExpandAllButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      data-testid={expanded ? 'collapse-all' : 'expand-all'}
+      className="px-3 py-0.5 text-[13px] font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
+    >
+      {expanded ? '收起全部' : '展开全部'}
+    </button>
+  );
+}
+
 // ==================== Format Helpers ====================
 
 function formatTokenValue(n: number | undefined): string {
@@ -197,11 +209,6 @@ interface DetailPanelProps {
   onTabChange: (tab: TabType) => void;
 }
 
-interface BodyCollapsedState {
-  request: boolean;
-  response: boolean;
-}
-
 const TAB_CONFIG: { key: TabType; label: string }[] = [
   { key: 'request', label: 'Request' },
   { key: 'response', label: 'Response' },
@@ -211,13 +218,24 @@ const TAB_CONFIG: { key: TabType; label: string }[] = [
 ];
 
 export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): JSX.Element {
-  const [bodyCollapsed, setBodyCollapsed] = useState<BodyCollapsedState>({
-    request: true, // 默认折叠到 JSON_COLLAPSED_EXPAND_LEVEL，避免大 body 全展开卡顿
-    response: true,
+  // body 展开态（单一真相源）：false=折叠到 JSON_COLLAPSED_EXPAND_LEVEL（默认，避免大 body 全展开卡顿），
+  // true=全展开。CollapseButton 与 ExpandAllButton 共享这一份状态——历史上用 bodyCollapsed + expandAll
+  // 两个独立 boolean，会出现 desync（先「展开」把 collapsed 置 false，再「展开全部」，再「收起全部」时，
+  // expandAll 关掉后回落到 collapsed=false 即「全展开」，按钮写着「收起全部」却什么都不收起）；合成单个
+  // boolean 后两个按钮永远一致。
+  const [bodyExpanded, setBodyExpanded] = useState<{ request: boolean; response: boolean }>({
+    request: false,
+    response: false,
   });
 
-  const toggleBodyCollapsed = useCallback((type: 'request' | 'response') => {
-    setBodyCollapsed(prev => ({
+  // 切日志时重置展开态：与下方 key={log.id} 重建子树（重置 sseViewMode / Headers 折叠 / KV 折叠等）意图一致。
+  // 否则上一条日志的「全展开」会带到新日志，让大 body 一进来就全展开，违背默认折叠的防卡顿初衷。
+  useEffect(() => {
+    setBodyExpanded({ request: false, response: false });
+  }, [log?.id]);
+
+  const toggleBodyExpanded = useCallback((type: 'request' | 'response') => {
+    setBodyExpanded(prev => ({
       ...prev,
       [type]: !prev[type],
     }));
@@ -231,7 +249,7 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
 
   if (!log) {
     return (
-      <div className="flex-1 min-w-0 flex items-center justify-center h-full bg-bg-panel">
+      <div className="flex-1 min-w-0 flex items-center justify-center h-full bg-bg-panel" data-testid="detail-empty">
         <span className="text-text-quaternary text-base">选择一条记录查看详情</span>
       </div>
     );
@@ -243,8 +261,8 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         return (
           <RequestTab
             log={log}
-            bodyCollapsed={bodyCollapsed.request}
-            onToggleCollapsed={() => toggleBodyCollapsed('request')}
+            expanded={bodyExpanded.request}
+            onToggle={() => toggleBodyExpanded('request')}
             onCopy={copyBody}
           />
         );
@@ -252,8 +270,8 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
         return (
           <ResponseTab
             log={log}
-            bodyCollapsed={bodyCollapsed.response}
-            onToggleCollapsed={() => toggleBodyCollapsed('response')}
+            expanded={bodyExpanded.response}
+            onToggle={() => toggleBodyExpanded('response')}
             onCopy={copyBody}
           />
         );
@@ -267,7 +285,7 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
   };
 
   return (
-    <div className="flex-1 min-w-0 h-full flex flex-col bg-bg-panel p-3 gap-3">
+    <div className="flex-1 min-w-0 h-full flex flex-col bg-bg-panel p-3 gap-3" data-testid="detail-panel">
       {/* 头部信息区 */}
       <div className="border border-border-subtle rounded-lg px-5 py-4 flex items-center gap-6">
         {/* 左侧：请求基本信息 */}
@@ -407,10 +425,10 @@ function HeadersDisplay({ headers }: { headers: Record<string, string> | undefin
 
 function JsonBlock({
   data,
-  collapsed = false,
+  expanded = false,
 }: {
   data: unknown;
-  collapsed?: boolean;
+  expanded?: boolean;
 }) {
   // JsonView 需要 object 或 array 类型，字符串需要包装
   const jsonData = typeof data === 'string' ? { text: data } : data as object;
@@ -422,7 +440,7 @@ function JsonBlock({
     >
       <JsonView
         data={jsonData}
-        shouldExpandNode={(level) => collapsed ? level < JSON_COLLAPSED_EXPAND_LEVEL : true}
+        shouldExpandNode={expanded ? () => true : (level) => level < JSON_COLLAPSED_EXPAND_LEVEL}
         {...darkStyles}
       />
     </div>
@@ -433,12 +451,12 @@ function JsonBlock({
 
 interface RequestTabProps {
   log: LogEntry;
-  bodyCollapsed: boolean;
-  onToggleCollapsed: () => void;
+  expanded: boolean;
+  onToggle: () => void;
   onCopy: (data: unknown) => void;
 }
 
-function RequestTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: RequestTabProps): JSX.Element {
+function RequestTab({ log, expanded, onToggle, onCopy }: RequestTabProps): JSX.Element {
   return (
     <div className="flex flex-col h-full bg-bg-deep">
       <div className="p-4">
@@ -452,12 +470,13 @@ function RequestTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: RequestTa
         <div className="flex items-center justify-between mb-2">
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
-            <CollapseButton collapsed={bodyCollapsed} onToggle={onToggleCollapsed} />
+            <ExpandAllButton expanded={expanded} onToggle={onToggle} />
+            <CollapseButton collapsed={!expanded} onToggle={onToggle} />
             <CopyButton onCopy={() => onCopy(log.request.body)} />
           </div>
         </div>
         <div className="flex-1 min-h-0" data-testid="request-body">
-          <JsonBlock data={log.request.body} collapsed={bodyCollapsed} />
+          <JsonBlock data={log.request.body} expanded={expanded} />
         </div>
       </div>
     </div>
@@ -499,8 +518,8 @@ function SSEViewToggle({ mode, onModeChange }: { mode: SSEViewMode; onModeChange
 
 interface ResponseTabProps {
   log: LogEntry;
-  bodyCollapsed: boolean;
-  onToggleCollapsed: () => void;
+  expanded: boolean;
+  onToggle: () => void;
   onCopy: (data: unknown) => void;
 }
 
@@ -519,7 +538,7 @@ function sseLinesToRawText(lines: SSERawLine[]): string {
   }).join('\n\n');
 }
 
-function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: ResponseTabProps): JSX.Element {
+function ResponseTab({ log, expanded, onToggle, onCopy }: ResponseTabProps): JSX.Element {
   const response = log.response;
   // 默认 raw：原始 SSE 文本完整可见(含 ping/error 等元事件)，结构化视图丢失这些事件
   const [sseViewMode, setSseViewMode] = useState<SSEViewMode>('raw');
@@ -575,7 +594,8 @@ function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: Response
             {isSSE && (
               <SSEViewToggle mode={sseViewMode} onModeChange={setSseViewMode} />
             )}
-            <CollapseButton collapsed={bodyCollapsed} onToggle={onToggleCollapsed} />
+            <ExpandAllButton expanded={expanded} onToggle={onToggle} />
+            <CollapseButton collapsed={!expanded} onToggle={onToggle} />
             <CopyButton onCopy={() => onCopy(sseViewMode === 'raw' ? rawSSEText : extractedBody)} />
           </div>
         </div>
@@ -589,7 +609,7 @@ function ResponseTab({ log, bodyCollapsed, onToggleCollapsed, onCopy }: Response
               <span className="text-text-quaternary text-base">无响应体</span>
             </div>
           ) : (
-            <JsonBlock data={extractedBody} collapsed={bodyCollapsed} />
+            <JsonBlock data={extractedBody} expanded={expanded} />
           )}
         </div>
       </div>
@@ -931,28 +951,26 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
       case 'message': {
         const msg = data.messages?.[selected.index];
         if (!msg) return null;
+        // content 可能是 string / ContentBlock[]，OpenAI 多轮 tool-use 的 assistant 消息
+        // 历史上为 null（仅发起 tool_calls）。统一兜底：非数组按空内容处理，避免 .map 崩溃。
+        const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
         const contentText =
           typeof msg.content === 'string'
             ? msg.content
-            : Array.isArray(msg.content)
-              ? msg.content
-                  .map((block) => {
-                    if (block.type === 'text' && block.text) {
-                      return block.text;
-                    } else if (block.type === 'tool_use') {
-                      const toolBlock = block as { name?: string; input?: unknown };
-                      return `[工具调用: ${toolBlock.name ?? 'unknown'}]\n${JSON.stringify(toolBlock.input, null, 2)}`;
-                    } else if (block.type === 'tool_result') {
-                      const resultBlock = block as { content?: unknown };
-                      return `[工具结果]\n${extractToolResultContent(resultBlock.content)}`;
-                    }
-                    return '';
-                  })
-                  .join('\n\n')
-              // 纵深防御：历史脏数据 content 为 null/undefined 时不再 .map() 崩溃。
-              // 服务端 extractor 已归一化（见 2026-06-18-fix-context-content-null），
-              // 这里只兜底未迁移的旧日志。
-              : String(msg.content ?? '');
+            : contentBlocks
+                .map((block) => {
+                  if (block.type === 'text' && block.text) {
+                    return block.text;
+                  } else if (block.type === 'tool_use') {
+                    const toolBlock = block as { name?: string; input?: unknown };
+                    return `[工具调用: ${toolBlock.name ?? 'unknown'}]\n${JSON.stringify(toolBlock.input, null, 2)}`;
+                  } else if (block.type === 'tool_result') {
+                    const resultBlock = block as { content?: unknown };
+                    return `[工具结果]\n${extractToolResultContent(resultBlock.content)}`;
+                  }
+                  return '';
+                })
+                .join('\n\n');
         return {
           title: `${msg.role === 'user' ? '用户' : msg.role === 'assistant' ? '助手' : '工具'} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`,
           content: contentText,
@@ -1283,13 +1301,6 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
             value={log.agentType === 'main' ? 'MainAgent' : 'SubAgent'}
             description="请求的发起方类型。MainAgent 为主代理（用户直接交互），SubAgent 为子代理（由主代理调度）"
           />
-          {log.subAgentType && (
-            <MetaRow
-              label="子类型"
-              value={log.subAgentType}
-              description="SubAgent 的功能分类，如 plan（规划）、search（搜索）、bash（命令执行）、workflow（工作流）"
-            />
-          )}
           <MetaRow
             label="客户端类型"
             value={log.clientType || 'unknown'}

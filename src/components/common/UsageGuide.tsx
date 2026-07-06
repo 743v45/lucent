@@ -49,6 +49,10 @@ export interface AccessLineInput {
  * - 预设供应商 (presetName 非空): http://{host}:{port}/{name}
  * - 自定义供应商 (presetName 为空): http://{host}:{port}/custom/{name}
  * - OpenAI 端点: 末尾加 /v1
+ *
+ * 去重：openai-chat 与 openai-responses 都映射到 OPENAI_BASE_URL 且路径相同，
+ * 同一供应商只会生成一条 OPENAI 命令（与 server/index.ts:112 启动 banner 的合并行为一致），
+ * 否则默认 openai 预设（两个 OpenAI 端点都配）会显示两条一模一样的命令。
  */
 export function buildAccessLines(
   host: string,
@@ -56,6 +60,7 @@ export function buildAccessLines(
   providers: AccessLineInput[],
 ): AccessLine[] {
   const lines: AccessLine[] = [];
+  const seenCmd = new Set<string>();
   for (const provider of providers) {
     const endpointTypes = Object.keys(provider.endpoints) as EndpointType[];
     for (const endpointType of endpointTypes) {
@@ -65,6 +70,10 @@ export function buildAccessLines(
       const suffix = NEEDS_V1_SUFFIX.has(endpointType) ? '/v1' : '';
       const prefix = provider.presetName ? '' : 'custom/';
       const cmd = `export ${envVar}=http://${host}:${port}/${prefix}${provider.name}${suffix}`;
+      // cmd 含 provider name（全局唯一），同一 cmd 只可能来自同一供应商，
+      // 故按 cmd 去重只会合并同一供应商的 openai-chat / openai-responses。
+      if (seenCmd.has(cmd)) continue;
+      seenCmd.add(cmd);
       lines.push({
         providerName: provider.name,
         endpointType,

@@ -141,7 +141,9 @@ async function waitFor(proc: any, regex: RegExp, label: string, timeoutMs = 3000
 async function waitForPort(url: string, label: string, timeoutMs = 20000) {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
-    try { const r = await fetch(url); if (r.status > 0) return; } catch {}
+    try { const r = await fetch(url); if (r.status > 0) return; } catch {
+      // Port not ready yet, retry
+    }
     await new Promise(r => setTimeout(r, 300));
   }
   throw new Error(`${label} port never accepted`);
@@ -279,7 +281,9 @@ try {
   vite.kill('SIGTERM');
   await upstream.close();
   await new Promise(r => setTimeout(r, 500));
-  try { rmSync(CONFIG_DIR, { recursive: true, force: true }); } catch {}
+  try { rmSync(CONFIG_DIR, { recursive: true, force: true }); } catch {
+    // Config dir may already be cleaned up
+  }
 }
 
 // ==================== 汇总 ====================

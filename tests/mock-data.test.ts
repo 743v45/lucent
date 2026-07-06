@@ -48,17 +48,6 @@ describe('Mock日志数据测试', () => {
       expect(stats.main).toBe(2); // abc123main, context01
       expect(stats.sub).toBe(4); // toolbash01, toolplan01, workflowxyz, search01
     });
-
-    it('应该正确统计子Agent类型', () => {
-      const logs = loadMockData();
-      const stats = getAgentTypeStats(logs);
-
-      expect(stats.bySubType.bash).toBe(1);
-      expect(stats.bySubType.plan).toBe(1);
-      expect(stats.bySubType.workflow).toBe(1);
-      expect(stats.bySubType.search).toBe(1);
-      expect(stats.bySubType.unknown).toBe(0);
-    });
   });
 
   describe('Token使用统计', () => {
@@ -147,12 +136,10 @@ describe('Mock日志数据测试', () => {
     it('应该能够创建mock日志条目', () => {
       const mockLog = createMockLogEntry({
         agentType: 'sub',
-        subAgentType: 'bash',
       });
 
       expect(validateLogEntry(mockLog)).toBe(true);
       expect(mockLog.agentType).toBe('sub');
-      expect(mockLog.subAgentType).toBe('bash');
     });
 
     it('应该能够覆盖默认值', () => {

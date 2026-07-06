@@ -404,7 +404,7 @@ export function convertToMarkdown(logs: LogEntry[], includeMeta?: boolean): stri
   for (const log of logs) {
     lines.push(`## ${log.id}\n`);
     lines.push(`**时间**: ${log.timestamp}\n`);
-    lines.push(`**Agent 类型**: ${log.agentType}${log.subAgentType ? ` (${log.subAgentType})` : ''}\n`);
+    lines.push(`**Agent 类型**: ${log.agentType}\n`);
     lines.push(`**模型**: ${log.metadata.model}\n`);
     lines.push(`**耗时**: ${log.duration}ms\n`);
 

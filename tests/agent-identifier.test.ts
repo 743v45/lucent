@@ -1,11 +1,158 @@
 /**
  * Agent 识别模块单元测试
  *
- * 覆盖：isMainAgentRequest、parseAgentType、extractTokenUsage、identifyClient
+ * 覆盖：classifyAgent、extractTokenUsage、identifyClient、calculateTokenPercentage
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractTokenUsage, identifyClient, calculateTokenPercentage } from '../server/agent-identifier.js';
+import { classifyAgent, extractTokenUsage, identifyClient, calculateTokenPercentage } from '../server/agent-identifier.js';
+
+// ==================== classifyAgent ====================
+//
+// 判据：system prompt 身份指纹（移植自 cc-viewer），与 messages 多轮性无关。
+// fixture 取材自真实日志（~/.lucent/logs）采样的 system 前缀，确保判据对真实流量成立。
+
+describe('classifyAgent', () => {
+  describe('主 Agent', () => {
+    it('Claude Code 主代理身份声明 → main（真实日志采样的标准 system）', () => {
+      // 采自真实日志：318 条 main 中最常见的前缀
+      const body = { system: "You are Claude Code, Anthropic's official CLI for Claude.\n\nYou are an interactive agent..." };
+      expect(classifyAgent(body)).toBe('main');
+    });
+
+    it('Claude Code 主代理首请求（仅 1 条 user，无 assistant 历史）→ main', () => {
+      // 修复的核心场景：旧判据因 messages.length < 2 误判为 sub
+      const body = {
+        system: "You are Claude Code, Anthropic's official CLI for Claude.",
+        messages: [{ role: 'user', content: '帮我分析代码' }],
+      };
+      expect(classifyAgent(body)).toBe('main');
+    });
+
+    it('OpenAI 格式：system 在 messages[role=system] 内 → main', () => {
+      const body = {
+        messages: [
+          { role: 'system', content: "You are Claude Code, Anthropic's official CLI for Claude." },
+          { role: 'user', content: 'hello' },
+        ],
+        tools: [{ function: { name: 'Bash' } }],
+      };
+      expect(classifyAgent(body)).toBe('main');
+    });
+
+    it('Anthropic system 数组格式（[{type:text,text:...}]）→ main', () => {
+      const body = {
+        system: [{ type: 'text', text: 'You are Claude Code, official CLI.' }],
+      };
+      expect(classifyAgent(body)).toBe('main');
+    });
+
+    it('system 含裸「general-purpose agent」描述（Agent 工具类型枚举）→ main（回归：不误判为 specialist）', () => {
+      // 采自真实日志：Claude Code 主代理 system 枚举 Agent 工具可用类型，
+      // 描述里含「- general-purpose: General-purpose agent for ...」——裸串匹配会误伤，须锚定身份句式。
+      const body = {
+        system: "You are Claude Code, Anthropic's official CLI for Claude.\n\nAgent tool types:\n- general-purpose: General-purpose agent for research and multi-step tasks",
+      };
+      expect(classifyAgent(body)).toBe('main');
+    });
+  });
+
+  describe('子 Agent（权威排除）', () => {
+    it('cc_is_subagent=true 标记 → sub（cc 2.1.181+ 官方标记，即使含 Claude Code 身份也排除）', () => {
+      const body = {
+        system: 'You are Claude Code.\nsome-context cc_is_subagent=true;\nmore',
+      };
+      expect(classifyAgent(body)).toBe('sub');
+    });
+
+    it('cc_is_subagent=true 词界锚定：=truex 不误匹配', () => {
+      const body = { system: 'You are Claude Code.\ncc_is_subagent=truexyz' };
+      expect(classifyAgent(body)).toBe('main');
+    });
+
+    it('teammate（同进程队友）→ sub', () => {
+      const body = {
+        system: 'You are Claude Code.\nrunning as an agent in a team',
+      };
+      expect(classifyAgent(body)).toBe('sub');
+    });
+
+    it('teammate（Agent Teammate Communication）→ sub', () => {
+      const body = {
+        system: 'You are Claude Code.\nAgent Teammate Communication protocol',
+      };
+      expect(classifyAgent(body)).toBe('sub');
+    });
+
+    it('specialist（command execution）→ sub', () => {
+      const body = {
+        system: 'You are Claude Code.\nYou are a command execution specialist',
+      };
+      expect(classifyAgent(body)).toBe('sub');
+    });
+
+    it('specialist（general-purpose agent）→ sub', () => {
+      const body = {
+        system: 'You are Claude Code.\nYou are a general-purpose agent',
+      };
+      expect(classifyAgent(body)).toBe('sub');
+    });
+  });
+
+  describe('兜底（非 Claude Code 第三方请求按主代理处理）', () => {
+    it('SDK 身份但无子代理标记（纯 You are a Claude agent）→ main', () => {
+      // 非 Claude Code 身份、无 cc_is_subagent/teammate/specialist 标记 → 按主代理处理。
+      // 注：真实 SDK 派生请求都带 specialist/billing 标记会走 sub；此处覆盖无标记的边界。
+      const body = {
+        system: 'x-anthropic-billing-header: cc_version=2.1.186.639; cc_entrypoint=sdk-cli;You are a Claude agent, built on Anthropic\'s Claude Agent SDK.\nYou are an interactive agent...',
+      };
+      expect(classifyAgent(body)).toBe('main');
+    });
+
+    it('无身份声明、有 tools → main（第三方请求先按主代理）', () => {
+      const body = {
+        system: 'some custom system prompt without identity',
+        tools: [{ function: { name: 'Bash' } }, { function: { name: 'Edit' } }],
+      };
+      expect(classifyAgent(body)).toBe('main');
+    });
+
+    it('无 system、无 tools → main', () => {
+      expect(classifyAgent({})).toBe('main');
+    });
+
+    it('null / 非对象 → main', () => {
+      expect(classifyAgent(null)).toBe('main');
+      expect(classifyAgent(undefined)).toBe('main');
+    });
+
+    it('无 system 但 messages 含 assistant 历史（旧判据靠此判 main）→ main', () => {
+      // 非第三方会话续轮请求：无 Claude Code 身份声明，按主代理处理。
+      const body = {
+        messages: [
+          { role: 'user', content: 'hi' },
+          { role: 'assistant', content: 'hello' },
+        ],
+      };
+      expect(classifyAgent(body)).toBe('main');
+    });
+
+    it('OpenAI 格式第三方请求（空 system、首条 assistant tool_calls）→ main', () => {
+      // 采自真实日志：Qwen 等通过 OpenAI 兼容端点的请求
+      const body = {
+        max_tokens: 64000,
+        model: 'openai/unsloth/Qwen3.6-27B-MTP-GGUF',
+        stream: true,
+        messages: [
+          { role: 'assistant', content: null, tool_calls: [{ function: { name: 'Bash', arguments: '{}' } }] },
+          { role: 'tool', content: 'result' },
+        ],
+        tools: [{ function: { name: 'Bash' } }],
+      };
+      expect(classifyAgent(body)).toBe('main');
+    });
+  });
+});
 
 // ==================== extractTokenUsage ====================
 
