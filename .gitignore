@@ -46,6 +46,10 @@ CLAUDE.md
 # Screenshots (local only)
 settings-modal.png
 
+# 录屏产物（体积大，走 issue 附件，不入库）
+*.webm
+lucent-shots/
+
 # Logs directory (optional, for testing)
 logs/
 
