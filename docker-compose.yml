@@ -1,0 +1,36 @@
+# Lucent — AI Agent 代理服务器
+#
+# 用法:
+#   docker compose up -d            # 构建并后台启动
+#   docker compose logs -f          # 跟随日志
+#   docker compose down             # 停止并移除容器（volume 保留）
+#
+# 端口:
+#   7049 = Web UI（管理面板）
+#   7048 = 代理（AI 工具配置 ANTHROPIC_BASE_URL/OPENAI_BASE_URL 指向这里）
+#
+# 持久化: lucent-data volume → /data（config.json + logs/）
+
+services:
+  lucent:
+    build: .
+    image: lucent:latest
+    container_name: lucent
+    init: true                       # tini 做 PID 1，确保 SIGTERM 触发 server graceful 关闭
+    ports:
+      - "7048:7048"                  # 代理
+      - "7049:7049"                  # Web UI
+    environment:
+      - LUCENT_HOST=0.0.0.0
+      - LUCENT_CONFIG_DIR=/data
+      # 可选覆盖（取消注释按需调整）
+      # - LUCENT_PROXY_PORT=7048
+      # - LUCENT_WEB_PORT=7049
+      # - LUCENT_LOG_RETENTION_DAYS=30
+      # - LUCENT_MAX_LOG_FILES=50
+    volumes:
+      - lucent-data:/data            # config.json + logs/ 持久化
+    restart: unless-stopped
+
+volumes:
+  lucent-data:

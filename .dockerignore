@@ -1,0 +1,41 @@
+# 依赖与构建产物（builder 阶段会重新生成）
+node_modules
+dist
+build
+
+# 测试 / E2E / 验收脚本（运行不需要）
+test-results
+playwright-report
+playwright/.cache
+e2e
+tests
+scripts
+
+# 运行时数据
+logs
+.data
+
+# Git / CI
+.git
+.gitignore
+
+# 本地工具与配置
+.claude
+.superpowers
+.worktrees
+.vscode
+.idea
+opencode.json
+
+# 本地文档与截图（运行不需要）
+docs
+openspec
+settings-modal.png
+tailwindcss-*.log
+*.log
+*.md
+
+# Docker 自身（不影响 build，仅为减小 context）
+Dockerfile
+.dockerignore
+docker-compose.yml
