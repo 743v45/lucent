@@ -9,7 +9,8 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from
 import { randomUUID } from 'node:crypto';
 import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS } from './constants.js';
 import { ENDPOINT_TYPES, isEndpointType, isValidProviderName, PRESET_NAMES } from './types.js';
-import type { EndpointType, Provider } from './types.js';
+import type { EndpointType, Provider, BodyRewriteRule } from './types.js';
+import { parseFieldPath } from './body-rewriter.js';
 import createDebug from 'debug';
 const log = createDebug('lucent:config');
 
@@ -28,6 +29,8 @@ export interface ProxyConfig {
   logRetentionDays?: number;
   maxLogFileSize?: number;
   maxLogFiles?: number;
+  /** 可选：全局请求 body 重写规则（opt-in，缺省视为无规则，代理保持透明） */
+  bodyRewrites?: BodyRewriteRule[];
 }
 
 /**
@@ -65,6 +68,18 @@ function buildDefaultConfig(): ProxyConfig {
           // baseUrl 必须含 /v1，与 presets.ts 对齐；proxy.ts 假设 baseUrl 已含版本路径
           'anthropic-messages': 'https://api.anthropic.com/v1',
         },
+      },
+    ],
+    // 示例：脱敏 Claude Code system prompt 里的 billing header（默认禁用，仅作模板）
+    // ⚠️ 启用后会使上游 KV-Cache 失效（system[0].text 通常带 cache_control 断点，Anthropic 按字节寻址）
+    bodyRewrites: [
+      {
+        id: 'example-redact-billing-header',
+        name: '示例：脱敏 billing header',
+        enabled: false,
+        fieldPath: 'system[0].text',
+        pattern: 'x-anthropic-billing-header:[^;]*;[^;]*;?',
+        replacement: '',
       },
     ],
   };
@@ -145,6 +160,76 @@ function validateProviders(providers: unknown): asserts providers is Provider[] 
 }
 
 /**
+ * bodyRewrites 规则允许的键（禁未知键，防拼错字段名静默失效）
+ */
+const BODY_REWRITE_KEYS = new Set(['id', 'name', 'enabled', 'fieldPath', 'pattern', 'flags', 'replacement']);
+
+/**
+ * 校验 bodyRewrites 数组（可选字段，缺失视为无规则）。
+ *
+ * 严格校验（镜像 validateProvider 的严格度）：
+ * - 必须是数组；每条必须是非 null 对象
+ * - 禁未知键（白名单 id/name/enabled/fieldPath/pattern/flags/replacement）
+ * - id/fieldPath/pattern 必填且为非空 string；replacement 必须是 string（允许空串）
+ * - fieldPath 必须能被 parseFieldPath 成功解析
+ * - pattern 必须能 new RegExp(pattern, flags ?? 'g') 构造成功
+ * - flags 若存在必须匹配 /^[gimsuy]*$/
+ *
+ * 失败抛 Error，信息带规则 id（或索引）便于定位。
+ */
+export function validateBodyRewrites(raw: unknown): asserts raw is BodyRewriteRule[] {
+  if (!Array.isArray(raw)) {
+    throw new Error('bodyRewrites must be an array');
+  }
+  raw.forEach((rule, i) => {
+    if (!rule || typeof rule !== 'object') {
+      throw new Error(`bodyRewrites[${i}] is not an object`);
+    }
+    const r = rule as Record<string, unknown>;
+    // 禁未知键
+    for (const key of Object.keys(r)) {
+      if (!BODY_REWRITE_KEYS.has(key)) {
+        throw new Error(`bodyRewrites[${i}] has unknown key: ${key}`);
+      }
+    }
+    const ruleId = typeof r.id === 'string' ? r.id : `bodyRewrites[${i}]`;
+    if (typeof r.id !== 'string' || r.id.length === 0) {
+      throw new Error(`bodyRewrites[${i}].id must be a non-empty string`);
+    }
+    if (r.name !== undefined && typeof r.name !== 'string') {
+      throw new Error(`bodyRewrites[id=${ruleId}].name must be a string`);
+    }
+    if (r.enabled !== undefined && typeof r.enabled !== 'boolean') {
+      throw new Error(`bodyRewrites[id=${ruleId}].enabled must be a boolean`);
+    }
+    if (typeof r.fieldPath !== 'string' || r.fieldPath.length === 0) {
+      throw new Error(`bodyRewrites[id=${ruleId}].fieldPath must be a non-empty string`);
+    }
+    try {
+      parseFieldPath(r.fieldPath);
+    } catch (e) {
+      throw new Error(`bodyRewrites[id=${ruleId}].fieldPath invalid: ${(e as Error).message}`);
+    }
+    if (r.flags !== undefined) {
+      if (typeof r.flags !== 'string' || !/^[gimsuy]*$/.test(r.flags)) {
+        throw new Error(`bodyRewrites[id=${ruleId}].flags must match /^[gimsuy]*$/`);
+      }
+    }
+    if (typeof r.pattern !== 'string' || r.pattern.length === 0) {
+      throw new Error(`bodyRewrites[id=${ruleId}].pattern must be a non-empty string`);
+    }
+    try {
+      new RegExp(r.pattern, typeof r.flags === 'string' ? r.flags : 'g');
+    } catch (e) {
+      throw new Error(`bodyRewrites[id=${ruleId}].pattern invalid: ${(e as Error).message}`);
+    }
+    if (typeof r.replacement !== 'string') {
+      throw new Error(`bodyRewrites[id=${ruleId}].replacement must be a string`);
+    }
+  });
+}
+
+/**
  * 校验完整的 ProxyConfig 结构（不允许字段缺失）
  */
 function validateConfig(cfg: unknown): asserts cfg is ProxyConfig {
@@ -162,6 +247,9 @@ function validateConfig(cfg: unknown): asserts cfg is ProxyConfig {
     throw new Error('config.webPort must be an integer');
   }
   validateProviders(c.providers);
+  if (c.bodyRewrites !== undefined) {
+    validateBodyRewrites(c.bodyRewrites);
+  }
 }
 
 // ==================== 核心 API ====================

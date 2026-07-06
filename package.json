@@ -27,6 +27,7 @@
     "verify:custom": "tsx scripts/verify-custom-providers-e2e.ts",
     "verify:custom-errors": "tsx scripts/verify-custom-errors-e2e.ts",
     "verify:loglist": "tsx scripts/verify-loglist-e2e.ts",
+    "verify:body-rewrite": "tsx scripts/verify-body-rewrite-e2e.ts",
     "setup:openai": "tsx scripts/setup-openai-provider.ts",
     "e2e": "node scripts/e2e-gate.mjs",
     "e2e:ui": "playwright test",

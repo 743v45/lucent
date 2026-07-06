@@ -13,6 +13,7 @@ import { createServer } from 'node:http';
 import { getConfig, findProviderByName } from './config.js';
 import { type EndpointType } from './types.js';
 import { inferEndpointTypeFromPath } from './endpoint-registry.js';
+import { applyBodyRewritesToBuffer } from './body-rewriter.js';
 import {
   DEFAULT_PROXY_PORT,
   DEFAULT_SERVER_HOST,
@@ -206,6 +207,26 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         }
         const body = Buffer.concat(buffers);
 
+        // 7.5 可选：body 重写规则（opt-in，仅当配置启用规则 + JSON body 时尝试）
+        // 三层保护：body-rewriter 内部 try/catch + 此处 try/catch + outBody 至少等于原 body
+        // 标注 Uint8Array：body（Buffer<ArrayBuffer>，Buffer.concat 返回）与 rewritten
+        // （Buffer<ArrayBufferLike>，body-rewriter 返回）泛型参数不一致，但都是 Uint8Array 子类型；
+        // Uint8Array 是 BodyInit 的 BufferSource 成员，赋给 fetchOptions.body 无类型摩擦
+        let outBody: Uint8Array = body;
+        const rewrites = config.bodyRewrites;
+        if (rewrites && rewrites.length > 0 && body.length > 0) {
+          try {
+            const ct = headers['content-type'] ?? '';
+            const { buffer: rewritten, applied } = applyBodyRewritesToBuffer(body, rewrites, ct);
+            if (applied > 0) {
+              outBody = rewritten;
+              log('🔄 body 重写命中: provider=%s endpoint=%s applied=%d', providerName, endpointType, applied);
+            }
+          } catch (err) {
+            log('body 重写异常，使用原 body: %s', (err as Error).message);
+          }
+        }
+
         // 8. 拼接完整上游 URL（去掉 rest 中的 /v1 前缀，由 baseUrl 提供版本路径）
         const cleanBase = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
         const apiPath = rest.replace(/^\/v1(?=\/)/, '');
@@ -218,8 +239,10 @@ export async function startProxyServer(options?: { port?: number; host?: string 
           method: req.method,
           headers,
         };
-        if (body.length > 0) {
-          fetchOptions.body = body;
+        if (outBody.length > 0) {
+          // as BodyInit：Node fetch 运行时接受 Buffer/Uint8Array；类型上 @types/node 的
+          // ArrayBufferLike 与 lib.dom BodyInit（要求 ArrayBuffer）有摩擦，断言绕过
+          fetchOptions.body = outBody as BodyInit;
         }
 
         const response = await fetch(fullUrl, fetchOptions);

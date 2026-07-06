@@ -38,6 +38,38 @@ export interface Provider {
   endpoints: Record<EndpointType, string | null>;
 }
 
+// ==================== Body 重写规则 ====================
+
+/**
+ * 单条请求 body 重写规则（可选功能，配置于 ProxyConfig.bodyRewrites）。
+ *
+ * 语义：对 fieldPath 定位到的字符串叶子值执行
+ *   value.replace(new RegExp(pattern, flags ?? 'g'), replacement)
+ * 即「子串替换」——保留未匹配部分。仅当叶子值 typeof === 'string' 才替换，非 string 跳过。
+ *
+ * ⚠️ 副作用（opt-in 固有代价）：
+ * - 重写位于 Anthropic KV-Cache 前缀内的字段（典型 system[0].text）会使上游缓存按字节寻址失效，
+ *   触发 cache 重建（cache_read 归零、重新 cache_creation）。
+ * - interceptor 的 agent 分类（classifyAgent）与会话线索（threadId）跑在重写后的 body 上，
+ *   激进脱敏可能改变分类与线索。
+ */
+export interface BodyRewriteRule {
+  /** 规则唯一标识，非空字符串，用于错误归因与日志 */
+  id: string;
+  /** 人类可读规则名，可选（仅展示用） */
+  name?: string;
+  /** 是否启用；缺省视为 true。设为 false 可临时停用而不删除 */
+  enabled?: boolean;
+  /** 目标字段路径，如 "system[0].text"、"messages[0].content[1].text" */
+  fieldPath: string;
+  /** JS 正则源串（不含定界符），如 "x-anthropic-billing-header:[^;]*;" */
+  pattern: string;
+  /** 正则 flags，仅允许 [gimsuy]* 字符组合；缺省运行期按 "g" 处理 */
+  flags?: string;
+  /** 替换字符串，支持 $1/$& 等反向引用；空串 "" 表示删除匹配子串 */
+  replacement: string;
+}
+
 /** 预设供应商保留名集合（与前端 presets.ts 保持一致） */
 export const PRESET_NAMES: ReadonlySet<string> = new Set([
   'anthropic', 'openai', 'gemini', 'deepseek', 'groq', 'mistral',

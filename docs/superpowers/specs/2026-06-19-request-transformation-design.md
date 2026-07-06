@@ -270,9 +270,33 @@ Proxy 不修改以下请求头：
 
 ## 7. Body 变换
 
-**Body 一个字不改。**
+### 7.1 默认：一字不改
 
-Proxy 读取请求 body（限制 `MAX_REQUEST_BODY_SIZE` = 50MB），透传给 `fetch()`。拦截器解析 body 用于日志记录但不修改原始 body。
+**默认行为：Body 一个字不改。**
+
+Proxy 读取请求 body（限制 `MAX_REQUEST_BODY_SIZE` = 50MB），透传给 `fetch()`。拦截器解析 body 用于日志记录但不修改原始 body。未配置 body 重写规则时，body 缓冲区按**引用**原样传给上游（`===` 恒等，字节级透明、零拷贝）。
+
+### 7.2 可选：opt-in body 重写规则引擎
+
+当用户显式在 `~/.lucent/config.json` 顶层配置 `bodyRewrites: BodyRewriteRule[]` 且数组非空时，Proxy 在**body 读取后、`fetch()` 前**调用重写引擎（[`server/body-rewriter.ts`](../../../server/body-rewriter.ts)）：
+
+- **规则结构**：`BodyRewriteRule { id, name?, enabled?, fieldPath, pattern, flags?, replacement }`（见 [`server/types.ts`](../../../server/types.ts)）。
+- **fieldPath 语法**：对象键 `a.b.c` + 数组下标 `a[0].b` 混合，定位到 JSON body 里的目标位置。
+- **替换语义**：对 fieldPath 定位到的 **string 叶子值**做子串替换
+  `value.replace(new RegExp(pattern, flags ?? 'g'), replacement)`，保留未匹配部分；非 string 叶子 / 不存在的路径跳过。
+- **flags 缺省 `g`**：脱敏 safe-by-default，默认替换全部命中而非只替换首个；`flags` 仅允许 `[gimsuy]*`。
+- **顺序级联**：多条规则按数组顺序应用，前一条输出是后一条输入；`enabled: false` 跳过。
+- **零命中字节透明**：全部规则都没命中任何叶子时，返回原 buffer 引用（`===` 恒等），零拷贝、零重序列化。
+- **失败回退**：三层异常保护（JSON 解析失败 / 规则抛错 / 缓冲区回写失败）——任一异常都回退原 body，**不阻断请求**。
+- **严格校验**：`validateBodyRewrites` 禁未知键、`id` 非空、`fieldPath` 可解析、`RegExp` 可构造、`flags ∈ [gimsuy]*`；校验失败走 `loadConfig` 现有非法配置路径（备份 `config.json.bak` 后回退默认 providers）。
+
+典型用例：脱敏 Claude Code 注入 `system[0].text` 的计费头
+（`x-anthropic-billing-header: cc_version=...; cc_entrypoint=cli;`）。
+
+> ⚠️ **关键副作用（opt-in 固有代价，配置前必须知晓）**：
+> 1. 🔴 **破坏上游 KV-Cache**：重写位于缓存前缀内的字段（典型 `system[0].text` 带 `cache_control` 断点）→ Anthropic 按字节寻址 cache miss → `cache_read` 归零、重新 `cache_creation`。Lucent 本地不算哈希，无法在代理端规避。
+> 2. 🔴 **改变 agent 分类 / threadId**：interceptor 的 `classifyAgent` / `identify` 跑在重写后 body 上 → 激进脱敏可能误分类子 agent、切会话线索。
+> 3. 🟢 JSONL 日志记录的是**重写后** body（脱敏场景通常正合意图）；命中后 body 会被 `JSON.stringify` 紧凑化（空白变化）；用户自配 `pattern` 的 ReDoS 风险自负。
 
 ---
 
@@ -359,6 +383,7 @@ Client                         Proxy (:7048)                    Upstream
 | 决策 | 原因 |
 |---|---|
 | Body 一字不改 | 代理是透明的，上游不应该感知经过代理 |
+| 可选 body 重写（opt-in `bodyRewrites`） | 脱敏等需求需出口，但保持默认透明：未配置/零命中字节级不变（原 buffer 引用），失败回退原 body 不阻断；严格校验禁未知键 |
 | `Accept-Encoding: identity` | 拦截器需要读取原始 body 做日志；如果上游 gzip，拦截器无法解析 |
 | `x-lucent-*` 临时头接力 | Proxy 和 Interceptor 在同一进程但不同模块，Header 是最轻量的通信方式 |
 | 发给上游前清除 `x-lucent-*` | 避免上游收到非标准头导致兼容性问题 |
