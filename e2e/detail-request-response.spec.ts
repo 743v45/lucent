@@ -38,9 +38,24 @@ async function postAndAwaitLog(
 ): Promise<{ status: number; body: string; logId: string }> {
   lucent.upstream.reset();
   lucent.upstream.setMode(mode);
+  // worker-scoped 单栈下日志跨用例累积：不能只等「有日志」——既有日志会让 poll 当场通过、
+  // 读到上一条的 id（实测 ~14% 概率点开错误的行：4xx 用例点到上一条 200）。记下发请求前
+  // 已知的同类日志 id，轮询到出现「新的」id 再取，保证取到的就是本次请求的日志。
+  const knownIds = new Set(
+    lucent
+      .readLogEntries()
+      .filter((e) => e.providerName === 'openai' && e.endpointType === 'openai-chat')
+      .map((e) => e.id),
+  );
   const res = await lucent.postThroughProxy(path, OAI_HEADERS, REQ_BODY);
   await expect
-    .poll(() => lucent.latestLogId('openai', 'openai-chat'), { timeout: 5000, message: '日志应落盘' })
+    .poll(
+      () => {
+        const id = lucent.latestLogId('openai', 'openai-chat');
+        return id && !knownIds.has(id) ? id : false;
+      },
+      { timeout: 5000, message: '新日志应落盘（区分于既有累积日志）' },
+    )
     .toBeTruthy();
   const logId = lucent.latestLogId('openai', 'openai-chat');
   if (!logId) throw new Error('postAndAwaitLog: 未取到日志 id');
