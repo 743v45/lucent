@@ -25,6 +25,17 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = dirname(dirname(fileURLToPath(import.meta.url)));
 
+/**
+ * process-group kill：杀整个进程组（npx/tsx wrapper + node 子进程 + esbuild），不残留监听。
+ * 范式同 e2e/fixtures.ts：tsx 是 wrapper，单杀 wrapper 不杀 `node --require tsx/...`
+ * 子进程，子进程会残留并继续占端口。detached 启动 + kill(-pid) 连子进程一起带走。
+ */
+function killGroup(proc) {
+  if (!proc || proc.pid == null) return;
+  try { process.kill(-proc.pid, 'SIGTERM'); } catch { /* 组可能已空 */ }
+  try { proc.kill('SIGTERM'); } catch { /* noop */ }
+}
+
 // ==================== 隔离环境 ====================
 
 const CONFIG_DIR = mkdtempSync(join(tmpdir(), 'lucent-verify-'));
@@ -97,6 +108,7 @@ writeFileSync(join(CONFIG_DIR, 'config.json'), JSON.stringify({
 
 const backend = spawn('npx', ['tsx', 'server/index.ts'], {
   cwd: REPO_ROOT,
+  detached: true, // 独立进程组，teardown 里 kill(-pid) 连 node 子进程一起带走
   stdio: ['ignore', 'pipe', 'pipe'],
   env: {
     ...process.env,
@@ -307,7 +319,7 @@ try {
   }
 
 } finally {
-  backend.kill('SIGTERM');
+  killGroup(backend); // 进程组 kill：带走 tsx wrapper + node 子进程，端口干净释放
   upstream.close();
   await new Promise(r => setTimeout(r, 300));
   try { rmSync(CONFIG_DIR, { recursive: true, force: true }); } catch {

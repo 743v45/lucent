@@ -67,17 +67,31 @@ export async function writeTestConfig(env: TestEnv, config: Record<string, unkno
 let backendProcess: ChildProcess | null = null;
 
 /**
+ * process-group kill：杀整个进程组（npx/tsx wrapper + node 子进程 + esbuild），不残留监听。
+ * 范式同 e2e/fixtures.ts：tsx 是 wrapper，单杀 wrapper 不杀 `node --require tsx/...`
+ * 子进程，子进程会残留并继续占端口（每跑一次 +1 对孤儿）。detached 启动 + kill(-pid)
+ * 连子进程一起带走，端口干净释放。
+ */
+function killGroup(proc: ChildProcess | null): void {
+  if (!proc || proc.pid == null) return;
+  try { process.kill(-proc.pid, 'SIGTERM'); } catch { /* 组可能已空 */ }
+  try { proc.kill('SIGTERM'); } catch { /* noop */ }
+}
+
+/**
  * 启动后端服务
  */
 export async function startBackend(env: TestEnv): Promise<void> {
-  // 杀掉残留进程
+  // 杀掉残留进程（进程组 kill：连 node 子进程一起带走，不残留监听）
   if (backendProcess) {
-    backendProcess.kill('SIGTERM');
+    killGroup(backendProcess);
+    backendProcess = null;
     await new Promise(resolve => setTimeout(resolve, 500));
   }
 
   return new Promise<void>((resolve, reject) => {
     const proc = spawn('npx', ['tsx', 'server/index.ts'], {
+      detached: true, // 独立进程组，stopBackend 里 kill(-pid) 连 node 子进程一起带走
       stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
@@ -93,7 +107,7 @@ export async function startBackend(env: TestEnv): Promise<void> {
     proc.stderr?.on('data', (data) => { output += data.toString(); });
 
     const timeout = setTimeout(() => {
-      proc.kill();
+      killGroup(proc); // 超时也整组带走，不残留
       reject(new Error(`Server startup timeout. Output: ${output}`));
     }, 20000);
 
@@ -118,9 +132,9 @@ export async function startBackend(env: TestEnv): Promise<void> {
  */
 export async function stopBackend(): Promise<void> {
   if (backendProcess) {
-    backendProcess.kill('SIGTERM');
-    await new Promise(resolve => setTimeout(resolve, 500));
+    killGroup(backendProcess); // 进程组 kill：带走 tsx wrapper + node 子进程，端口干净释放
     backendProcess = null;
+    await new Promise(resolve => setTimeout(resolve, 500));
   }
 }
 
