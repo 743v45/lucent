@@ -28,15 +28,15 @@ test.describe('种子 spec：请求穿越代理 → Web UI 出日志 → 点开�
     expect(res.status, `代理应回 200，实际 ${res.status}`).toBe(200);
     expect(res.body).toContain('[DONE]');
 
-    // 等日志落盘
+    // 等日志落库
     await expect
-      .poll(() => lucent.latestLogId('openai', 'openai-chat'), { timeout: 5000, message: '日志应落盘' })
+      .poll(() => lucent.latestLogId('openai', 'openai-chat'), { timeout: 5000, message: '日志应落库' })
       .toBeTruthy();
-    const logId = lucent.latestLogId('openai', 'openai-chat');
+    const logId = await lucent.latestLogId('openai', 'openai-chat');
 
     // ② 打开 Web UI，列表出现 log-row
     await page.goto(lucent.webBaseUrl);
-    await expect(page.getByTestId('log-row')).toBeVisible();
+    await expect(page.getByTestId('log-row').first()).toBeVisible();
     const rowCount = await page.getByTestId('log-row').count();
     expect(rowCount, '至少一行日志').toBeGreaterThanOrEqual(1);
 

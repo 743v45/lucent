@@ -284,8 +284,20 @@ export interface ProxyStatus {
 export interface LogsQuery {
   limit?: number;
   offset?: number;
+  /** keyset 深分页游标（base64url {ts,id}）；优先于 offset */
+  cursor?: string;
   agentType?: AgentType | 'all';
+  providerName?: string;
+  endpointType?: string;
   startDate?: string;
   endDate?: string;
   search?: string;
+}
+
+/** readLogs 返回：列表 + 命中总数 + 下一页游标 + 是否还有更多 */
+export interface LogsResult {
+  logs: LogEntry[];
+  total: number;
+  nextCursor: string | null;
+  hasMore: boolean;
 }

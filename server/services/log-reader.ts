@@ -12,7 +12,7 @@ import {
 import { extractContext } from '../context-extractors.js';
 import { extractCachedContent, getContextSizeForModel } from '../kvcache.js';
 import { extractFromSSELines } from '../sse-extractor.js';
-import type { LogEntry, LogsQuery } from '../types.js';
+import type { LogEntry, LogsQuery, LogsResult } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import { listLogs, searchLogs, fetchBodies, getLogById as getLogByIdRaw, type LogRow } from './db.js';
 import { getDb } from './db-instance.js';
@@ -261,33 +261,40 @@ export function reconstructEntry(row: LogRow, request: string, response: string)
 // ==================== 读取 ====================
 
 /**
- * 读取并过滤日志（索引查询 + 按页拉 bodies 重建）
+ * 读取并过滤日志（索引查询 + 按页拉 bodies 重建）。
+ * search 非空走 FTS 检索，否则列表；cursor=keyset 深分页，filter 含 provider/endpoint。
  */
-export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[]; total: number }> {
+export async function readLogs(query: LogsQuery = {}): Promise<LogsResult> {
   const {
     limit = DEFAULT_LOG_QUERY_LIMIT,
-    offset = 0,
+    cursor,
     agentType = 'all',
+    providerName,
+    endpointType,
     startDate,
     endDate,
     search,
   } = query;
 
-  // clamp limit/offset：防止恶意超大 limit 打爆内存
+  // clamp limit：防止恶意超大 limit 打爆内存
   const MAX_LOG_QUERY_LIMIT = 500;
-  const safeLimit = Math.max(0, Math.min(limit, MAX_LOG_QUERY_LIMIT));
-  const safeOffset = Math.max(0, offset);
+  const safeLimit = Math.max(1, Math.min(limit, MAX_LOG_QUERY_LIMIT));
 
   try {
     const filter = {
-      ...(agentType !== 'all' ? { agentType } : {}),
+      ...(agentType && agentType !== 'all' ? { agentType } : {}),
+      ...(providerName && providerName !== 'all' ? { providerName } : {}),
+      ...(endpointType && endpointType !== 'all' ? { endpointType } : {}),
       ...(startDate ? { startDate } : {}),
       ...(endDate ? { endDate } : {}),
     };
+    // 前端走 keyset（cursor），不传 offset——传 offset 会让 listLogs 落到 OFFSET 旧模式、
+    // 首页 nextCursor=null，断掉 keyset 链。OFFSET 仅 bench/旧调用直连 listLogs 时用。
+    const pageOpts = { limit: safeLimit, cursor, filter };
 
-    const { logs: rows, total } = search && search.trim()
-      ? searchLogs(getDb(), search, { limit: safeLimit, offset: safeOffset, filter })
-      : listLogs(getDb(), { limit: safeLimit, offset: safeOffset, filter });
+    const { logs: rows, total, nextCursor, hasMore } = search && search.trim()
+      ? searchLogs(getDb(), search, pageOpts)
+      : listLogs(getDb(), pageOpts);
 
     // 按页批量拉 bodies 重建（O(页大小) body 读，不拖全量）
     const bodies = fetchBodies(getDb(), rows.map(r => r.rowid));
@@ -302,10 +309,10 @@ export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[
       return log;
     }).filter((l): l is LogEntry => l !== null);
 
-    return { logs, total };
+    return { logs, total, nextCursor, hasMore };
   } catch (error) {
     dbg('读取日志失败: %O', error);
-    return { logs: [], total: 0 };
+    return { logs: [], total: 0, nextCursor: null, hasMore: false };
   }
 }
 

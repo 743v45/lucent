@@ -290,3 +290,11 @@ body {
   border-radius: 8px;
   color: var(--color-text-primary);
 }
+
+/* 搜索命中高亮（详情正文里命中的词标黄，深浅主题都可见） */
+mark.search-hit {
+  background: rgba(250, 204, 21, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}

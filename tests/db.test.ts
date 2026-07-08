@@ -11,7 +11,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   openDb, insertLog, migrateFromJsonl, listLogs, searchLogs, getLogById,
-  buildSearchText, deleteOldLogs, countLogs, getStats, clearAllLogs, type DB,
+  buildSearchText, deleteOldLogs, countLogs, getStats, clearAllLogs,
+  encodeCursor, decodeCursor, type DB,
 } from '../server/services/db.js';
 import type { RawLogEntry } from '../server/types.js';
 
@@ -123,7 +124,7 @@ describe('insertLog', () => {
       return origPrepare(sql);
     };
     expect(() => insertLog(db, e)).toThrow('SIMULATED FTS FAILURE');
-    // @ts-expect-error 恢复
+    // @ts-expect-error 测试用 shadow 后还原原始 prepare
     db.prepare = origPrepare;
 
     // 关键：三表都没有这条孤儿（事务回滚）
@@ -281,5 +282,75 @@ describe('getStats / clearAllLogs', () => {
     const fts = db.prepare(`SELECT COUNT(*) AS c FROM logs_fts`).get() as { c: number };
     expect(fts.c).toBe(0);
     expect(searchLogs(db, '代理拦截请求', { limit: 10, offset: 0 }).total).toBe(0);
+  });
+});
+
+// ==================== keyset 深分页 ====================
+
+describe('keyset 深分页（listLogs / searchLogs 游标）', () => {
+  it('encode/decode 游标往返 + 非法游标返回 null', () => {
+    const tok = encodeCursor('2026-07-08T01:00:00.000Z', 'abc');
+    expect(decodeCursor(tok)).toEqual({ ts: '2026-07-08T01:00:00.000Z', id: 'abc' });
+    expect(decodeCursor(undefined)).toBeNull();
+    expect(decodeCursor('!!!not-base64url!!!')).toBeNull();
+  });
+
+  it('首页无游标→按 timestamp 倒序，hasMore/nextCursor 正确，且翻页不重叠不漏', () => {
+    for (let i = 0; i < 5; i++) {
+      insertLog(db, makeEntry({ id: `p${i}`, timestamp: `2026-07-08T0${i}:00:00.000Z` }));
+    }
+    // 首页
+    const page = listLogs(db, { limit: 3 });
+    expect(page.total).toBe(5);
+    expect(page.logs.map(l => l.id)).toEqual(['p4', 'p3', 'p2']);
+    expect(page.hasMore).toBe(true);
+    expect(decodeCursor(page.nextCursor!)).toEqual({ ts: '2026-07-08T02:00:00.000Z', id: 'p2' });
+
+    // keyset 翻页
+    const seen: string[] = [...page.logs.map(l => l.id)];
+    let cursor: string | undefined = page.nextCursor ?? undefined;
+    for (let i = 0; i < 5; i++) {
+      const next = listLogs(db, { limit: 2, cursor });
+      seen.push(...next.logs.map(l => l.id));
+      cursor = next.nextCursor ?? undefined;
+      if (!next.hasMore) break;
+    }
+    expect(seen).toEqual(['p4', 'p3', 'p2', 'p1', 'p0']);
+    expect(new Set(seen).size).toBe(5); // 无重复
+  });
+
+  it('同 timestamp 不同 id：靠 id tiebreaker 全量遍历不漏不重', () => {
+    const ts = '2026-07-08T09:00:00.000Z';
+    for (const id of ['t3', 't1', 't4', 't2', 't5']) {
+      insertLog(db, makeEntry({ id, timestamp: ts }));
+    }
+    const seen: string[] = [];
+    let cursor: string | undefined = undefined;
+    for (let i = 0; i < 10; i++) {
+      const page = listLogs(db, { limit: 2, cursor });
+      seen.push(...page.logs.map(l => l.id));
+      cursor = page.nextCursor ?? undefined;
+      if (!page.hasMore) break;
+    }
+    // timestamp DESC, id DESC：t5 t4 t3 t2 t1
+    expect(seen).toEqual(['t5', 't4', 't3', 't2', 't1']);
+    expect(new Set(seen).size).toBe(5);
+  });
+
+  it('searchLogs keyset 翻页同样不重叠不漏', () => {
+    const ts = '2026-07-08T09:00:00.000Z';
+    for (const id of ['t3', 't1', 't4', 't2', 't5']) {
+      insertLog(db, makeEntry({ id, timestamp: ts }));
+    }
+    const seen: string[] = [];
+    let cursor: string | undefined = undefined;
+    for (let i = 0; i < 10; i++) {
+      const page = searchLogs(db, '代理拦截请求', { limit: 2, cursor });
+      seen.push(...page.logs.map(l => l.id));
+      cursor = page.nextCursor ?? undefined;
+      if (!page.hasMore) break;
+    }
+    expect(new Set(seen).size).toBe(seen.length);
+    expect(seen).toEqual(['t5', 't4', 't3', 't2', 't1']);
   });
 });

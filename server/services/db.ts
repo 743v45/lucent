@@ -356,70 +356,124 @@ function applyFilter(filter: ListFilter, where: string[], params: unknown[]): vo
   if (filter.endDate) { where.push('timestamp <= ?'); params.push(filter.endDate); }
 }
 
-/** 列表查询（索引-backed 排序/过滤/分页） */
+/** 列表/检索统一返回：行 + 总数（「N 条」展示用）+ 下一页 keyset 游标 + 是否还有更多 */
+export interface PageResult {
+  logs: LogRow[];
+  total: number;
+  nextCursor: string | null;
+  hasMore: boolean;
+}
+
+const LOG_COLS = `rowid, id, timestamp, agent_type, client_type, provider_name, endpoint_type,
+            model, status, duration, is_stream, is_test, thread_id, error,
+            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens`;
+
+const LOG_COLS_L = LOG_COLS.replace(/\b(rowid|id|timestamp|agent_type|client_type|provider_name|endpoint_type|model|status|duration|is_stream|is_test|thread_id|error|input_tokens|output_tokens|cache_read_tokens|cache_creation_tokens)\b/g, 'l.$1');
+
+/**
+ * keyset 分页游标：编码「上一页最后一条」的 (timestamp, id) 为不透明 token。
+ * 排序为 timestamp DESC, id DESC（id 唯一，作稳定 tiebreaker），故「下一页更早」
+ * = timestamp 更小，或 timestamp 相同且 id 更小。OFFSET 深翻会线性扫跳过行，
+ * keyset 用索引直接定位，深页不退化。
+ */
+export function encodeCursor(ts: string, id: string): string {
+  return Buffer.from(JSON.stringify({ ts, id }), 'utf-8').toString('base64url');
+}
+/** 解码游标；缺失或非法返回 null（调用方按无游标的首页处理） */
+export function decodeCursor(token?: string | null): { ts: string; id: string } | null {
+  if (!token) return null;
+  try {
+    const o = JSON.parse(Buffer.from(token, 'base64url').toString('utf-8'));
+    if (o && typeof o.ts === 'string' && typeof o.id === 'string') return o;
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** 列表查询（索引-backed 排序/过滤；cursor=keyset 深分页，无 cursor=OFFSET 旧模式供 bench/旧调用） */
 export function listLogs(
   db: DB,
-  opts: { limit: number; offset: number; filter?: ListFilter },
-): { logs: LogRow[]; total: number } {
-  const where: string[] = [];
-  const params: unknown[] = [];
-  if (opts.filter) applyFilter(opts.filter, where, params);
-  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+  opts: { limit: number; offset?: number; cursor?: string; filter?: ListFilter },
+): PageResult {
+  const filterWhere: string[] = [];
+  const filterParams: unknown[] = [];
+  if (opts.filter) applyFilter(opts.filter, filterWhere, filterParams);
+  const filterClause = filterWhere.length ? `WHERE ${filterWhere.join(' AND ')}` : '';
 
-  const total = (db.prepare(`SELECT COUNT(*) AS c FROM logs ${whereClause}`).get(...params) as { c: number }).c;
+  // total：全量命中数（不含 keyset 限制，供「N 条」展示）
+  const total = (db.prepare(`SELECT COUNT(*) AS c FROM logs ${filterClause}`).get(...filterParams) as { c: number }).c;
+
+  const cur = decodeCursor(opts.cursor);
+  // 显式 offset（bench / 旧调用）走 OFFSET；否则 keyset（首页无 cursor、续页有 cursor，LIMIT+1 探测 hasMore）
+  if (opts.offset == null || cur) {
+    const where = [...filterWhere];
+    const params = [...filterParams];
+    if (cur) { where.push('(timestamp < ? OR (timestamp = ? AND id < ?))'); params.push(cur.ts, cur.ts, cur.id); }
+    const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+    const rows = db.prepare(
+      `SELECT ${LOG_COLS} FROM logs ${clause} ORDER BY timestamp DESC, id DESC LIMIT ?`,
+    ).all(...params, opts.limit + 1) as LogRow[];
+    const hasMore = rows.length > opts.limit;
+    const logs = hasMore ? rows.slice(0, opts.limit) : rows;
+    const last = logs[logs.length - 1];
+    const nextCursor = hasMore && last ? encodeCursor(last.timestamp, last.id) : null;
+    return { logs, total, nextCursor, hasMore };
+  }
+
+  // OFFSET 旧模式
   const logs = db.prepare(
-    `SELECT rowid, id, timestamp, agent_type, client_type, provider_name, endpoint_type,
-            model, status, duration, is_stream, is_test, thread_id, error,
-            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
-     FROM logs ${whereClause}
-     ORDER BY timestamp DESC
-     LIMIT ? OFFSET ?`,
-  ).all(...params, opts.limit, opts.offset) as LogRow[];
-  return { logs, total };
+    `SELECT ${LOG_COLS} FROM logs ${filterClause} ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`,
+  ).all(...filterParams, opts.limit, opts.offset ?? 0) as LogRow[];
+  return { logs, total, nextCursor: null, hasMore: logs.length >= opts.limit };
 }
 
 /**
  * 全文检索。query ≥3 字符走 FTS5 trigram（倒排）；<3 字符回退 LIKE（单列扫，仍优于全量重解析）。
+ * 同 listLogs 支持 keyset 游标（深分页）与 OFFSET 旧模式。
  */
 export function searchLogs(
   db: DB,
   query: string,
-  opts: { limit: number; offset: number; filter?: ListFilter },
-): { logs: LogRow[]; total: number } {
-  const where: string[] = [];
-  const params: unknown[] = [];
-  if (opts.filter) applyFilter(opts.filter, where, params);
-  const andClause = where.length ? `AND ${where.join(' AND ')}` : '';
+  opts: { limit: number; offset?: number; cursor?: string; filter?: ListFilter },
+): PageResult {
+  const filterWhere: string[] = [];
+  const filterParams: unknown[] = [];
+  if (opts.filter) applyFilter(opts.filter, filterWhere, filterParams);
+  const andFilter = filterWhere.length ? `AND ${filterWhere.join(' AND ')}` : '';
   const trimmed = query.trim();
-  const cols = `l.rowid, l.id, l.timestamp, l.agent_type, l.client_type, l.provider_name, l.endpoint_type,
-                l.model, l.status, l.duration, l.is_stream, l.is_test, l.thread_id, l.error,
-                l.input_tokens, l.output_tokens, l.cache_read_tokens, l.cache_creation_tokens`;
+  const cur = decodeCursor(opts.cursor);
+  const andKeyset = cur ? 'AND (l.timestamp < ? OR (l.timestamp = ? AND l.id < ?))' : '';
+  const keysetParams = cur ? [cur.ts, cur.ts, cur.id] : [];
+  const useFts = trimmed.length >= 3;
 
-  if (trimmed.length >= 3) {
-    const ftsq = buildFtsQuery(trimmed);
-    const total = (db.prepare(
-      `SELECT COUNT(*) AS c FROM logs_fts f JOIN logs l ON l.rowid = f.rowid
-       WHERE logs_fts MATCH ? ${andClause}`,
-    ).get(ftsq, ...params) as { c: number }).c;
-    const logs = db.prepare(
-      `SELECT ${cols} FROM logs_fts f JOIN logs l ON l.rowid = f.rowid
-       WHERE logs_fts MATCH ? ${andClause}
-       ORDER BY l.timestamp DESC LIMIT ? OFFSET ?`,
-    ).all(ftsq, ...params, opts.limit, opts.offset) as LogRow[];
-    return { logs, total };
+  // total：全量命中数（不含 keyset 限制）
+  const total = useFts
+    ? (db.prepare(`SELECT COUNT(*) AS c FROM logs_fts f JOIN logs l ON l.rowid = f.rowid WHERE logs_fts MATCH ? ${andFilter}`).get(buildFtsQuery(trimmed), ...filterParams) as { c: number }).c
+    : (db.prepare(`SELECT COUNT(*) AS c FROM log_bodies b JOIN logs l ON l.rowid = b.log_rowid WHERE b.search_text LIKE ? ${andFilter}`).get(`%${trimmed}%`, ...filterParams) as { c: number }).c;
+
+  const baseFrom = useFts
+    ? `FROM logs_fts f JOIN logs l ON l.rowid = f.rowid WHERE logs_fts MATCH ?`
+    : `FROM log_bodies b JOIN logs l ON l.rowid = b.log_rowid WHERE b.search_text LIKE ?`;
+  const leadParam = useFts ? buildFtsQuery(trimmed) : `%${trimmed}%`;
+
+  if (opts.offset == null || cur) {
+    // keyset：首页无 cursor、续页有 cursor；LIMIT+1 探测 hasMore
+    const rows = db.prepare(
+      `SELECT ${LOG_COLS_L} ${baseFrom} ${andFilter} ${andKeyset} ORDER BY l.timestamp DESC, l.id DESC LIMIT ?`,
+    ).all(leadParam, ...filterParams, ...keysetParams, opts.limit + 1) as LogRow[];
+    const hasMore = rows.length > opts.limit;
+    const logs = hasMore ? rows.slice(0, opts.limit) : rows;
+    const last = logs[logs.length - 1];
+    const nextCursor = hasMore && last ? encodeCursor(last.timestamp, last.id) : null;
+    return { logs, total, nextCursor, hasMore };
   }
-  // 2 字符及以下：trigram 不命中，回退 LIKE
-  const like = `%${trimmed}%`;
-  const total = (db.prepare(
-    `SELECT COUNT(*) AS c FROM log_bodies b JOIN logs l ON l.rowid = b.log_rowid
-     WHERE b.search_text LIKE ? ${andClause}`,
-  ).get(like, ...params) as { c: number }).c;
+
+  // OFFSET 旧模式
   const logs = db.prepare(
-    `SELECT ${cols} FROM log_bodies b JOIN logs l ON l.rowid = b.log_rowid
-     WHERE b.search_text LIKE ? ${andClause}
-     ORDER BY l.timestamp DESC LIMIT ? OFFSET ?`,
-  ).all(like, ...params, opts.limit, opts.offset) as LogRow[];
-  return { logs, total };
+    `SELECT ${LOG_COLS_L} ${baseFrom} ${andFilter} ORDER BY l.timestamp DESC, l.id DESC LIMIT ? OFFSET ?`,
+  ).all(leadParam, ...filterParams, opts.limit, opts.offset ?? 0) as LogRow[];
+  return { logs, total, nextCursor: null, hasMore: logs.length >= opts.limit };
 }
 
 /** 按 id 取详情（主键 + bodies），返回重建所需全部字段 */

@@ -45,10 +45,21 @@ export async function getProxyStatus(): Promise<{
 }
 
 /**
- * 获取日志列表（分页）
+ * 获取日志列表（keyset 分页 + 服务端 search / 过滤）
+ *
+ * 分页用 cursor（keyset，深页不退化）：首页不传，续页传上次返回的 nextCursor。
+ * search 非空走 FTS5 全文检索；providerName / endpointType 服务端过滤。
  */
-export async function getLogs(params?: { limit?: number; offset?: number }): Promise<{
+export async function getLogs(params?: {
+  limit?: number;
+  cursor?: string;
+  search?: string;
+  providerName?: string;
+  endpointType?: string;
+}): Promise<{
   total: number;
+  nextCursor: string | null;
+  hasMore: boolean;
   logs: Array<{
     id: string;
     timestamp: string;
@@ -93,7 +104,10 @@ export async function getLogs(params?: { limit?: number; offset?: number }): Pro
 }> {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set('limit', String(params.limit));
-  if (params?.offset) qs.set('offset', String(params.offset));
+  if (params?.cursor) qs.set('cursor', params.cursor);
+  if (params?.search) qs.set('search', params.search);
+  if (params?.providerName && params.providerName !== 'all') qs.set('providerName', params.providerName);
+  if (params?.endpointType && params.endpointType !== 'all') qs.set('endpointType', params.endpointType);
   const query = qs.toString();
   return request(`/logs${query ? `?${query}` : ''}`);
 }
