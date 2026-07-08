@@ -168,6 +168,7 @@ export function createLogsRouter(options: {
   router.delete('/api/logs', (_req, res) => {
     try {
       const result = LogManager.clearAllLogs();
+      LogReader.invalidateCache(); // 日志全清，丢弃提取结果记忆缓存
       options.onEnable(); // 重置日志文件
       res.json(result);
     } catch (error) {

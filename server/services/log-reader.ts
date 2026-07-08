@@ -30,10 +30,57 @@ export function init(_resolvedCfg: ResolvedConfig): void {
 }
 
 /**
- * 缓存失效（SQLite 后端无进程级缓存，保留为空操作以兼容旧调用方）。
+ * 失效提取结果缓存。
+ *
+ * 日志一旦写入即不可变（db.ts insertLog 用 INSERT OR IGNORE，全程无 UPDATE，
+ * 只有 INSERT / DELETE），所以正常读取永远不需要失效——按 id 记忆的结果不会过期。
+ * 仅在「清空全部日志」（DELETE /api/logs）时调用，释放内存。SQLite 索引本身
+ * 无进程级缓存，这里的失效只针对下面的提取结果记忆缓存。
  */
 export function invalidateCache(): void {
-  /* no-op: SQLite 即索引，无需进程级缓存失效 */
+  contextCache.clear();
+}
+
+// ==================== 提取结果记忆（读路径） ====================
+
+/**
+ * 按 log.id 记忆 buildContextFromRequest 的结果。
+ *
+ * 背景：迁移到 SQLite（step2）时退役了旧的常驻 fileCache，读路径变成每次刷新 /
+ * 翻页 / 点详情都对页内每条日志重跑 context + KV-Cache 提取，并因此反复打印
+ * lucent:context / lucent:kvcache 调试日志（见 TAE-73）。日志不可变，提取结果
+ * 永远不会过期，所以按 id 记忆一次即可：命中即复用、不重提、不重打日志。
+ *
+ * FIFO 上限保护内存：超限丢最旧条目。
+ */
+const CONTEXT_CACHE_MAX = 2000;
+const contextCache = new Map<string, { context?: LogEntry['context']; kvCache?: LogEntry['kvCache'] }>();
+
+/**
+ * 读路径专用：按 log.id 记忆 buildContextFromRequest 的结果。
+ * 命中 → 直接贴回 context / kvCache（不重提，不重打调试日志）；
+ * 未命中 → 跑一次 buildContextFromRequest 并存入缓存。
+ */
+export function applyContextCache(log: LogEntry): void {
+  const id = log.id;
+  if (id) {
+    const cached = contextCache.get(id);
+    if (cached) {
+      log.context = cached.context;
+      log.kvCache = cached.kvCache;
+      return;
+    }
+  }
+
+  buildContextFromRequest(log);
+
+  if (id) {
+    if (contextCache.size >= CONTEXT_CACHE_MAX) {
+      const oldest = contextCache.keys().next().value;
+      if (oldest !== undefined) contextCache.delete(oldest);
+    }
+    contextCache.set(id, { context: log.context, kvCache: log.kvCache });
+  }
 }
 
 // ==================== 归一化 ====================
@@ -309,7 +356,7 @@ export async function readLogs(query: LogsQuery = {}): Promise<LogsResult> {
         return null;
       }
       const log = reconstructEntry(r, b.request, b.response);
-      buildContextFromRequest(log);
+      applyContextCache(log);
       return log;
     }).filter((l): l is LogEntry => l !== null);
 
@@ -328,7 +375,7 @@ export async function getLogById(id: string): Promise<LogEntry | null> {
     const raw = getLogByIdRaw(getDb(), id);
     if (!raw) return null;
     const log = reconstructEntry(raw.row, raw.request, raw.response);
-    buildContextFromRequest(log);
+    applyContextCache(log);
     return log;
   } catch (error) {
     dbg('获取日志详情失败: %O', error);

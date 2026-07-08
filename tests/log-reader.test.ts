@@ -4,8 +4,8 @@
  * 重点：contextWindow 口径须与 KV-Cache 的 totalInputTokens 一致（含 cache tokens）
  */
 
-import { describe, it, expect } from 'vitest';
-import { buildContextFromRequest } from '../server/services/log-reader.js';
+import { describe, it, expect, beforeEach } from 'vitest';
+import { buildContextFromRequest, applyContextCache, invalidateCache } from '../server/services/log-reader.js';
 import type { LogEntry } from '../server/types.js';
 
 describe('buildContextFromRequest — contextWindow 口径', () => {
@@ -126,5 +126,65 @@ describe('buildContextFromRequest — contextWindow 口径', () => {
     expect(asst.content).toEqual([]);
     // tool 角色计入统计
     expect(log.context!.summary!.toolMessages).toBe(1);
+  });
+});
+
+/**
+ * applyContextCache：读路径按 log.id 记忆提取结果。
+ * 日志不可变 → 同 id 第二次读应命中缓存、贴回同一份 context/kvCache，不再重提。
+ * 见 TAE-73（迁移后刷新页面重复触发上下文提取）。
+ */
+describe('applyContextCache — 提取结果记忆', () => {
+  beforeEach(() => {
+    invalidateCache();
+  });
+
+  function makeLog(id: string): LogEntry {
+    return {
+      id,
+      timestamp: '2026-07-08T00:00:00.000Z',
+      request: { method: 'POST', url: 'https://api.anthropic.com/v1/messages', headers: {}, body: { model: 'claude-3-5-sonnet-20241022', messages: [{ role: 'user', content: 'hi' }] } },
+      response: { status: 200, statusText: 'OK', headers: {}, body: { usage: { input_tokens: 10, output_tokens: 5 } } },
+      agentType: 'main',
+      duration: 0,
+      metadata: { model: 'claude-3-5-sonnet-20241022', provider: 'claude', stream: false },
+      endpointType: 'anthropic-messages',
+    } as unknown as LogEntry;
+  }
+
+  it('同 id 第二次读命中缓存：贴回同一份 context（不重提）', () => {
+    const first = makeLog('cache-hit');
+    applyContextCache(first);
+    const firstContext = first.context;
+
+    expect(firstContext).toBeDefined();
+
+    // 第二个全新 entry，同 id —— 应直接贴缓存里的同一份 context
+    const second = makeLog('cache-hit');
+    applyContextCache(second);
+    expect(second.context).toBe(firstContext);
+    expect(second.kvCache).toBe(first.kvCache);
+  });
+
+  it('不同 id 互不影响，各自提取', () => {
+    const a = makeLog('cache-a');
+    const b = makeLog('cache-b');
+    applyContextCache(a);
+    applyContextCache(b);
+
+    expect(a.context).toBeDefined();
+    expect(b.context).toBeDefined();
+    expect(a.context).not.toBe(b.context);
+  });
+
+  it('invalidateCache 后重新提取（得到新对象）', () => {
+    const first = makeLog('cache-invalidate');
+    applyContextCache(first);
+
+    invalidateCache();
+
+    const second = makeLog('cache-invalidate');
+    applyContextCache(second);
+    expect(second.context).not.toBe(first.context);
   });
 });
