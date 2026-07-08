@@ -226,7 +226,7 @@ export function setupInterceptor(): void {
   interceptorInstalled = true;
 
   const rc = resolveEffectiveConfig();
-  dbg('安装拦截器, logDir=%s maxLogFileSize=%d', rc.logDir, rc.maxLogFileSize);
+  dbg('安装拦截器, logDir=%s dbPath=%s', rc.logDir, rc.dbPath);
 
   const originalFetch = globalThis.fetch;
 
@@ -271,11 +271,6 @@ export function setupInterceptor(): void {
     // 构建请求日志
     const body = parseRequestBody(options?.body as string | undefined);
     const entry = buildRequestEntry(urlStr, options, body, startTime, providerName, endpointType);
-
-    // 主 Agent 检查日志轮转
-    if (entry.mainAgent) {
-      LogWriter.checkAndRotateLogFile();
-    }
 
     try {
       const response = await originalFetch.call(this, url, options);

@@ -1,88 +1,39 @@
 /**
- * 日志读取服务
+ * 日志读取服务（SQLite 后端）
  *
- * 从 JSONL 文件读取、归一化、过滤、分页日志
- * 使用异步 I/O，不阻塞事件循环
+ * readLogs / getLogById 全走 db.ts 的索引查询，再批量拉 bodies 重建 LogEntry。
+ * 不再全量解析文件、不再 fileCache 常驻——查询 O(命中+limit)，内存按页。
+ * normalizeLogEntry / buildContextFromRequest 保留原样（前端契约 + context 口径不变）。
  */
 
-import { existsSync } from 'node:fs';
-import { readdir, readFile, stat } from 'node:fs/promises';
-import { join } from 'node:path';
 import {
   DEFAULT_LOG_QUERY_LIMIT,
-  MAX_LOG_FILES_TO_READ,
 } from '../constants.js';
 import { extractContext } from '../context-extractors.js';
 import { extractCachedContent, getContextSizeForModel } from '../kvcache.js';
 import { extractFromSSELines } from '../sse-extractor.js';
-import type { LogEntry, LogsQuery } from '../types.js';
+import type { LogEntry, LogsQuery, LogsResult } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
+import { listLogs, searchLogs, fetchBodies, getLogById as getLogByIdRaw, type LogRow } from './db.js';
+import { getDb } from './db-instance.js';
 import createDebug from 'debug';
 const dbg = createDebug('lucent:log-reader');
 
 // ==================== 初始化 ====================
 
-let resolvedConfig: ResolvedConfig;
-
-export function init(resolvedCfg: ResolvedConfig): void {
-  resolvedConfig = resolvedCfg;
+/**
+ * DB 句柄由 log-writer.init → initDb 初始化，reader 经 getDb() 取用。
+ * 保留 init(cfg) 契约以兼容现有调用方（server/index.ts、测试）。
+ */
+export function init(_resolvedCfg: ResolvedConfig): void {
+  /* no-op: 句柄在 log-writer.init 时已就绪 */
 }
-
-// ==================== 文件级缓存 ====================
-
-interface FileCache {
-  mtimeMs: number;
-  size: number;
-  entries: LogEntry[];
-}
-
-const fileCache = new Map<string, FileCache>();
 
 /**
- * 使缓存失效（日志写入/轮转/清理时调用）
- *
- * 注意：readFileEntries 已改为 mtimeMs + size 联合判定，
- * append 后 size 必然变化，因此正常读取路径无需显式失效。
- * 此函数保留供外部在确知结构变化（如轮转归档）时强制清理。
+ * 缓存失效（SQLite 后端无进程级缓存，保留为空操作以兼容旧调用方）。
  */
 export function invalidateCache(): void {
-  fileCache.clear();
-}
-
-/**
- * 读取单个文件的日志条目，使用 mtimeMs + size 缓存
- *
- * 仅用 mtimeMs 在同秒高频 append 下 mtime 不变会返回过期数据，
- * 联合 size 判定：size 变化即判定失效。
- */
-async function readFileEntries(filename: string): Promise<LogEntry[]> {
-  const filePath = join(resolvedConfig.logDir, filename);
-
-  // 检查缓存
-  const stats_ = await stat(filePath);
-  const cached = fileCache.get(filename);
-  if (cached && cached.mtimeMs === stats_.mtimeMs && cached.size === stats_.size) {
-    return cached.entries;
-  }
-
-  // 缓存未命中，解析文件（标准 JSONL：一行一条 JSON）
-  const content = await readFile(filePath, 'utf-8');
-  const entries: LogEntry[] = [];
-  const lines = content.split('\n');
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    try {
-      const raw = JSON.parse(trimmed);
-      entries.push(normalizeLogEntry(raw));
-    } catch {
-      // 忽略解析失败的行（含旧 escape 格式文件，按用户选择不做迁移）
-    }
-  }
-
-  // 更新缓存
-  fileCache.set(filename, { mtimeMs: stats_.mtimeMs, size: stats_.size, entries });
-  return entries;
+  /* no-op: SQLite 即索引，无需进程级缓存失效 */
 }
 
 // ==================== 归一化 ====================
@@ -272,126 +223,115 @@ export function buildContextFromRequest(log: LogEntry): void {
   }
 }
 
+// ==================== 重建 ====================
+
+/**
+ * 从 logs 行 + bodies 重建前端期望的 LogEntry：
+ * 先拼回扁平 RawLogEntry，再走 normalizeLogEntry 归一化（与原 JSONL 路径一致）。
+ */
+export function reconstructEntry(row: LogRow, request: string, response: string): LogEntry {
+  const req = JSON.parse(request) as { method: string; url: string; headers: Record<string, string>; body: unknown };
+  const resp = JSON.parse(response);
+  const hasUsage = row.input_tokens != null || row.output_tokens != null;
+  const flat: any = {
+    id: row.id,
+    timestamp: row.timestamp,
+    url: req.url,
+    method: req.method,
+    headers: req.headers,
+    body: req.body,
+    response: resp,
+    duration: row.duration,
+    isStream: !!row.is_stream,
+    mainAgent: row.agent_type === 'main',
+    agentType: row.agent_type ?? undefined,
+    apiType: row.endpoint_type ?? undefined,
+    clientType: row.client_type ?? undefined,
+    isTest: !!row.is_test,
+    error: row.error ?? undefined,
+    providerName: row.provider_name ?? undefined,
+    endpointType: row.endpoint_type ?? undefined,
+    threadId: row.thread_id ?? undefined,
+    tokenUsage: hasUsage ? {
+      input_tokens: row.input_tokens ?? 0,
+      output_tokens: row.output_tokens ?? 0,
+      ...(row.cache_read_tokens != null ? { cache_read_tokens: row.cache_read_tokens } : {}),
+      ...(row.cache_creation_tokens != null ? { cache_creation_tokens: row.cache_creation_tokens } : {}),
+    } : undefined,
+  };
+  return normalizeLogEntry(flat);
+}
+
 // ==================== 读取 ====================
 
 /**
- * 读取并过滤日志
+ * 读取并过滤日志（索引查询 + 按页拉 bodies 重建）。
+ * search 非空走 FTS 检索，否则列表；cursor=keyset 深分页，filter 含 provider/endpoint。
  */
-export async function readLogs(query: LogsQuery = {}): Promise<{ logs: LogEntry[]; total: number }> {
+export async function readLogs(query: LogsQuery = {}): Promise<LogsResult> {
   const {
     limit = DEFAULT_LOG_QUERY_LIMIT,
-    offset = 0,
+    cursor,
     agentType = 'all',
+    providerName,
+    endpointType,
     startDate,
     endDate,
     search,
   } = query;
 
-  // clamp limit/offset：防止恶意超大 limit 打爆内存
+  // clamp limit：防止恶意超大 limit 打爆内存
   const MAX_LOG_QUERY_LIMIT = 500;
-  const safeLimit = Math.max(0, Math.min(limit, MAX_LOG_QUERY_LIMIT));
-  const safeOffset = Math.max(0, offset);
-
-  let allLogs: LogEntry[] = [];
+  const safeLimit = Math.max(1, Math.min(limit, MAX_LOG_QUERY_LIMIT));
 
   try {
-    if (!existsSync(resolvedConfig.logDir)) {
-      return { logs: [], total: 0 };
-    }
+    const filter = {
+      ...(agentType && agentType !== 'all' ? { agentType } : {}),
+      ...(providerName && providerName !== 'all' ? { providerName } : {}),
+      ...(endpointType && endpointType !== 'all' ? { endpointType } : {}),
+      ...(startDate ? { startDate } : {}),
+      ...(endDate ? { endDate } : {}),
+    };
+    // 前端走 keyset（cursor），不传 offset——传 offset 会让 listLogs 落到 OFFSET 旧模式、
+    // 首页 nextCursor=null，断掉 keyset 链。OFFSET 仅 bench/旧调用直连 listLogs 时用。
+    const pageOpts = { limit: safeLimit, cursor, filter };
 
-    const allFiles = await readdir(resolvedConfig.logDir);
-    const files = allFiles
-      .filter(f => f.endsWith('.jsonl') && !f.startsWith('export_'))
-      .sort()
-      .reverse()
-      .slice(0, MAX_LOG_FILES_TO_READ);
+    const { logs: rows, total, nextCursor, hasMore } = search && search.trim()
+      ? searchLogs(getDb(), search, pageOpts)
+      : listLogs(getDb(), pageOpts);
 
-    // 使用缓存读取每个文件
-    for (const file of files) {
-      const entries = await readFileEntries(file);
-      allLogs.push(...entries);
-    }
+    // 按页批量拉 bodies 重建（O(页大小) body 读，不拖全量）
+    const bodies = fetchBodies(getDb(), rows.map(r => r.rowid));
+    const logs = rows.map(r => {
+      const b = bodies.get(r.rowid);
+      if (!b) {
+        dbg('body 缺失 rowid=%d id=%s（跳过）', r.rowid, r.id);
+        return null;
+      }
+      const log = reconstructEntry(r, b.request, b.response);
+      buildContextFromRequest(log);
+      return log;
+    }).filter((l): l is LogEntry => l !== null);
+
+    return { logs, total, nextCursor, hasMore };
   } catch (error) {
     dbg('读取日志失败: %O', error);
-    return { logs: [], total: 0 };
+    return { logs: [], total: 0, nextCursor: null, hasMore: false };
   }
-
-  // 按时间戳倒序排序
-  allLogs.sort((a, b) =>
-    new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()
-  );
-
-  // 按 ID 去重（同名条目可能在多个文件中出现，保留最新的）
-  const seen = new Set<string>();
-  allLogs = allLogs.filter(log => {
-    if (seen.has(log.id)) return false;
-    seen.add(log.id);
-    return true;
-  });
-
-  // 过滤掉没有响应的日志（还在进行中的请求）
-  allLogs = allLogs.filter(log => log.response !== null && log.response !== undefined);
-
-  // 应用过滤器
-  let filteredLogs = allLogs;
-
-  if (agentType !== 'all') {
-    filteredLogs = filteredLogs.filter(log => log.agentType === agentType);
-  }
-
-  if (startDate) {
-    const start = new Date(startDate).getTime();
-    filteredLogs = filteredLogs.filter(log => new Date(log.timestamp).getTime() >= start);
-  }
-
-  if (endDate) {
-    const end = new Date(endDate).getTime();
-    filteredLogs = filteredLogs.filter(log => new Date(log.timestamp).getTime() <= end);
-  }
-
-  if (search) {
-    const searchLower = search.toLowerCase();
-    filteredLogs = filteredLogs.filter(log => {
-      // 所有参与搜索的字段都做空值守卫，避免 undefined.toLowerCase() 抛 TypeError 中断查询
-      if ((log.request?.url ?? '').toLowerCase().includes(searchLower)) return true;
-      if ((log.metadata?.model ?? '').toLowerCase().includes(searchLower)) return true;
-      if (log.error?.toLowerCase().includes(searchLower)) return true;
-      if ((log.providerName ?? '').toLowerCase().includes(searchLower)) return true;
-      return false;
-    });
-  }
-
-  const total = filteredLogs.length;
-
-  // 从 request.body 构建 context（只对分页后返回的条目）
-  const paginatedLogs = filteredLogs.slice(safeOffset, safeOffset + safeLimit);
-  paginatedLogs.forEach(log => buildContextFromRequest(log));
-
-  return { logs: paginatedLogs, total };
 }
 
 /**
- * 获取单个日志详情
+ * 获取单个日志详情（主键直查 + 重建）
  */
 export async function getLogById(id: string): Promise<LogEntry | null> {
   try {
-    if (!existsSync(resolvedConfig.logDir)) {
-      return null;
-    }
-
-    const files = (await readdir(resolvedConfig.logDir)).filter(f => f.endsWith('.jsonl'));
-
-    for (const file of files) {
-      const entries = await readFileEntries(file);
-      const found = entries.find(e => e.id === id);
-      if (found) {
-        buildContextFromRequest(found);
-        return found;
-      }
-    }
+    const raw = getLogByIdRaw(getDb(), id);
+    if (!raw) return null;
+    const log = reconstructEntry(raw.row, raw.request, raw.response);
+    buildContextFromRequest(log);
+    return log;
   } catch (error) {
     dbg('获取日志详情失败: %O', error);
+    return null;
   }
-
-  return null;
 }

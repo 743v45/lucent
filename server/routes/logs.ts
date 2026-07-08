@@ -63,7 +63,10 @@ export function createLogsRouter(options: {
       const query: LogsQuery = {
         limit: parseInt(req.query.limit as string) || 100,
         offset: parseInt(req.query.offset as string) || 0,
+        cursor: req.query.cursor as string | undefined,
         agentType: (req.query.agentType as LogsQuery['agentType']) || 'all',
+        providerName: req.query.providerName as string | undefined,
+        endpointType: req.query.endpointType as string | undefined,
         startDate: req.query.startDate as string,
         endDate: req.query.endDate as string,
         search: req.query.search as string,

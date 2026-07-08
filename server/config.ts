@@ -7,7 +7,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, MAX_LOG_FILE_SIZE, MAX_LOG_FILES, LOG_RETENTION_DAYS } from './constants.js';
+import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, DB_PATH, LOG_RETENTION_DAYS } from './constants.js';
 import { ENDPOINT_TYPES, isEndpointType, isValidProviderName, PRESET_NAMES } from './types.js';
 import type { EndpointType, Provider, BodyRewriteRule } from './types.js';
 import { parseFieldPath } from './body-rewriter.js';
@@ -26,9 +26,8 @@ export interface ProxyConfig {
   providers: Provider[];
   // 可选的服务器配置（环境变量优先）
   logDir?: string;
+  dbPath?: string;
   logRetentionDays?: number;
-  maxLogFileSize?: number;
-  maxLogFiles?: number;
   /** 可选：全局请求 body 重写规则（opt-in，缺省视为无规则，代理保持透明） */
   bodyRewrites?: BodyRewriteRule[];
 }
@@ -43,9 +42,9 @@ export interface ResolvedConfig {
   webPort: number;
   logDir: string;
   logRetentionDays: number;
-  maxLogFileSize: number;
-  maxLogFiles: number;
   providers: Provider[];
+  /** SQLite 数据库路径（env LUCENT_DB_PATH 覆盖） */
+  dbPath: string;
 }
 
 // ==================== 默认配置 ====================
@@ -274,9 +273,8 @@ export function resolveEffectiveConfig(): ResolvedConfig {
     proxyPort:           parseEnvNumber('LUCENT_PROXY_PORT',  raw.proxyPort),
     webPort:             parseEnvNumber('LUCENT_WEB_PORT',    raw.webPort),
     logDir:              process.env.LUCENT_LOG_DIR           || raw.logDir             || LOG_DIR,
+    dbPath:              process.env.LUCENT_DB_PATH            || raw.dbPath             || DB_PATH,
     logRetentionDays:    parseEnvNumber('LUCENT_LOG_RETENTION_DAYS', raw.logRetentionDays ?? LOG_RETENTION_DAYS),
-    maxLogFileSize:      parseEnvNumber('LUCENT_MAX_LOG_FILE_SIZE',  raw.maxLogFileSize   ?? MAX_LOG_FILE_SIZE),
-    maxLogFiles:         parseEnvNumber('LUCENT_MAX_LOG_FILES',      raw.maxLogFiles      ?? MAX_LOG_FILES),
     providers:           raw.providers,
   };
 }

@@ -39,3 +39,6 @@ tailwindcss-*.log
 Dockerfile
 .dockerignore
 docker-compose.yml
+
+# 基准产物（合成数据 / 临时库，不进镜像）
+bench

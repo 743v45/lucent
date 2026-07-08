@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Empty, Select, Spin, Typography } from 'antd';
+import { Empty, Input, Select, Spin, Typography } from 'antd';
+import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import type { LogEntry, AgentType, Provider, EndpointType } from '../../types';
 import { ENDPOINT_LABELS, ENDPOINT_TYPES } from '../../types';
 import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, getStatusColor } from '../../constants';
@@ -15,6 +16,7 @@ const { Text } = Typography;
 
 interface LogListPanelProps {
   logs: LogEntry[];
+  total?: number;
   selectedId: string | null;
   onSelectLog: (id: string) => void;
   loading: boolean;
@@ -27,6 +29,8 @@ interface LogListPanelProps {
   onProviderFilterChange?: (name: string) => void;
   endpointFilter?: string;
   onEndpointFilterChange?: (type: string) => void;
+  searchTerm?: string;
+  onSearchChange?: (value: string) => void;
   conversationView: 'timeline' | 'session';
   onConversationViewChange: (v: 'timeline' | 'session') => void;
 }
@@ -242,6 +246,7 @@ function SessionListView({ logs, selectedId, onSelectLog, getAgentTypeTag, short
 
 export function LogListPanel({
   logs,
+  total,
   selectedId,
   onSelectLog,
   loading,
@@ -254,6 +259,8 @@ export function LogListPanel({
   onProviderFilterChange,
   endpointFilter,
   onEndpointFilterChange,
+  searchTerm,
+  onSearchChange,
   conversationView,
   onConversationViewChange,
 }: LogListPanelProps): JSX.Element {
@@ -378,11 +385,26 @@ export function LogListPanel({
               ]}
             />
           )}
-          <Text className="text-text-quaternary text-sm shrink-0">
-            {logs.length} 条
+          <Text data-testid="log-count" className="text-text-quaternary text-sm shrink-0">
+            {total ?? logs.length} 条
           </Text>
         </div>
       </div>
+
+      {/* 搜索框（防抖在 App：searchInput → 300ms → searchTerm 触发服务端 FTS 检索） */}
+      {onSearchChange && (
+        <div className="px-3 py-2 border-b border-border-subtle">
+          <Input
+            data-testid="log-search-input"
+            allowClear
+            size="small"
+            placeholder="搜索消息正文 / 模型 / 错误…"
+            prefix={<MagnifyingGlassIcon className="w-4 h-4 text-text-quaternary" />}
+            value={searchTerm ?? ''}
+            onChange={(e) => onSearchChange(e.target.value)}
+          />
+        </div>
+      )}
 
       {loading ? (
         <div className="flex-1 flex items-center justify-center min-h-[200px]">

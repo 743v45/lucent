@@ -7,8 +7,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, rm, readdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
+import Database from 'better-sqlite3';
+import { insertLogsBatch } from '../server/services/db.js';
 
 // ==================== 测试目录管理 ====================
 
@@ -141,20 +143,88 @@ export async function stopBackend(): Promise<void> {
 // ==================== 日志读取 ====================
 
 /**
- * 读取最新的 JSONL 日志文件（标准 JSONL：一行一条 JSON）
+ * 读取最新日志：从 SQLite 库（configDir/lucent.db = dirname(logDir)/lucent.db）读取全部条目，
+ * 重建为扁平 RawLogEntry 形状（与旧 JSONL 直读返回一致：含 providerName/endpointType/body 等）。
+ *
+ * 后端在子进程运行，测试进程经文件直连只读打开 WAL 库（多读并发安全）。
  */
 export async function readLatestLog(logDir: string): Promise<Array<Record<string, unknown>> | null> {
-  const files = await readdir(logDir);
-  const jsonlFiles = files.filter(f => f.endsWith('.jsonl')).sort().reverse();
-  if (jsonlFiles.length === 0) return null;
-
-  const content = await readFile(join(logDir, jsonlFiles[0]), 'utf-8');
-  return content
-    .split('\n')
-    .filter(line => line.trim().length > 0)
-    .map(line => {
-      try { return JSON.parse(line); } catch { return {}; }
+  const dbPath = join(dirname(logDir), 'lucent.db');
+  if (!existsSync(dbPath)) return null;
+  let db: Database.Database;
+  try {
+    db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  } catch {
+    return null;
+  }
+  try {
+    const rows = db.prepare(
+      `SELECT l.id, l.timestamp, l.agent_type, l.client_type, l.provider_name, l.endpoint_type,
+              l.model, l.status, l.duration, l.is_stream, l.is_test, l.thread_id, l.error,
+              l.input_tokens, l.output_tokens, l.cache_read_tokens, l.cache_creation_tokens,
+              b.request, b.response
+       FROM logs l JOIN log_bodies b ON b.log_rowid = l.rowid
+       ORDER BY l.timestamp ASC`,
+    ).all() as Record<string, unknown>[];
+    return rows.map(r => {
+      const req = JSON.parse(r.request as string) as { method: string; url: string; headers: Record<string, string>; body: unknown };
+      const resp = JSON.parse(r.response as string);
+      const hasUsage = r.input_tokens != null || r.output_tokens != null;
+      return {
+        id: r.id,
+        timestamp: r.timestamp,
+        url: req.url,
+        method: req.method,
+        headers: req.headers,
+        body: req.body,
+        response: resp,
+        duration: r.duration,
+        isStream: !!r.is_stream,
+        mainAgent: r.agent_type === 'main',
+        agentType: r.agent_type,
+        apiType: r.endpoint_type,
+        clientType: r.client_type,
+        isTest: !!r.is_test,
+        error: r.error,
+        providerName: r.provider_name,
+        endpointType: r.endpoint_type,
+        threadId: r.thread_id,
+        ...(hasUsage ? {
+          tokenUsage: {
+            input_tokens: r.input_tokens ?? 0,
+            output_tokens: r.output_tokens ?? 0,
+            ...(r.cache_read_tokens != null ? { cache_read_tokens: r.cache_read_tokens } : {}),
+            ...(r.cache_creation_tokens != null ? { cache_creation_tokens: r.cache_creation_tokens } : {}),
+          },
+        } : {}),
+      };
     });
+  } catch {
+    return null;
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * 把 JSONL 文本（兼容 '\n---\n' 与纯换行分隔）批量 seed 进 SQLite 库。
+ * 供 E2E 测试注入固定 fixture（替代旧「写 .jsonl 文件等 reader 读」的模式）。
+ * 后端须已 startBackend（库与 schema 已就绪）；测试进程经文件直连写入（WAL 多读一写）。
+ */
+export async function seedLogsFromJsonl(env: TestEnv, content: string): Promise<void> {
+  const dbPath = join(env.configDir, 'lucent.db');
+  if (!existsSync(dbPath)) throw new Error('DB 未就绪：先 startBackend');
+  const db = new Database(dbPath);
+  db.pragma('busy_timeout = 5000');
+  try {
+    const chunks = content.split(/\n---\n?|\n/).map(s => s.trim()).filter(Boolean);
+    const entries = chunks
+      .map(c => { try { return JSON.parse(c); } catch { return null; } })
+      .filter((x): x is Record<string, unknown> => x !== null);
+    insertLogsBatch(db, entries as never);
+  } finally {
+    db.close();
+  }
 }
 
 // ==================== Mock 上游服务器 ====================

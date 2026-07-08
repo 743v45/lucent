@@ -18,6 +18,7 @@ import { mountRoutes } from './routes/index.js';
 import { startProxyServer } from './proxy.js';
 import { setupInterceptor, drainPendingSSETasks } from './interceptor.js';
 import { drainWriteQueue } from './services/log-writer.js';
+import { closeDb } from './services/db-instance.js';
 import { isSseDebugEnabled } from './sse-extractor.js';
 import './endpoint-handlers.js'; // 注册端点类型处理器
 import type { ProxyStatus } from './types.js';
@@ -33,6 +34,8 @@ const __dirname = dirname(__filename);
 let resolvedConfig!: ResolvedConfig;
 let proxyEnabled = false;
 let proxyServer: Awaited<ReturnType<typeof startProxyServer>> | null = null;
+// 保留期清理定时器（定期 DELETE 旧行 + VACUUM；shutdown 时清掉）
+let retentionTimer: NodeJS.Timeout | null = null;
 
 // ==================== Express 应用 ====================
 
@@ -69,6 +72,14 @@ export async function startServer(): Promise<void> {
   LogWriter.init(resolvedConfig);
   LogReader.init(resolvedConfig);
   await LogWriter.cleanupOldLogs();
+
+  // 定期保留期清理（决策④：DELETE 旧行 + VACUUM）。启动时已清一次；长驻进程靠这个定时
+  // 兜底（每 24h）。unref：不阻止进程退出（shutdown 时显式 clearInterval）。
+  const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000;
+  retentionTimer = setInterval(() => {
+    try { LogWriter.cleanupOldLogs(); } catch (err) { dbg('定时保留期清理失败: %O', err); }
+  }, RETENTION_INTERVAL_MS);
+  retentionTimer.unref();
 
   // 启动代理服务器
   const proxyPort = resolvedConfig.proxyPort;
@@ -146,11 +157,16 @@ export function getServerStatus(): ProxyStatus {
 export async function shutdownServer(): Promise<void> {
   console.log('[Lucent] 关闭服务器...');
 
+  // 停掉保留期清理定时器
+  if (retentionTimer) { clearInterval(retentionTimer); retentionTimer = null; }
+
   // 等待后台 SSE 任务完成，确保数据不丢失
   await drainPendingSSETasks();
 
   // 等待所有挂起的日志写入完成
   await drainWriteQueue();
+  // 关闭数据库（WAL checkpoint 落盘）
+  closeDb();
 
   if (proxyServer) {
     await proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));

@@ -1,22 +1,20 @@
 /**
- * 日志写入/读取 round-trip：JSONL 格式 + frontmatter 兼容性
+ * 日志写入/读取 round-trip（SQLite 后端）
  *
- * 背景：旧实现用自创分隔符 '\n---\n' + escape/unescape 二次转义层，
- * 与 JSON 自身转义冲突。当 body 含 markdown / YAML frontmatter（字面
- * '\n---\n' 开头）时，unescapeLogContent 在 JSON.parse 之前破坏字符串值，
- * 导致该条目及之后所有条目解析失败、被 /api/logs 静默丢弃。
- *
- * 本测试覆盖：frontmatter round-trip、分隔符序列保留、每条单行、
- * 解析失败不级联。
+ * 旧实现用 JSONL + 自创分隔符 '\n---\n' + escape/unescape，与 JSON 转义冲突，
+ * body 含 markdown / YAML frontmatter（字面 '\n---\n'）时解析失败被静默丢弃。
+ * 切 SQLite 后内容以 JSON 文本存储，不再有分隔符冲突——本测试验证内容完整性仍成立，
+ * 并补「同 id 幂等不产生重复行」（insertLog OR IGNORE）。
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, readdirSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import * as LogWriter from '../server/services/log-writer.js';
 import * as LogReader from '../server/services/log-reader.js';
+import { closeDb } from '../server/services/db-instance.js';
 import type { RawLogEntry } from '../server/types.js';
 import type { ResolvedConfig } from '../server/config.js';
 
@@ -52,18 +50,19 @@ function makeEntry(id: string, content: string): RawLogEntry {
 const FRONTMATTER_CONTENT =
   'Pre text\n---\ntitle: "SOUL.md"\n---\nPost text';
 
-describe('日志 JSONL round-trip — frontmatter / 分隔符序列兼容', () => {
-  let logDir: string;
+describe('日志 round-trip（SQLite 后端）— frontmatter / 内容完整性 / 幂等', () => {
   let configDir: string;
+  let dbPath: string;
 
   beforeEach(() => {
     configDir = mkdtempSync(join(tmpdir(), 'lucent-jsonl-'));
-    logDir = join(configDir, 'logs');
+    dbPath = join(configDir, 'lucent.db');
     const cfg = {
-      logDir,
-      maxLogFileSize: 100 * 1024 * 1024,
+      logDir: join(configDir, 'logs'),
+      dbPath,
       logRetentionDays: 30,
     } as unknown as ResolvedConfig;
+    closeDb(); // db-instance 是进程级单例，重开前先关旧库
     LogWriter.init(cfg);
     LogReader.init(cfg);
     LogReader.invalidateCache();
@@ -71,6 +70,7 @@ describe('日志 JSONL round-trip — frontmatter / 分隔符序列兼容', () =
 
   afterEach(async () => {
     await LogWriter.drainWriteQueue();
+    closeDb();
     rmSync(configDir, { recursive: true, force: true });
   });
 
@@ -108,25 +108,15 @@ describe('日志 JSONL round-trip — frontmatter / 分隔符序列兼容', () =
     expect(body.messages[0].content).toBe(content);
   });
 
-  it('每条日志在文件中恰占一行（值为 JSON.stringify(entry)+\\n，无 --- 分隔符）', async () => {
-    LogWriter.writeLogEntry(makeEntry('line-1', 'hello'));
-    LogWriter.writeLogEntry(makeEntry('line-2', 'world'));
+  it('同 id 二次写入幂等：不产生重复行（insertLog OR IGNORE）', async () => {
+    LogWriter.writeLogEntry(makeEntry('dup-1', 'first'));
+    LogWriter.writeLogEntry(makeEntry('dup-1', 'second')); // 同 id
     await LogWriter.drainWriteQueue();
 
-    const files = readdirSync(logDir).filter(f => f.endsWith('.jsonl'));
-    expect(files.length).toBe(1);
-    const raw = readFileSync(join(logDir, files[0]), 'utf-8');
-
-    // 文件不含旧的 --- 分隔符
-    expect(raw).not.toContain('\n---\n');
-    expect(raw).not.toContain('\\n---\\n');
-
-    // 按真实换行拆分，得到 2 个非空行（末尾换行产生一个空段）
-    const lines = raw.split('\n').filter(l => l.length > 0);
-    expect(lines.length).toBe(2);
-    // 每行都是合法 JSON
-    for (const line of lines) {
-      expect(() => JSON.parse(line)).not.toThrow();
-    }
+    const { logs, total } = await LogReader.readLogs({ limit: 100 });
+    expect(total).toBe(1);
+    expect(logs.length).toBe(1);
+    // SQLite 库文件确实生成
+    expect(existsSync(dbPath)).toBe(true);
   });
 });

@@ -27,16 +27,17 @@ export const CONFIG_FILE_NAME = 'config.json';
 export const CONFIG_DIR = process.env.LUCENT_CONFIG_DIR || join(homedir(), APP_DATA_DIR_NAME);
 export const CONFIG_PATH = join(CONFIG_DIR, CONFIG_FILE_NAME);
 export const LOG_DIR = join(CONFIG_DIR, LOG_SUBDIR);
+/** SQLite 数据库默认路径（与 config.json 同级，env LUCENT_DB_PATH 可覆盖） */
+export const DB_PATH = join(CONFIG_DIR, 'lucent.db');
 
 // ==================== 请求体限制 ====================
 /** 代理转发的请求体最大体积（50MB）—— LLM API 请求通常在 KB~MB 级别，此限制防止 OOM */
 export const MAX_REQUEST_BODY_SIZE = 50 * 1024 * 1024;
 
 // ==================== 日志配置 ====================
-export const MAX_LOG_FILE_SIZE = 100 * 1024 * 1024; // 100MB — 单个日志文件最大体积
-export const MAX_LOG_FILES = 50;                    // 日志轮转保留文件数
-export const LOG_RETENTION_DAYS = 30;               // 日志自动清理天数
-export const MAX_LOG_FILES_TO_READ = 20;             // Web 端查看日志时最多读取的文件数
+// 存储已切 SQLite（见 docs/log-storage-design.md），不再有按文件大小轮转；
+// MAX_LOG_FILE_SIZE / MAX_LOG_FILES / MAX_LOG_FILES_TO_READ 等 JSONL 轮转常量已退役。
+export const LOG_RETENTION_DAYS = 30;               // 日志自动清理天数（env LUCENT_LOG_RETENTION_DAYS 可覆盖）
 export const DEFAULT_LOG_QUERY_LIMIT = 100;         // 日志查询默认返回条数
 
 /**

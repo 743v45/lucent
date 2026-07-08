@@ -12,7 +12,7 @@
  */
 import { test as base, expect } from '@playwright/test';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -29,10 +29,17 @@ export interface LucentStack {
   upstream: MockUpstream;
   /** POST JSON 请求穿过代理，返回 { status, body } */
   postThroughProxy(path: string, headers: Record<string, string>, body: unknown): Promise<{ status: number; body: string }>;
-  /** 读隔离日志目录里最新 jsonl 的全部 entry */
-  readLogEntries(): Array<Record<string, unknown>>;
-  /** 取指定 provider/endpoint 的最新一条日志 id（落盘后才有） */
-  latestLogId(provider: string, endpoint: string): string | undefined;
+  /** 经后端 /api/logs 读已落库的条目（SQLite 后端，不再读 JSONL） */
+  readLogEntries(): Promise<Array<Record<string, unknown>>>;
+  /** 经后端 /api/logs 取一页（keyset 游标 / search），返回原始 JSON（logs/total/nextCursor/hasMore） */
+  fetchLogsPage(params: { limit: number; cursor?: string; search?: string }): Promise<{
+    logs: Array<Record<string, unknown>>;
+    total: number;
+    nextCursor: string | null;
+    hasMore: boolean;
+  }>;
+  /** 取指定 provider/endpoint 的最新一条日志 id（落库后才有） */
+  latestLogId(provider: string, endpoint: string): Promise<string | undefined>;
 }
 
 /** 等子进程 stdout 命中正则（启动就绪信号）；超时则把累积输出拼进报错，便于诊断 */
@@ -109,6 +116,8 @@ export const test = base.extend<{ lucent: LucentStack }>({
 
       const proxyBaseUrl = `http://127.0.0.1:${proxyPort}`;
       const webBaseUrl = `http://127.0.0.1:${vitePort}`;
+      // 后端 web 端口直读 /api/logs（不经 vite，供 Node 侧断言同步可见）
+      const backendApiBase = `http://127.0.0.1:${webPort}`;
 
       // detached:true → 子进程独立进程组；拆栈时 kill(-pid) 连子进程一起带走
       const backend = spawn('npx', ['tsx', 'server/index.ts'], {
@@ -131,38 +140,48 @@ export const test = base.extend<{ lucent: LucentStack }>({
         env: { ...process.env, VITE_PORT: String(vitePort), LUCENT_WEB_PORT: String(webPort) },
       });
 
-      function readLogEntries(): Array<Record<string, unknown>> {
-        if (!existsSync(logDir)) return [];
-        const files = readdirSync(logDir).filter((f) => f.endsWith('.jsonl')).sort();
-        if (files.length === 0) return [];
-        const content = readFileSync(join(logDir, files[files.length - 1]), 'utf-8');
-        return content
-          .split(/\n---\n/)
-          .filter((s) => s.trim().startsWith('{'))
-          .map((s) => {
-            try { return JSON.parse(s) as Record<string, unknown>; } catch { return {}; }
-          });
+      // 经后端 /api/logs 读已落库条目（SQLite 后端，不再读 JSONL 文件）
+      async function fetchLogs(): Promise<Array<Record<string, unknown>>> {
+        try {
+          const r = await fetch(`${backendApiBase}/api/logs?limit=500`);
+          if (!r.ok) return [];
+          const data = (await r.json()) as { logs?: Array<Record<string, unknown>> };
+          return data.logs ?? [];
+        } catch {
+          return []; // 后端还没起 / 日志未落库
+        }
       }
 
       const stack: LucentStack = {
         webBaseUrl,
         proxyBaseUrl,
         upstream,
-        async postThroughProxy(path, headers, body) {
-          const res = await fetch(`${proxyBaseUrl}${path}`, {
+        postThroughProxy(path, headers, body) {
+          return fetch(`${proxyBaseUrl}${path}`, {
             method: 'POST',
             headers: { 'content-type': 'application/json', ...headers },
             body: typeof body === 'string' ? body : JSON.stringify(body),
-          });
-          return { status: res.status, body: await res.text() };
+          }).then(async (res) => ({ status: res.status, body: await res.text() }));
         },
-        readLogEntries,
-        latestLogId(provider, endpoint) {
-          const entries = readLogEntries().filter(
-            (e) => e.providerName === provider && e.endpointType === endpoint,
-          );
-          const last = entries[entries.length - 1];
-          return last?.id as string | undefined;
+        readLogEntries: () => fetchLogs(),
+        async fetchLogsPage(params) {
+          const qs = new URLSearchParams();
+          qs.set('limit', String(params.limit));
+          if (params.cursor) qs.set('cursor', params.cursor);
+          if (params.search) qs.set('search', params.search);
+          const r = await fetch(`${backendApiBase}/api/logs?${qs.toString()}`);
+          return (await r.json()) as {
+            logs: Array<Record<string, unknown>>;
+            total: number;
+            nextCursor: string | null;
+            hasMore: boolean;
+          };
+        },
+        async latestLogId(provider, endpoint) {
+          const logs = await fetchLogs();
+          // /api/logs 按 timestamp 倒序，首个匹配即最新
+          const match = logs.find((e) => e.providerName === provider && e.endpointType === endpoint);
+          return match?.id as string | undefined;
         },
       };
 

@@ -1,13 +1,15 @@
 /**
- * 日志写入服务
+ * 日志写入服务（SQLite 后端）
  *
- * 统一管理日志文件的初始化、轮转、清理和写入
- * 使用异步 I/O + 写入队列，不阻塞事件循环
+ * 决策③：SQLite 上线即唯一存储，无双写。init 时由 db-instance 开库 + 一次性迁移现有 JSONL，
+ * 之后 writeLogEntry 直接 insertLog 进 SQLite（事务原子），不再 appendFile / 轮转。
+ *
+ * 仍走异步写入队列：串行化写入保证顺序、背压防 OOM、不阻塞代理热路径（interceptor 不 await 也安全）。
+ * better-sqlite3 是同步 API，单条 insertLog 仅几十 µs，包在队列 microtask 里执行。
  */
 
-import { appendFile, rename, stat, unlink, readdir } from 'node:fs/promises';
-import { existsSync, mkdirSync } from 'node:fs';
-import { join } from 'node:path';
+import { insertLog, deleteOldLogs, vacuum } from './db.js';
+import { initDb, getDb } from './db-instance.js';
 import type { RawLogEntry } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
@@ -16,9 +18,8 @@ const dbg = createDebug('lucent:log-writer');
 // ==================== 状态 ====================
 
 let resolvedConfig: ResolvedConfig;
-let currentLogFile: string | null = null;
 
-/** 异步写入队列：串行化写入与轮转，保证顺序、消除竞态 */
+/** 异步写入队列：串行化写入，保证顺序、消除竞态 */
 let writeQueue: Promise<void> = Promise.resolve();
 
 /** 写入队列长度上限：高频时拒绝新条目入队，防止 OOM */
@@ -32,42 +33,30 @@ const DRAIN_TIMEOUT_MS = 5000;
 
 // ==================== 初始化 ====================
 
+/**
+ * 初始化：开库 + 建表 + 一次性迁移现有 JSONL（幂等）。
+ * 迁移结果记 debug；之后 live 读写只走 SQLite。
+ */
 export function init(resolvedCfg: ResolvedConfig): void {
   resolvedConfig = resolvedCfg;
-  initLogDir();
-  currentLogFile = generateLogFilePath();
+  const mig = initDb(resolvedCfg.dbPath, resolvedCfg.logDir);
+  dbg('init: dbPath=%s 迁移 imported=%d skipped=%d errors=%d files=%d',
+    resolvedCfg.dbPath, mig.imported, mig.skipped, mig.errors, mig.files);
 }
 
 /**
- * 获取当前日志文件路径
+ * 当前存储路径（SQLite 单库）。供状态展示用。
  */
 export function getCurrentLogFile(): string | null {
-  return currentLogFile;
-}
-
-// ==================== 日志目录 ====================
-
-function initLogDir(): void {
-  if (!existsSync(resolvedConfig.logDir)) {
-    mkdirSync(resolvedConfig.logDir, { recursive: true });
-  }
-}
-
-// ==================== 日志文件路径 ====================
-
-function generateLogFilePath(): string {
-  const now = new Date();
-  const date = now.toISOString().split('T')[0];
-  const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
-  return join(resolvedConfig.logDir, `lucent_${date}_${time}.jsonl`);
+  return resolvedConfig?.dbPath ?? null;
 }
 
 // ==================== 写入 ====================
 
 /**
- * 将一个异步任务串行追加到写入队列（写入 / 轮转共用，保证互斥）
+ * 将一个任务串行追加到写入队列（保证互斥）
  */
-function enqueue(task: () => Promise<void>): void {
+function enqueue(task: () => void): void {
   writeQueueLength++;
   writeQueue = writeQueue
     .then(async () => {
@@ -84,29 +73,24 @@ function enqueue(task: () => Promise<void>): void {
 }
 
 /**
- * 写入日志条目（异步，通过队列串行化保证顺序）
+ * 写入日志条目（异步，通过队列串行化保证顺序；事务原子，三表一致）
+ *
+ * 跳过无响应条目（response=null，错误路径）：原 JSONL 路径会写入但 readLogs 过滤掉，
+ * SQLite 路径直接不写——DB 只存完整条目，读路径无需再过滤，也不浪费行。
  */
 export function writeLogEntry(entry: RawLogEntry): void {
-  if (!currentLogFile) {
-    initLogDir();
-    currentLogFile = generateLogFilePath();
+  if (entry.response == null) {
+    dbg('跳过无响应条目 id=%s（不写入）', entry.id);
+    return;
   }
-
-  // 标准 JSONL：一条日志 = 一行 JSON + '\n'。
-  // JSON.stringify 已保证字符串值内不含裸换行，分隔符即真实换行，
-  // 无需（也不可）叠加任何二次转义层。
-  const line = JSON.stringify(entry) + '\n';
-  const file = currentLogFile;
-
   // 背压：队列超限时拒绝新条目入队（FIFO 保护已排队写入，防止 OOM）
   if (writeQueueLength >= WRITE_QUEUE_MAX_LENGTH) {
     droppedCount++;
     dbg('写入队列背压: 丢弃新条目 (length=%d droppedCount=%d)', writeQueueLength, droppedCount);
     return;
   }
-
-  enqueue(async () => {
-    await appendFile(file, line);
+  enqueue(() => {
+    insertLog(getDb(), entry);
   });
 }
 
@@ -129,70 +113,19 @@ export async function drainWriteQueue(): Promise<void> {
   }
 }
 
-// ==================== 轮转 ====================
+// ==================== 保留期清理 ====================
 
 /**
- * 检查并轮转日志文件（当文件超过大小限制时）
- *
- * 注意：判定+切换+重命名放进与写入同一个 writeQueue 串行执行，
- * 消除与写入的竞态。interceptor 不 await 也安全。
+ * 清理过期日志：DELETE 早于保留期的行（级联 log_bodies + FTS），再 VACUUM 回收空间。
+ * 决策④：保留期默认 30 天，env LUCENT_LOG_RETENTION_DAYS 可调。
  */
-export function checkAndRotateLogFile(): void {
-  if (!currentLogFile) return;
-
-  const oldFile = currentLogFile;
-
-  enqueue(async () => {
-    if (!existsSync(oldFile)) return;
-    const stats_ = await stat(oldFile);
-    if (stats_.size < resolvedConfig.maxLogFileSize) return;
-
-    // 真正归档旧文件（重命名），避免旧文件无限增长
-    const rotatedPath = oldFile.replace(/\.jsonl$/, `_rotated_${Date.now()}.jsonl`);
-    try {
-      await rename(oldFile, rotatedPath);
-      dbg('日志文件达到大小限制，已归档: %s -> %s', oldFile, rotatedPath);
-    } catch (error) {
-      // rename 失败不崩：保留旧文件继续追加（最坏情况是单文件超限），更新指针避免下次重复尝试
-      dbg('日志轮转 rename 失败（保留原文件继续写入）: %O', error);
-    }
-
-    // 无论 rename 成功与否，都切换到新文件，避免一直写同一个超限文件
-    currentLogFile = generateLogFilePath();
-    dbg('日志轮转: 新文件=%s', currentLogFile);
-  });
-}
-
-// ==================== 清理 ====================
-
-/**
- * 清理过期日志文件
- */
-export async function cleanupOldLogs(): Promise<void> {
-  try {
-    if (!existsSync(resolvedConfig.logDir)) return;
-
-    const now = Date.now();
-    const maxAge = resolvedConfig.logRetentionDays * 24 * 60 * 60 * 1000;
-
-    const files = await readdir(resolvedConfig.logDir);
-    const jsonlFiles = files.filter(f => f.endsWith('.jsonl'));
-
-    for (const file of jsonlFiles) {
-      const filePath = join(resolvedConfig.logDir, file);
-      try {
-        const stats_ = await stat(filePath);
-        const age = now - stats_.mtimeMs;
-
-        if (age > maxAge) {
-          await unlink(filePath);
-          dbg('删除过期日志: %s', file);
-        }
-      } catch (error) {
-        dbg('删除日志文件失败: %s %O', file, error);
-      }
-    }
-  } catch (error) {
-    dbg('清理日志失败: %O', error);
+export function cleanupOldLogs(): void {
+  const retentionDays = resolvedConfig.logRetentionDays;
+  const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+  const cutoffISO = new Date(cutoffMs).toISOString();
+  const n = deleteOldLogs(getDb(), cutoffISO);
+  if (n > 0) {
+    vacuum(getDb());
+    dbg('清理过期日志: 删除 %d 行 (retention=%d天)', n, retentionDays);
   }
 }

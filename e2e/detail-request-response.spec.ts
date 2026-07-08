@@ -42,22 +42,21 @@ async function postAndAwaitLog(
   // 读到上一条的 id（实测 ~14% 概率点开错误的行：4xx 用例点到上一条 200）。记下发请求前
   // 已知的同类日志 id，轮询到出现「新的」id 再取，保证取到的就是本次请求的日志。
   const knownIds = new Set(
-    lucent
-      .readLogEntries()
+    (await lucent.readLogEntries())
       .filter((e) => e.providerName === 'openai' && e.endpointType === 'openai-chat')
       .map((e) => e.id),
   );
   const res = await lucent.postThroughProxy(path, OAI_HEADERS, REQ_BODY);
   await expect
     .poll(
-      () => {
-        const id = lucent.latestLogId('openai', 'openai-chat');
+      async () => {
+        const id = await lucent.latestLogId('openai', 'openai-chat');
         return id && !knownIds.has(id) ? id : false;
       },
       { timeout: 5000, message: '新日志应落盘（区分于既有累积日志）' },
     )
     .toBeTruthy();
-  const logId = lucent.latestLogId('openai', 'openai-chat');
+  const logId = await lucent.latestLogId('openai', 'openai-chat');
   if (!logId) throw new Error('postAndAwaitLog: 未取到日志 id');
   return { status: res.status, body: res.body, logId };
 }

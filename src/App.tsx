@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import { LogListPanel } from './components/dashboard/LogListPanel';
 import { DetailPanel } from './components/viewer/DetailPanel';
 import { SettingsContext } from './contexts/SettingsContext';
@@ -62,22 +62,27 @@ function App(): JSX.Element {
     updateUrl(selectedLogId, tab);
   }, [selectedLogId, updateUrl]);
 
-  const { logs: allLogs, loading: logsLoading, loadingMore, hasMore, loadLogs, loadMore } = useLogs();
-
-  // 按供应商+协议筛选（客户端）
+  // 按供应商+协议筛选（服务端）
   const [providerFilter, setProviderFilter] = useState<string>(() => {
     return localStorage.getItem(PROVIDER_FILTER_STORAGE_KEY) || PROVIDER_FILTER_ALL;
   });
   const [endpointFilter, setEndpointFilter] = useState<string>(() => {
     return localStorage.getItem(ENDPOINT_FILTER_STORAGE_KEY) || ENDPOINT_FILTER_ALL;
   });
-  const logs = useMemo(() => {
-    return allLogs.filter((l) => {
-      if (providerFilter !== PROVIDER_FILTER_ALL && l.providerName !== providerFilter) return false;
-      if (endpointFilter !== ENDPOINT_FILTER_ALL && l.endpointType !== endpointFilter) return false;
-      return true;
-    });
-  }, [allLogs, providerFilter, endpointFilter]);
+
+  // 搜索：输入即时更新本地态 searchInput，防抖 300ms 后才写入 searchTerm 触发请求
+  const [searchInput, setSearchInput] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => setSearchTerm(searchInput), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
+  const { logs, loading: logsLoading, loadingMore, hasMore, total, loadLogs, loadMore } = useLogs({
+    search: searchTerm,
+    providerName: providerFilter,
+    endpointType: endpointFilter,
+  });
 
   const handleProviderFilterChange = useCallback((name: string) => {
     setProviderFilter(name);
@@ -215,6 +220,7 @@ function App(): JSX.Element {
         <div className="flex flex-1 overflow-hidden">
           <LogListPanel
             logs={logs}
+            total={total}
             selectedId={selectedLogId}
             onSelectLog={handleSelectLog}
             loading={logsLoading}
@@ -227,6 +233,8 @@ function App(): JSX.Element {
             onProviderFilterChange={handleProviderFilterChange}
             endpointFilter={endpointFilter}
             onEndpointFilterChange={handleEndpointFilterChange}
+            searchTerm={searchInput}
+            onSearchChange={setSearchInput}
             conversationView={conversationView}
             onConversationViewChange={(v) => setConversationView(v)}
           />
@@ -239,6 +247,7 @@ function App(): JSX.Element {
             log={selectedLog || null}
             activeTab={activeTab}
             onTabChange={handleTabChange}
+            searchTerm={searchTerm}
           />
         </div>
 

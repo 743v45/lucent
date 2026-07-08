@@ -32,6 +32,7 @@ import './DetailPanel.css';
 import { ProviderIcon } from '../common/ProviderIcon';
 import { ProtocolIcon } from '../common/ProtocolIcon';
 import { ChevronIcon } from '../common/ChevronIcon';
+import { Highlight, highlightChildren, makeHighlightRe } from '../common/Highlight';
 import { Tooltip } from 'antd';
 
 
@@ -217,6 +218,8 @@ interface DetailPanelProps {
   log: LogEntry | null;
   activeTab: TabType;
   onTabChange: (tab: TabType) => void;
+  /** 当前搜索词（详情正文命中高亮用；空则不高亮） */
+  searchTerm?: string;
 }
 
 const TAB_CONFIG: { key: TabType; label: string }[] = [
@@ -227,7 +230,7 @@ const TAB_CONFIG: { key: TabType; label: string }[] = [
   { key: 'meta', label: 'Meta' },
 ];
 
-export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): JSX.Element {
+export function DetailPanel({ log, activeTab, onTabChange, searchTerm }: DetailPanelProps): JSX.Element {
   // body 展开态（单一真相源，记忆）：false=折叠到 JSON_COLLAPSED_EXPAND_LEVEL，true=全展开。
   // 初始值读 localStorage，切日志不再重置——用户点开的「全展开」跨日志保留。
   // 历史上 bodyCollapsed + expandAll 双 boolean 会 desync（两个按钮写出互相矛盾的状态），
@@ -299,12 +302,13 @@ export function DetailPanel({ log, activeTab, onTabChange }: DetailPanelProps): 
             headersExpanded={headersExpanded.response}
             onToggleHeaders={() => toggleHeadersExpanded('response')}
             onCopy={copyBody}
+            searchTerm={searchTerm}
           />
         );
       case 'kvcache':
         return <KVCacheTab log={log} />;
       case 'context':
-        return <ContextTab log={log} />;
+        return <ContextTab log={log} searchTerm={searchTerm} />;
       case 'meta':
         return <MetaTab log={log} />;
     }
@@ -551,6 +555,7 @@ interface ResponseTabProps {
   headersExpanded: boolean;
   onToggleHeaders: () => void;
   onCopy: (data: unknown) => void;
+  searchTerm?: string;
 }
 
 /**
@@ -568,7 +573,7 @@ function sseLinesToRawText(lines: SSERawLine[]): string {
   }).join('\n\n');
 }
 
-function ResponseTab({ log, expanded, onToggle, headersExpanded, onToggleHeaders, onCopy }: ResponseTabProps): JSX.Element {
+function ResponseTab({ log, expanded, onToggle, headersExpanded, onToggleHeaders, onCopy, searchTerm }: ResponseTabProps): JSX.Element {
   const response = log.response;
   // 默认 raw：原始 SSE 文本完整可见(含 ping/error 等元事件)，结构化视图丢失这些事件
   const [sseViewMode, setSseViewMode] = useState<SSEViewMode>('raw');
@@ -631,7 +636,7 @@ function ResponseTab({ log, expanded, onToggle, headersExpanded, onToggleHeaders
         <div className="flex-1 min-h-0" data-testid="response-body">
           {sseViewMode === 'raw' && isSSE ? (
             <pre className="h-full text-lg leading-relaxed bg-bg-deep p-3 rounded-lg font-mono text-text-secondary overflow-auto whitespace-pre-wrap break-words" style={{ backgroundColor: '#08090a' }}>
-              {rawSSEText}
+              <Highlight text={rawSSEText} term={searchTerm} />
             </pre>
           ) : extractedBody == null ? (
             <div className="flex items-center justify-center h-full">
@@ -896,6 +901,7 @@ function KVCacheGroup({
 
 interface ContextTabProps {
   log: LogEntry;
+  searchTerm?: string;
 }
 
 // 选中项类型
@@ -912,7 +918,7 @@ interface CollapsedGroups {
   messages: boolean;
 }
 
-function ContextTab({ log }: ContextTabProps): JSX.Element {
+function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
   const data = log.context;
   if (!data || (!data.messages?.length && !data.summary && data.systemPrompt === undefined && data.tools === undefined)) {
     return (
@@ -1122,7 +1128,7 @@ function ContextTab({ log }: ContextTabProps): JSX.Element {
               <h3 className="text-[17px] font-[510] text-text-primary">{selectedContent.title}</h3>
             </div>
             {/* 内容 */}
-            <MarkdownContent content={selectedContent.content} />
+            <MarkdownContent content={selectedContent.content} highlight={searchTerm} />
           </div>
         ) : (
           <div className="flex items-center justify-center h-full">
@@ -1197,7 +1203,11 @@ function ContextListItem({
 
 // ==================== Markdown Content ====================
 
-function MarkdownContent({ content }: { content: string }) {
+function MarkdownContent({ content, highlight }: { content: string; highlight?: string }): JSX.Element {
+  // 搜索命中高亮：对叶子文本容器（p/li/td/th/a/h1-3）的字符串子节点标 <mark>。
+  // 不覆盖 code/table 的结构渲染，也不在 ul/ol/blockquote 上切（它们只包元素，递归会重复嵌套 mark）。
+  const re = makeHighlightRe(highlight);
+  const hl = (c: React.ReactNode): React.ReactNode => (re ? highlightChildren(c, re) : c);
   return (
     <div className="markdown-content">
       <ReactMarkdown
@@ -1248,14 +1258,14 @@ function MarkdownContent({ content }: { content: string }) {
           th({ children }) {
             return (
               <th className="px-3 py-2 text-left text-sm font-[510] text-text-primary bg-bg-surface/50 border border-border-subtle">
-                {children}
+                {hl(children)}
               </th>
             );
           },
           td({ children }) {
             return (
               <td className="px-3 py-2 text-sm text-text-secondary border border-border-subtle">
-                {children}
+                {hl(children)}
               </td>
             );
           },
@@ -1268,23 +1278,23 @@ function MarkdownContent({ content }: { content: string }) {
                 rel="noopener noreferrer"
                 className="text-brand-accent hover:text-brand-hover underline"
               >
-                {children}
+                {hl(children)}
               </a>
             );
           },
           // 标题
           h1({ children }) {
-            return <h1 className="text-[20px] font-[510] text-text-primary mb-3 mt-4">{children}</h1>;
+            return <h1 className="text-[20px] font-[510] text-text-primary mb-3 mt-4">{hl(children)}</h1>;
           },
           h2({ children }) {
-            return <h2 className="text-[17px] font-[510] text-text-primary mb-2 mt-3">{children}</h2>;
+            return <h2 className="text-[17px] font-[510] text-text-primary mb-2 mt-3">{hl(children)}</h2>;
           },
           h3({ children }) {
-            return <h3 className="text-[15px] font-[510] text-text-primary mb-2 mt-2">{children}</h3>;
+            return <h3 className="text-[15px] font-[510] text-text-primary mb-2 mt-2">{hl(children)}</h3>;
           },
           // 段落
           p({ children }) {
-            return <p className="text-[15px] leading-relaxed text-text-secondary mb-2">{children}</p>;
+            return <p className="text-[15px] leading-relaxed text-text-secondary mb-2">{hl(children)}</p>;
           },
           // 列表
           ul({ children }) {
@@ -1294,7 +1304,7 @@ function MarkdownContent({ content }: { content: string }) {
             return <ol className="list-decimal list-inside mb-2 text-[15px] text-text-secondary">{children}</ol>;
           },
           li({ children }) {
-            return <li className="mb-1">{children}</li>;
+            return <li className="mb-1">{hl(children)}</li>;
           },
           // 引用
           blockquote({ children }) {

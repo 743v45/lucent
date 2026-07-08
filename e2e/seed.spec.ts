@@ -28,11 +28,11 @@ test.describe('种子 spec：请求穿越代理 → Web UI 出日志 → 点开�
     expect(res.status, `代理应回 200，实际 ${res.status}`).toBe(200);
     expect(res.body).toContain('[DONE]');
 
-    // 等日志落盘
+    // 等日志落库
     await expect
-      .poll(() => lucent.latestLogId('openai', 'openai-chat'), { timeout: 5000, message: '日志应落盘' })
+      .poll(() => lucent.latestLogId('openai', 'openai-chat'), { timeout: 5000, message: '日志应落库' })
       .toBeTruthy();
-    const logId = lucent.latestLogId('openai', 'openai-chat');
+    const logId = await lucent.latestLogId('openai', 'openai-chat');
 
     // ② 打开 Web UI，列表出现 log-row
     // 共享栈（workers:1 + worker-scoped fixture）下日志会在兄弟 spec 间累积，

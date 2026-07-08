@@ -18,8 +18,7 @@
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { join } from 'node:path';
-import { writeFile } from 'node:fs/promises';
-import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, removeTestDir, type TestEnv } from './e2e-helpers.js';
+import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, removeTestDir, seedLogsFromJsonl, type TestEnv } from './e2e-helpers.js';
 import { groupByThread } from '../src/utils/group-by-thread.js';
 import type { LogEntry, AgentType } from '../src/types.js';
 
@@ -129,16 +128,10 @@ describe('会话视图 E2E — threadId 数据流 + 分组', () => {
   }, 10000);
 
   it('threadId 在 /api/logs 中原样透传（T5 数据透传链）', async () => {
-    await writeFile(
-      LOG_FILE,
-      fixtureContent([
+    await seedLogsFromJsonl(testEnv, fixtureContent([
         { id: 't-passthrough-1', timestamp: '2026-06-15T10:00:00.000Z', agentType: 'main', threadId: 'thread_passthrough' },
         { id: 't-passthrough-2', timestamp: '2026-06-15T10:00:05.000Z', agentType: 'main', threadId: 'thread_passthrough' },
-      ]),
-      'utf-8',
-    );
-    // 等待 log-reader mtimeMs+size 缓存刷新（写入后 size 变化即失效）
-    await new Promise((r) => setTimeout(r, 300));
+      ]));
 
     const logs = await fetchLogsAscending();
     const matched = logs.filter((l) => l.id.startsWith('t-passthrough'));
@@ -150,17 +143,12 @@ describe('会话视图 E2E — threadId 数据流 + 分组', () => {
   });
 
   it('分组渲染：同 threadId 的 main + 附属 sub 归一组', async () => {
-    await writeFile(
-      LOG_FILE,
-      fixtureContent([
+    await seedLogsFromJsonl(testEnv, fixtureContent([
         { id: 't-group-m1', timestamp: '2026-06-15T11:00:00.000Z', agentType: 'main', threadId: 'thread_group_a', userText: '帮我分析代码' },
         { id: 't-group-m2', timestamp: '2026-06-15T11:00:10.000Z', agentType: 'main', threadId: 'thread_group_a' },
         // sub 无 threadId，时间晚于 thread_group_a 首条 main → 附属到该组
         { id: 't-group-s1', timestamp: '2026-06-15T11:00:05.000Z', agentType: 'sub' },
-      ]),
-      'utf-8',
-    );
-    await new Promise((r) => setTimeout(r, 300));
+      ]));
 
     const logs = (await fetchLogsAscending()).filter((l) => l.id.startsWith('t-group'));
     const { groups, ungrouped } = groupByThread(logs);
@@ -181,18 +169,13 @@ describe('会话视图 E2E — threadId 数据流 + 分组', () => {
   });
 
   it('sub 附属：归属时间上不晚于它的最近 main 会话', async () => {
-    await writeFile(
-      LOG_FILE,
-      fixtureContent([
+    await seedLogsFromJsonl(testEnv, fixtureContent([
         // 两个会话组
         { id: 't-aff-m1', timestamp: '2026-06-15T12:00:00.000Z', agentType: 'main', threadId: 'thread_aff_1' },
         { id: 't-aff-m2', timestamp: '2026-06-15T12:00:30.000Z', agentType: 'main', threadId: 'thread_aff_2' },
         // sub 时间在 thread_aff_2 首条 main 之后 → 附属 thread_aff_2（最近的不晚于它的 main）
         { id: 't-aff-s1', timestamp: '2026-06-15T12:00:35.000Z', agentType: 'sub' },
-      ]),
-      'utf-8',
-    );
-    await new Promise((r) => setTimeout(r, 300));
+      ]));
 
     const logs = (await fetchLogsAscending()).filter((l) => l.id.startsWith('t-aff'));
     const { groups } = groupByThread(logs);
@@ -219,15 +202,10 @@ describe('会话视图 E2E — threadId 数据流 + 分组', () => {
   });
 
   it('孤立请求：无 threadId 且无邻近 main 的 sub → 未归类组', async () => {
-    await writeFile(
-      LOG_FILE,
-      fixtureContent([
+    await seedLogsFromJsonl(testEnv, fixtureContent([
         // 仅一条 sub，无任何 main，无 threadId → 无法附属 → ungrouped
         { id: 't-iso-s1', timestamp: '2026-06-15T13:00:00.000Z', agentType: 'sub' },
-      ]),
-      'utf-8',
-    );
-    await new Promise((r) => setTimeout(r, 300));
+      ]));
 
     const logs = (await fetchLogsAscending()).filter((l) => l.id.startsWith('t-iso'));
     const { groups, ungrouped } = groupByThread(logs);
