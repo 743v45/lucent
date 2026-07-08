@@ -176,10 +176,12 @@ export const test = base.extend<{ lucent: LucentStack }>({
         // 起栈时用真实浏览器把首屏完整加载一次——让 vite 把测试会请求到的整张图（含动态
         // import / CSS / 深层组件）全 transform 完并缓存，spec 里的 goto 进来就是热的。
         // （只 fetch 入口 + main 模块不够：传递依赖仍是冷的，实跑验证过。）
+        // 超时给到 90s：真·干净冷启（无 .vite 依赖预打包缓存）+ 系统高负载时首轮 vite
+        // 转换实测会逼近/超 60s，60s 边界偶发挂；放宽到 90s 留足预算，缓存一热就 3s 的事。
         {
           const warmup = await browser.newPage();
           try {
-            await warmup.goto(webBaseUrl, { waitUntil: 'load', timeout: 60_000 });
+            await warmup.goto(webBaseUrl, { waitUntil: 'load', timeout: 90_000 });
           } finally {
             await warmup.close();
           }
@@ -193,7 +195,7 @@ export const test = base.extend<{ lucent: LucentStack }>({
         try { rmSync(configDir, { recursive: true, force: true }); } catch { /* noop */ }
       }
     },
-    { scope: 'worker' },
+    { scope: 'worker', timeout: 180_000 },
   ],
 });
 
