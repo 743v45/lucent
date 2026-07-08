@@ -54,3 +54,6 @@ logs/
 
 # Git worktrees (local isolated workspaces)
 .worktrees/
+
+# Benchmark artifacts
+bench/
