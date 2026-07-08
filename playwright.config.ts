@@ -18,15 +18,17 @@ export default defineConfig({
   // 单 worker：fixture 起的是真实 backend + vite，多 worker 会抢端口 + 拖慢
   workers: 1,
   retries: 0,
-  timeout: 60_000,
+  // 冷启动首次导航要编译整个 vite 模块图，慢机会到 30~50s；navigationTimeout 已放到 60s，
+  // 这里 per-test 给 90s 让冷编译后还有余量跑断言。热缓存下远低于此值。
+  timeout: 90_000,
   expect: { timeout: 10_000 },
   reporter: 'list',
   use: {
     headless: true,
     actionTimeout: 10_000,
-    // 冷启动（vite 缓存冷）首次导航要触发按需编译整个源码模块图，15s 偏紧会假阳；
-    // 缓存热后远低于此值。放宽到 30s 给冷编译留余量，整体仍受 test timeout 60s 兜底。
-    navigationTimeout: 30_000,
+    // 冷启动（vite 缓存冷）首次导航触发整图按需编译，慢机会超 30s。fixture 已在 worker setup
+    // 阶段预热 vite（不占单测 timeout）；这里再放宽到 60s 兜底，CI 冷启不再假阳。热缓存远低于此值。
+    navigationTimeout: 60_000,
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },

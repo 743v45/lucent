@@ -221,7 +221,7 @@ export function setupInterceptor(): void {
   interceptorInstalled = true;
 
   const rc = resolveEffectiveConfig();
-  dbg('安装拦截器, logDir=%s maxLogFileSize=%d', rc.logDir, rc.maxLogFileSize);
+  dbg('安装拦截器, logDir=%s dbPath=%s', rc.logDir, rc.dbPath);
 
   const originalFetch = globalThis.fetch;
 

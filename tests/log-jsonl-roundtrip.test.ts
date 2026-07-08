@@ -60,7 +60,6 @@ describe('日志 round-trip（SQLite 后端）— frontmatter / 内容完整性 
     const cfg = {
       logDir: join(configDir, 'logs'),
       dbPath,
-      maxLogFileSize: 100 * 1024 * 1024,
       logRetentionDays: 30,
     } as unknown as ResolvedConfig;
     closeDb(); // db-instance 是进程级单例，重开前先关旧库
