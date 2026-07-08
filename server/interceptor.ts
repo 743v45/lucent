@@ -260,11 +260,6 @@ export function setupInterceptor(): void {
     const body = parseRequestBody(options?.body as string | undefined);
     const entry = buildRequestEntry(urlStr, options, body, startTime, providerName, endpointType);
 
-    // 主 Agent 检查日志轮转
-    if (entry.mainAgent) {
-      LogWriter.checkAndRotateLogFile();
-    }
-
     try {
       const response = await originalFetch.call(this, url, options);
       entry.duration = Date.now() - startTime;

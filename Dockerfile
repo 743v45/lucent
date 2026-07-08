@@ -15,6 +15,8 @@ WORKDIR /app
 
 # 先复制依赖清单，利用 layer 缓存
 COPY package.json package-lock.json ./
+# better-sqlite3 是原生模块：node:20-alpine(musl) 无 prebuild，需源码编译，装构建工具
+RUN apk add --no-cache python3 make g++
 RUN npm ci
 
 # 复制源码并构建前端（vite build → dist/）
@@ -32,7 +34,12 @@ ENV LUCENT_HOST=0.0.0.0 \
 
 # 只装生产依赖（tsx 在 dependencies，用于运行 server/*.ts——后端无编译步骤，tsconfig noEmit）
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+# better-sqlite3 原生模块：node:20-alpine(musl) 无 prebuild，需源码编译。
+# libstdc++ 运行时保留（.node 链接它）；python3/make/g++ 编完即删以瘦身。
+RUN apk add --no-cache libstdc++ && \
+    apk add --no-cache --virtual .build-deps python3 make g++ && \
+    npm ci --omit=dev && npm cache clean --force && \
+    apk del .build-deps
 
 # 构建产物 + 后端源码（tsx 运行时编译 TS）
 COPY --from=builder /app/dist ./dist

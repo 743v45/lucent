@@ -27,6 +27,8 @@ export const CONFIG_FILE_NAME = 'config.json';
 export const CONFIG_DIR = process.env.LUCENT_CONFIG_DIR || join(homedir(), APP_DATA_DIR_NAME);
 export const CONFIG_PATH = join(CONFIG_DIR, CONFIG_FILE_NAME);
 export const LOG_DIR = join(CONFIG_DIR, LOG_SUBDIR);
+/** SQLite 数据库默认路径（与 config.json 同级，env LUCENT_DB_PATH 可覆盖） */
+export const DB_PATH = join(CONFIG_DIR, 'lucent.db');
 
 // ==================== 请求体限制 ====================
 /** 代理转发的请求体最大体积（50MB）—— LLM API 请求通常在 KB~MB 级别，此限制防止 OOM */

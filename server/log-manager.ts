@@ -1,259 +1,44 @@
 /**
- * 日志管理模块
+ * 日志管理模块（SQLite 后端）
  *
- * 负责日志的导入、导出、清空和文件轮转
+ * 负责日志的导入、导出、清空、统计与保留期清理，全部走 SQLite（db-instance 句柄）。
+ * 旧的 JSONL readLogs/appendFile/轮转/清理重复实现已移除——存储 I/O 收敛到 services/，
+ * 消解原 TODO 里「log-manager 与 log-writer 职责重复」的问题。
  *
- * TODO(重构): 本模块的 rotateLogFile（空占位，未真正重命名）、cleanupOldLogs
- * 与 services/log-writer.ts 的 checkAndRotateLogFile / cleanupOldLogs 职责重复。
- * 实际写入路径已由 services/log-writer.ts 统一处理（含真正的 rename 归档 + 写入互斥）。
- * 本模块仍被 routes/logs.ts 用于 export/import/clear/stats，暂不删除以免风险；
- * 建议后续将日志 I/O 职责完全收敛到 services/，移除这里的轮转/清理重复实现。
+ * 导出格式仍保留 JSONL / Markdown（导出产物，非 live 存储）。
  */
 
-import { mkdirSync, existsSync, appendFileSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { LogEntry } from './types.js';
+import { writeFileSync, readFileSync, statSync, mkdirSync } from 'node:fs';
+import { dirname } from 'node:path';
+import type { LogEntry } from './types.js';
 import { resolveEffectiveConfig } from './config.js';
+import { listLogs, fetchBodies, getStats, clearAllLogs as dbClearAll, deleteOldLogs, vacuum, insertLogsBatch } from './services/db.js';
+import { getDb } from './services/db-instance.js';
+import { reconstructEntry } from './services/log-reader.js';
 import createDebug from 'debug';
 const log = createDebug('lucent:log-manager');
 
 export interface LogExportOptions {
   format: 'jsonl' | 'markdown';
   includeMeta?: boolean;
-  filter?: (entry: LogEntry) => boolean;
 }
 
 export interface LogImportOptions {
-  merge?: boolean; // 是否合并到当前日志
-  validate?: boolean; // 是否验证日志格式
+  merge?: boolean; // 是否合并到现有（默认 true）；false 则先清空
+  validate?: boolean; // 是否校验条目基本字段
 }
 
-// 常量从 constants.ts 导入
-// logDir 从统一配置惰性获取（支持配置文件/环境变量覆盖）
+/** 解析后的配置缓存（避免每次调用重复 resolve） */
+function cfg() {
+  return resolveEffectiveConfig();
+}
 
-/**
- * 获取有效的日志目录（优先使用配置值）
- */
+/** 获取有效的日志目录（导出产物落这里） */
 function getEffectiveLogDir(): string {
-  return resolveEffectiveConfig().logDir;
+  return cfg().logDir;
 }
 
-function getEffectiveMaxLogFileSize(): number {
-  return resolveEffectiveConfig().maxLogFileSize;
-}
-
-function getEffectiveMaxLogFiles(): number {
-  return resolveEffectiveConfig().maxLogFiles;
-}
-
-/**
- * 初始化日志目录
- */
-export function initLogDir(): void {
-  const logDir = getEffectiveLogDir();
-  if (!existsSync(logDir)) {
-    mkdirSync(logDir, { recursive: true });
-  }
-}
-
-/**
- * 获取当前日志文件路径
- */
-export function getCurrentLogFilePath(): string {
-  const now = new Date();
-  const date = now.toISOString().split('T')[0];
-  const time = now.toTimeString().split(' ')[0].replace(/:/g, '-');
-  return join(getEffectiveLogDir(), `lucent_${date}_${time}.jsonl`);
-}
-
-/**
- * 写入日志条目
- */
-export function writeLogEntry(entry: LogEntry): void {
-  const logFile = getCurrentLogFilePath();
-
-  try {
-    // 确保日志目录存在
-    initLogDir();
-
-    // 检查文件大小，如果超过限制则轮转
-    if (existsSync(logFile)) {
-      const stats = statSync(logFile);
-      if (stats.size >= getEffectiveMaxLogFileSize()) {
-        rotateLogFile(logFile);
-      }
-    }
-
-    const line = JSON.stringify(entry) + '\n';
-    appendFileSync(logFile, line);
-  } catch (error) {
-    log('写入日志失败: %O', error);
-    throw error;
-  }
-}
-
-/**
- * 读取所有日志
- */
-export function readLogs(limit?: number, filter?: (entry: LogEntry) => boolean): LogEntry[] {
-  const logs: LogEntry[] = [];
-
-  try {
-    if (!existsSync(getEffectiveLogDir())) {
-      return logs;
-    }
-
-    const files = readdirSync(getEffectiveLogDir())
-      .filter(f => f.endsWith('.jsonl') && !f.startsWith('export_'))
-      .sort()
-      .reverse();
-
-    for (const file of files) {
-      const filePath = join(getEffectiveLogDir(), file);
-      const content = readFileSync(filePath, 'utf-8');
-
-      // 按分隔符切分：interceptor 写入格式是 JSON + '\n---\n'
-      const chunks = content.split(/\n---\n?/);
-      for (const chunk of chunks) {
-        const line = chunk.trim();
-        if (!line) continue;
-        try {
-          const entry = JSON.parse(line) as LogEntry;
-          if (!filter || filter(entry)) {
-            logs.push(entry);
-          }
-        } catch (error) {
-          log('解析日志行失败: %O', error);
-        }
-      }
-    }
-  } catch (error) {
-    log('读取日志失败: %O', error);
-  }
-
-  // 按时间戳排序（最新的在前）
-  logs.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
-
-  return limit ? logs.slice(0, limit) : logs;
-}
-
-/**
- * 导出日志
- */
-export function exportLogs(
-  outputPath: string,
-  options: LogExportOptions = { format: 'jsonl' }
-): { success: boolean; count: number; path: string } {
-  try {
-    // 过滤掉 inProgress 记录（没有完整响应的）
-    const noInProgress = options.filter
-      ? (entry: LogEntry) => entry.response != null && options.filter!(entry)
-      : (entry: LogEntry) => entry.response != null;
-
-    const logs = readLogs(undefined, noInProgress);
-
-    if (options.format === 'jsonl') {
-      // JSONL 格式：每行一个 JSON 对象
-      const content = logs.map(entry => JSON.stringify(entry)).join('\n');
-      writeFileSync(outputPath, content, 'utf-8');
-    } else if (options.format === 'markdown') {
-      // Markdown 格式：可读性更好的格式
-      const content = convertToMarkdown(logs, options.includeMeta);
-      writeFileSync(outputPath, content, 'utf-8');
-    }
-
-    log('导出日志: %d 条 -> %s (format=%s)', logs.length, outputPath, options.format);
-
-    return {
-      success: true,
-      count: logs.length,
-      path: outputPath,
-    };
-  } catch (error) {
-    log('导出日志失败: %O', error);
-    throw error;
-  }
-}
-
-/**
- * 导入日志
- */
-export function importLogs(
-  inputPath: string,
-  options: LogImportOptions = { merge: true, validate: true }
-): { success: boolean; imported: number; errors: number } {
-  let imported = 0;
-  let errors = 0;
-
-  try {
-    const content = readFileSync(inputPath, 'utf-8');
-
-    // 按分隔符切分：兼容 '---' 分隔和纯换行分隔
-    const chunks = content.split(/\n---\n?|\n/).filter(Boolean);
-
-    // 如果不是合并模式，先清空现有日志
-    if (!options.merge) {
-      clearAllLogs();
-    }
-
-    for (const chunk of chunks) {
-      const line = chunk.trim();
-      if (!line || line === '---') continue;
-      try {
-        const entry = JSON.parse(line) as LogEntry;
-
-        // 可选的验证
-        if (options.validate) {
-          if (!isValidLogEntry(entry)) {
-            errors++;
-            continue;
-          }
-        }
-
-        writeLogEntry(entry);
-        imported++;
-      } catch (error) {
-        log('导入日志行失败: %O', error);
-        errors++;
-      }
-    }
-
-    log('导入日志: imported=%d errors=%d from=%s', imported, errors, inputPath);
-
-    return { success: true, imported, errors };
-  } catch (error) {
-    log('导入日志失败: %O', error);
-    throw error;
-  }
-}
-
-/**
- * 清空所有日志
- */
-export function clearAllLogs(): { success: boolean; deleted: number } {
-  let deleted = 0;
-
-  try {
-    if (!existsSync(getEffectiveLogDir())) {
-      return { success: true, deleted: 0 };
-    }
-
-    const files = readdirSync(getEffectiveLogDir()).filter(f => f.endsWith('.jsonl'));
-
-    for (const file of files) {
-      const filePath = join(getEffectiveLogDir(), file);
-      unlinkSync(filePath);
-      deleted++;
-    }
-
-    log('清空日志: deleted=%d', deleted);
-
-    return { success: true, deleted };
-  } catch (error) {
-    log('清空日志失败: %O', error);
-    throw error;
-  }
-}
+// ==================== 统计 ====================
 
 /**
  * 获取日志统计信息
@@ -266,129 +51,164 @@ export function getLogStats(): {
   newestEntry?: string;
 } {
   try {
-    const logDir = getEffectiveLogDir();
-    if (!existsSync(logDir)) {
-      return {
-        totalEntries: 0,
-        totalSize: 0,
-        fileCount: 0,
-      };
-    }
-
-    const files = readdirSync(logDir).filter(f => f.endsWith('.jsonl'));
-    let totalEntries = 0;
+    const db = getDb();
+    const s = getStats(db);
+    // 库体积：主库 + wal + shm
+    const dbPath = cfg().dbPath;
     let totalSize = 0;
-    let oldestEntry: string | undefined;
-    let newestEntry: string | undefined;
-
-    for (const file of files) {
-      const filePath = join(logDir, file);
-      const stats = statSync(filePath);
-      totalSize += stats.size;
-      // 按 --- 分隔符切分统计条目数
-      const content = readFileSync(filePath, 'utf-8');
-      totalEntries += content.split(/\n---\n?/).filter(chunk => chunk.trim()).length;
+    for (const ext of ['', '-wal', '-shm']) {
+      try {
+        totalSize += statSync(dbPath + ext).size;
+      } catch { /* 文件可能不存在（已 checkpoint） */ }
     }
-
-    // 获取最旧和最新的日志条目
-    const logs = readLogs();
-    if (logs.length > 0) {
-      newestEntry = logs[0].timestamp;
-      oldestEntry = logs[logs.length - 1].timestamp;
-    }
-
     return {
-      totalEntries,
+      totalEntries: s.count,
       totalSize,
-      fileCount: files.length,
-      oldestEntry,
-      newestEntry,
+      fileCount: 1, // SQLite 单库
+      oldestEntry: s.oldest ?? undefined,
+      newestEntry: s.newest ?? undefined,
     };
   } catch (error) {
     log('获取日志统计失败: %O', error);
-    return {
-      totalEntries: 0,
-      totalSize: 0,
-      fileCount: 0,
-    };
+    return { totalEntries: 0, totalSize: 0, fileCount: 0 };
   }
 }
 
-/**
- * 轮转日志文件（当文件过大时）
- */
-function rotateLogFile(filePath: string): void {
-  try {
-    const baseName = filePath.replace('.jsonl', '');
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const newFilePath = `${baseName}_rotated_${timestamp}.jsonl`;
+// ==================== 导出 ====================
 
-    // 重命名当前文件
-    // 注意：Node.js 没有直接的 rename 函数在 fs 模块中，这里假设我们会用其他方式处理
-    // 在实际使用中，你可能需要使用 rename 或者复制后删除
-    log('日志文件轮转: %s -> %s', filePath, newFilePath);
-  } catch (error) {
-    log('日志轮转失败: %O', error);
+/** 取全部日志（重建为 LogEntry），供导出用 */
+function loadAllLogs(): LogEntry[] {
+  const db = getDb();
+  const { logs: rows } = listLogs(db, { limit: Number.MAX_SAFE_INTEGER, offset: 0 });
+  const bodies = fetchBodies(db, rows.map(r => r.rowid));
+  const out: LogEntry[] = [];
+  for (const r of rows) {
+    const b = bodies.get(r.rowid);
+    if (!b) continue;
+    out.push(reconstructEntry(r, b.request, b.response));
   }
+  return out;
 }
 
 /**
- * 清理旧日志文件（保留最近的N个文件）
+ * 导出日志到文件（JSONL / Markdown）
  */
-export function cleanupOldLogs(maxFiles: number = getEffectiveMaxLogFiles()): { deleted: number } {
-  let deleted = 0;
-
+export function exportLogs(
+  outputPath: string,
+  options: LogExportOptions = { format: 'jsonl' },
+): { success: boolean; count: number; path: string } {
   try {
-    const logDir = getEffectiveLogDir();
-    if (!existsSync(logDir)) {
-      return { deleted: 0 };
+    const logs = loadAllLogs();
+    // 确保输出目录存在
+    mkdirSync(dirname(outputPath), { recursive: true });
+
+    if (options.format === 'jsonl') {
+      const content = logs.map(entry => JSON.stringify(entry)).join('\n');
+      writeFileSync(outputPath, content, 'utf-8');
+    } else {
+      const content = convertToMarkdown(logs, options.includeMeta);
+      writeFileSync(outputPath, content, 'utf-8');
     }
 
-    const files = readdirSync(logDir)
-      .filter(f => f.endsWith('.jsonl') && !f.startsWith('export_'))
-      .sort()
-      .reverse();
+    log('导出日志: %d 条 -> %s (format=%s)', logs.length, outputPath, options.format);
+    return { success: true, count: logs.length, path: outputPath };
+  } catch (error) {
+    log('导出日志失败: %O', error);
+    throw error;
+  }
+}
 
-    // 删除超过限制的旧文件
-    if (files.length > maxFiles) {
-      const filesToDelete = files.slice(maxFiles);
-      for (const file of filesToDelete) {
-        const filePath = join(logDir, file);
-        unlinkSync(filePath);
-        deleted++;
+// ==================== 导入 ====================
+
+/** 轻量校验：必需字段存在 */
+function isValidEntry(entry: unknown): entry is LogEntry {
+  if (!entry || typeof entry !== 'object') return false;
+  const e = entry as Record<string, unknown>;
+  return typeof e.id === 'string' && typeof e.timestamp === 'string';
+}
+
+/**
+ * 从 JSONL 文件导入日志（幂等：按 id 跳过已存在）
+ */
+export function importLogs(
+  inputPath: string,
+  options: LogImportOptions = { merge: true, validate: true },
+): { success: boolean; imported: number; errors: number } {
+  let imported = 0;
+  let errors = 0;
+
+  try {
+    const db = getDb();
+    const content = readFileSync(inputPath, 'utf-8');
+    // 兼容纯换行分隔与旧 '\n---\n' 分隔
+    const chunks = content.split(/\n---\n?|\n/).filter(l => l.trim() && l.trim() !== '---');
+
+    // 非 merge 模式先清空
+    if (!options.merge) {
+      dbClearAll(db);
+    }
+
+    const entries: LogEntry[] = [];
+    for (const chunk of chunks) {
+      const line = chunk.trim();
+      if (!line) continue;
+      try {
+        const entry = JSON.parse(line);
+        if (options.validate && !isValidEntry(entry)) { errors++; continue; }
+        entries.push(entry);
+      } catch {
+        errors++;
       }
     }
 
-    log('清理旧日志: deleted=%d maxFiles=%d', deleted, maxFiles);
+    const r = insertLogsBatch(db, entries as unknown as Parameters<typeof insertLogsBatch>[1]);
+    imported = r.imported;
+    errors += r.errors;
+    // r.skipped = id 已存在（merge 模式下正常）
 
-    return { deleted };
+    log('导入日志: imported=%d errors=%d from=%s', imported, errors, inputPath);
+    return { success: true, imported, errors };
+  } catch (error) {
+    log('导入日志失败: %O', error);
+    throw error;
+  }
+}
+
+// ==================== 清空 / 清理 ====================
+
+/**
+ * 清空所有日志（DELETE + VACUUM）
+ */
+export function clearAllLogs(): { success: boolean; deleted: number } {
+  try {
+    const n = dbClearAll(getDb());
+    log('清空日志: deleted=%d', n);
+    return { success: true, deleted: n };
+  } catch (error) {
+    log('清空日志失败: %O', error);
+    throw error;
+  }
+}
+
+/**
+ * 清理过期日志（DELETE 旧行 + VACUUM）。决策④：保留期默认 30 天，env 可调。
+ */
+export function cleanupOldLogs(): { deleted: number } {
+  try {
+    const retentionDays = cfg().logRetentionDays;
+    const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
+    const cutoffISO = new Date(cutoffMs).toISOString();
+    const n = deleteOldLogs(getDb(), cutoffISO);
+    if (n > 0) vacuum(getDb());
+    log('清理旧日志: deleted=%d (retention=%d天)', n, retentionDays);
+    return { deleted: n };
   } catch (error) {
     log('清理旧日志失败: %O', error);
     return { deleted: 0 };
   }
 }
 
-/**
- * 验证日志条目格式
- */
-function isValidLogEntry(entry: unknown): entry is LogEntry {
-  if (!entry || typeof entry !== 'object') {
-    return false;
-  }
-
-  const e = entry as Record<string, unknown>;
-
-  // 必需字段检查
-  return (
-    typeof e.id === 'string' &&
-    typeof e.timestamp === 'string' &&
-    typeof e.agentType === 'string' &&
-    typeof e.duration === 'number' &&
-    typeof e.request === 'object' &&
-    typeof e.response === 'object' &&
-    typeof e.metadata === 'object'
-  );
-}
+// ==================== Markdown 导出 ====================
 
 /**
  * 转换为 Markdown 格式
@@ -437,7 +257,7 @@ export function convertToMarkdown(logs: LogEntry[], includeMeta?: boolean): stri
 }
 
 /**
- * 获取日志目录路径
+ * 获取日志目录路径（导出产物落点）
  */
 export function getLogDir(): string {
   return getEffectiveLogDir();

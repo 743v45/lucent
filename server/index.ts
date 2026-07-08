@@ -18,6 +18,7 @@ import { mountRoutes } from './routes/index.js';
 import { startProxyServer } from './proxy.js';
 import { setupInterceptor, drainPendingSSETasks } from './interceptor.js';
 import { drainWriteQueue } from './services/log-writer.js';
+import { closeDb } from './services/db-instance.js';
 import { isSseDebugEnabled } from './sse-extractor.js';
 import './endpoint-handlers.js'; // 注册端点类型处理器
 import type { ProxyStatus } from './types.js';
@@ -151,6 +152,8 @@ export async function shutdownServer(): Promise<void> {
 
   // 等待所有挂起的日志写入完成
   await drainWriteQueue();
+  // 关闭数据库（WAL checkpoint 落盘）
+  closeDb();
 
   if (proxyServer) {
     await proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));

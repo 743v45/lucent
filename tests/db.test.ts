@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   openDb, insertLog, migrateFromJsonl, listLogs, searchLogs, getLogById,
-  buildSearchText, deleteOldLogs, countLogs, type DB,
+  buildSearchText, deleteOldLogs, countLogs, getStats, clearAllLogs, type DB,
 } from '../server/services/db.js';
 import type { RawLogEntry } from '../server/types.js';
 
@@ -230,5 +230,32 @@ describe('deleteOldLogs — 级联清理', () => {
     const s = searchLogs(db, '代理拦截请求', { limit: 10, offset: 0 });
     expect(s.total).toBe(1);
     expect(s.logs[0].id).toBe('new');
+  });
+});
+
+// ==================== 统计 / 清空 ====================
+
+describe('getStats / clearAllLogs', () => {
+  it('getStats 返回条数与最旧/最新时间戳', () => {
+    insertLog(db, makeEntry({ id: 'st1', timestamp: '2026-06-01T00:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'st2', timestamp: '2026-07-08T00:00:00.000Z' }));
+    const s = getStats(db);
+    expect(s.count).toBe(2);
+    expect(s.oldest).toBe('2026-06-01T00:00:00.000Z');
+    expect(s.newest).toBe('2026-07-08T00:00:00.000Z');
+  });
+  it('clearAllLogs 清空 logs/log_bodies/fts（删后搜不到）', () => {
+    insertLog(db, makeEntry({ id: 'c1', timestamp: '2026-07-08T01:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'c2', timestamp: '2026-07-08T02:00:00.000Z' }));
+    expect(countLogs(db)).toBe(2);
+    expect(searchLogs(db, '代理拦截请求', { limit: 10, offset: 0 }).total).toBe(2);
+    const n = clearAllLogs(db);
+    expect(n).toBe(2);
+    expect(countLogs(db)).toBe(0);
+    const bodies = db.prepare(`SELECT COUNT(*) AS c FROM log_bodies`).get() as { c: number };
+    expect(bodies.c).toBe(0);
+    const fts = db.prepare(`SELECT COUNT(*) AS c FROM logs_fts`).get() as { c: number };
+    expect(fts.c).toBe(0);
+    expect(searchLogs(db, '代理拦截请求', { limit: 10, offset: 0 }).total).toBe(0);
   });
 });

@@ -59,6 +59,8 @@ db.pragma('wal_checkpoint(TRUNCATE)');
 console.log(`[sqlite] db size after checkpoint=${dbSizeMB()}MB`);
 
 // 2. 冷列表（首次查询，无任何进程级缓存——DB 本身即索引）
+// 迁移后主动 gc：清掉 readFileSync 的文件缓冲残留，让打印的稳态堆反映查询本身
+if (typeof globalThis.gc === 'function') globalThis.gc();
 const cold = time(() => listLogs(db, { limit: 50, offset: 0 }));
 console.log(`[sqlite] list cold   ${cold.ms.toFixed(0)}ms  heap=${cold.heapAfter}MB  total=${cold.result.total} returned=${cold.result.logs.length}`);
 const sampleId = cold.result.logs[0]?.id;

@@ -214,13 +214,14 @@ function toLogParams(entry: RawLogEntry): Record<string, unknown> {
 }
 
 /**
- * 写入一条日志（幂等：id 已存在则跳过，不重复插 body/fts）。
- * 必须在事务中调用以保证 logs/bodies/fts 三表原子一致。
+ * 写入一条日志的三条语句（logs / log_bodies / logs_fts），不含事务。
+ * 调用方必须自行包事务以保证三表原子一致：
+ *   - 单条 live 写入用 insertLog（已套事务）；
+ *   - 批量迁移用 migrateFromJsonl（整批一个事务，调用本函数，免 per-entry savepoint）。
  * 返回是否实际写入（false = 因 id 重复跳过）。
  */
-export function insertLog(db: DB, entry: RawLogEntry): boolean {
-  const logStmt = db.prepare(INSERT_LOG);
-  const info = logStmt.run(toLogParams(entry));
+function insertLogInner(db: DB, entry: RawLogEntry): boolean {
+  const info = db.prepare(INSERT_LOG).run(toLogParams(entry));
   if (info.changes === 0) return false; // id 已存在，幂等跳过
   const rowid = Number(info.lastInsertRowid);
   const request = JSON.stringify({ method: entry.method ?? 'GET', url: entry.url ?? '', headers: entry.headers ?? {}, body: entry.body });
@@ -229,6 +230,39 @@ export function insertLog(db: DB, entry: RawLogEntry): boolean {
   db.prepare(INSERT_BODY).run(rowid, request, response, search_text);
   db.prepare(INSERT_FTS).run(rowid, search_text);
   return true;
+}
+
+/**
+ * 写入一条日志（live 写入入口，幂等：id 已存在则跳过）。
+ * 内部套事务：logs / log_bodies / logs_fts 三表原子一致，中途抛错不留孤儿
+ * （避免「logs 有行、body/fts 没有」导致搜不到也取不到详情）。
+ */
+export function insertLog(db: DB, entry: RawLogEntry): boolean {
+  let inserted = false;
+  db.transaction(() => { inserted = insertLogInner(db, entry); })();
+  return inserted;
+}
+
+/**
+ * 批量写入（导入用）：整批一个事务，内部走 insertLogInner 免 per-entry savepoint。
+ * 单条抛错被捕获、记 error，不中断整批；适用于一次性迁移 / 用户导入（低频，批量原子足够）。
+ */
+export function insertLogsBatch(db: DB, entries: RawLogEntry[]): { imported: number; skipped: number; errors: number } {
+  let imported = 0;
+  let skipped = 0;
+  let errors = 0;
+  db.transaction(() => {
+    for (const e of entries) {
+      try {
+        if (insertLogInner(db, e)) imported++;
+        else skipped++;
+      } catch (err) {
+        errors++;
+        dbg('批量写入单条失败 id=%s: %O', (e as RawLogEntry)?.id, err);
+      }
+    }
+  })();
+  return { imported, skipped, errors };
 }
 
 // ==================== 迁移 ====================
@@ -257,7 +291,8 @@ export function migrateFromJsonl(
   const tx = db.transaction((entries: RawLogEntry[]) => {
     for (const e of entries) {
       try {
-        if (insertLog(db, e)) imported++;
+        // 直接走 inner：整批已在事务里，免 per-entry savepoint（迁移是一次性，批量原子足够）
+        if (insertLogInner(db, e)) imported++;
         else skipped++;
       } catch (err) {
         errors++;
@@ -406,6 +441,40 @@ export function getLogById(db: DB, id: string): { row: LogRow; request: string; 
 export function getBodiesByRowid(db: DB, rowid: number): { request: string; response: string; search_text: string } | null {
   const row = db.prepare(`SELECT request, response, search_text FROM log_bodies WHERE log_rowid = ?`).get(rowid) as { request: string; response: string; search_text: string } | undefined;
   return row ?? null;
+}
+
+/**
+ * 批量取一组 rowid 的 bodies（列表查询只取小列，分页后再批量拉 bodies 重建）。
+ * 避免 JOIN 在 LIMIT 前把全量 body 拖进来——保证 O(页大小) body 读。
+ */
+export function fetchBodies(db: DB, rowids: number[]): Map<number, { request: string; response: string }> {
+  const map = new Map<number, { request: string; response: string }>();
+  if (rowids.length === 0) return map;
+  const placeholders = rowids.map(() => '?').join(',');
+  const rows = db.prepare(`SELECT log_rowid, request, response FROM log_bodies WHERE log_rowid IN (${placeholders})`).all(...rowids) as { log_rowid: number; request: string; response: string }[];
+  for (const r of rows) map.set(r.log_rowid, { request: r.request, response: r.response });
+  return map;
+}
+
+// ==================== 统计 / 清空 ====================
+
+/** 统计：条数 + 最旧/最新时间戳 */
+export function getStats(db: DB): { count: number; oldest: string | null; newest: string | null } {
+  const row = db.prepare(`SELECT COUNT(*) AS c, MIN(timestamp) AS oldest, MAX(timestamp) AS newest FROM logs`).get() as { c: number; oldest: string | null; newest: string | null };
+  return { count: row.c, oldest: row.oldest, newest: row.newest };
+}
+
+/** 清空所有日志（logs 级联 log_bodies，FTS 手动清），再 VACUUM 回收空间 */
+export function clearAllLogs(db: DB): number {
+  const n = countLogs(db);
+  const tx = db.transaction(() => {
+    db.prepare(`DELETE FROM logs_fts`).run();
+    db.prepare(`DELETE FROM logs`).run(); // ON DELETE CASCADE 清 log_bodies
+  });
+  tx();
+  db.exec('VACUUM');
+  dbg('清空全部日志: 删除 %d 行', n);
+  return n;
 }
 
 // ==================== 保留期清理 ====================
