@@ -33,6 +33,8 @@
  * 不在此提取——它们是状态流转，raw 视图原样展示，结构化视图忽略。
  */
 
+import type { ProtocolId } from './protocols.js';
+
 /** SSE 原始行（event + data 两字段） */
 export interface SSERawLine {
   event: string;
@@ -175,6 +177,84 @@ export function extractFromEvent(eventType: string, data: any, acc: ExtractedInf
       acc.usage.output = data.response.usage.output_tokens || acc.usage.output;
     }
   }
+}
+
+// ==================== token-bucket 分类（TTFT 口径单源） ====================
+
+/** 单事件的 token-bucket 分类结果：是否携带非空思考 delta / 回答文本 delta */
+export interface TokenBucketClassification {
+  thinking: boolean;
+  answer: boolean;
+}
+
+/** anthropic-messages：type 在 event: 行；思考=text_delta 之前的 thinking_delta，回答=text_delta */
+function classifyAnthropic(eventType: string, data: any): TokenBucketClassification {
+  if (eventType !== 'content_block_delta') return { thinking: false, answer: false };
+  const dt = data?.delta?.type;
+  if (dt === 'thinking_delta' && data.delta.thinking) return { thinking: true, answer: false };
+  if (dt === 'text_delta' && data.delta.text) return { thinking: false, answer: true };
+  return { thinking: false, answer: false };
+}
+
+/** openai-chat：无 event: 行，看 choices[0].delta；思考=reasoning(_content)，回答=content */
+function classifyChat(data: any): TokenBucketClassification {
+  if (!Array.isArray(data?.choices)) return { thinking: false, answer: false };
+  const delta = data.choices[0]?.delta;
+  if (!delta) return { thinking: false, answer: false };
+  return {
+    thinking: !!(delta.reasoning_content || delta.reasoning),
+    answer: !!delta.content,
+  };
+}
+
+/** openai-responses：type 在 data.type；思考=reasoning*.delta，回答=output_text/text.delta */
+function classifyResponses(data: any): TokenBucketClassification {
+  const t = typeof data?.type === 'string' ? data.type : '';
+  if (t === 'response.output_text.delta' || t === 'response.text.delta') {
+    return { thinking: false, answer: !!data.delta };
+  }
+  if (
+    t === 'response.reasoning.delta'
+    || t === 'response.reasoning_text.delta'
+    || t === 'response.reasoning_summary_text.delta'
+  ) {
+    return { thinking: !!data.delta, answer: false };
+  }
+  return { thinking: false, answer: false };
+}
+
+/**
+ * 单个 SSE 事件的 token-bucket 分类——首 token / 思考 token / 回答 token 判定口径单源。
+ *
+ * 返回该事件是否携带「非空」的思考 delta / 回答文本 delta，供 TTFT 时延测量用：
+ * - thinking=true → 该帧产出思考 token（thinking_delta / reasoning）
+ * - answer=true   → 该帧产出回答文本 token（content / text delta）
+ *
+ * 生命周期/结构事件一律 neither（responses 的 created/in_progress、anthropic 的
+ * message_start/content_block_start、chat 的空 content 首 chunk、工具调用 delta、refusal）。
+ * 「非空」= 提取出的 delta 字符串 truthy（任何非空串都算，含模型吐的空白 token）。
+ *
+ * 口径与 extractFromEvent 同源（都按协议区分内容），但只判定「这帧算不算某类 token」、
+ * 不累积内容。三协议判定见 stream-timing spec。endpointType 已知时只查该协议；
+ * 缺省（null）时按结构三协议各试一次（互斥，等价于 extractFromEvent 的 fallback 语义）。
+ */
+export function classifySSEEventTokenBucket(
+  eventType: string,
+  data: any,
+  endpointType: ProtocolId | null,
+): TokenBucketClassification {
+  if (endpointType === 'anthropic-messages') return classifyAnthropic(eventType, data);
+  if (endpointType === 'openai-chat') return classifyChat(data);
+  if (endpointType === 'openai-responses') return classifyResponses(data);
+
+  // endpointType 缺省：按结构各试一次（三协议事件结构互斥，OR 安全）
+  const a = classifyAnthropic(eventType, data);
+  const c = classifyChat(data);
+  const r = classifyResponses(data);
+  return {
+    thinking: a.thinking || c.thinking || r.thinking,
+    answer: a.answer || c.answer || r.answer,
+  };
 }
 
 /**

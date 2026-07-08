@@ -18,6 +18,7 @@ import {
   DEFAULT_PROXY_PORT,
   DEFAULT_SERVER_HOST,
   PROXY_TRACE_HEADER,
+  REQ_START_HEADER,
   MAX_REQUEST_BODY_SIZE,
 } from './constants.js';
 import createDebug from 'debug';
@@ -189,6 +190,8 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         headers[PROXY_TRACE_HEADER] = 'true';
         headers['x-lucent-provider'] = providerName;
         headers['x-lucent-endpoint'] = endpointType;
+        // TTFT/Duration 时钟起点：客户端请求到达代理的时刻（startTime 在请求入口取）
+        headers[REQ_START_HEADER] = String(startTime);
 
         log('🧩 路由解析: provider=%s endpointType=%s rest=%s baseUrl=%s',
           providerName, endpointType, rest, baseUrl);

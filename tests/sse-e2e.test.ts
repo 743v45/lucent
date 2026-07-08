@@ -109,7 +109,7 @@ describe('extractInBackground 端到端测试', () => {
       mainAgent: true,
     };
 
-    await extractInBackground(body, entry,
+    await extractInBackground(body, entry, Date.now(),
       (_e) => { /* no-op */ },
       () => { /* no-op */ },
     );
@@ -175,7 +175,7 @@ describe('extractInBackground 端到端测试', () => {
       mainAgent: true,
     };
 
-    await extractInBackground(body, entry,
+    await extractInBackground(body, entry, Date.now(),
       (_e) => { /* no-op */ },
       () => { /* no-op */ },
     );
@@ -259,7 +259,7 @@ describe('extractInBackground 端到端测试', () => {
       mainAgent: true,
     };
 
-    await extractInBackground(body, entry,
+    await extractInBackground(body, entry, Date.now(),
       (_e) => { /* no-op */ },
       () => { /* no-op */ },
     );
