@@ -66,6 +66,9 @@ export function applyContextCache(log: LogEntry): void {
   if (id) {
     const cached = contextCache.get(id);
     if (cached) {
+      // 按引用贴回缓存里的同一份对象——命中即复用、不重提、不重打调试日志。
+      // 约定：下游（路由/前端）只读不改 context / kvCache；就地 mutate 会污染缓存，
+      // 需要变更请整个替换。
       log.context = cached.context;
       log.kvCache = cached.kvCache;
       return;

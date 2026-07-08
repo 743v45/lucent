@@ -10,6 +10,7 @@
 
 import { insertLog, deleteOldLogs, vacuum } from './db.js';
 import { initDb, getDb } from './db-instance.js';
+import { invalidateCache as invalidateReaderCache } from './log-reader.js';
 import type { RawLogEntry } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
@@ -126,6 +127,9 @@ export function cleanupOldLogs(): void {
   const n = deleteOldLogs(getDb(), cutoffISO);
   if (n > 0) {
     vacuum(getDb());
+    // 旧日志已删，顺带丢掉读路径按 id 记忆的提取结果（id 不复用，残留只占内存，
+    // 2000 FIFO 上限也兜得住；清一下更干净）。
+    invalidateReaderCache();
     dbg('清理过期日志: 删除 %d 行 (retention=%d天)', n, retentionDays);
   }
 }
