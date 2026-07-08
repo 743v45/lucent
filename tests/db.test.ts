@@ -112,6 +112,30 @@ describe('insertLog', () => {
     expect(insertLog(db, e)).toBe(false);
     expect(countLogs(db)).toBe(1);
   });
+  it('三表写入中途失败不留孤儿（事务回滚，reviewer #1）', () => {
+    // 让第 3 条语句（FTS 插入）抛错，验证 logs/log_bodies 不会留下孤儿：
+    // 若 insertLog 未套事务，此刻 logs 有行、body/fts 没有搜不到也取不到。
+    const e = makeEntry({ id: 'orphan', timestamp: '2026-07-08T04:00:00.000Z' });
+    const origPrepare = db.prepare.bind(db);
+    // @ts-expect-error 测试用：实例上 shadow，让 logs_fts 插入失败
+    db.prepare = (sql: string) => {
+      if (sql.includes('logs_fts')) throw new Error('SIMULATED FTS FAILURE');
+      return origPrepare(sql);
+    };
+    expect(() => insertLog(db, e)).toThrow('SIMULATED FTS FAILURE');
+    // @ts-expect-error 恢复
+    db.prepare = origPrepare;
+
+    // 关键：三表都没有这条孤儿（事务回滚）
+    expect(countLogs(db)).toBe(0);
+    const bodies = db.prepare(`SELECT COUNT(*) AS c FROM log_bodies`).get() as { c: number };
+    expect(bodies.c).toBe(0);
+    const fts = db.prepare(`SELECT COUNT(*) AS c FROM logs_fts`).get() as { c: number };
+    expect(fts.c).toBe(0);
+    // 回滚后 DB 干净，仍可正常写入这条
+    expect(insertLog(db, e)).toBe(true);
+    expect(countLogs(db)).toBe(1);
+  });
 });
 
 // ==================== buildSearchText ====================
