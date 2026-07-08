@@ -118,7 +118,7 @@ export async function drainWriteQueue(): Promise<void> {
 
 /**
  * 清理过期日志：DELETE 早于保留期的行（级联 log_bodies + FTS），再 VACUUM 回收空间。
- * 决策④：保留期默认 30 天，env LUCENT_LOG_RETENTION_DAYS 可调。
+ * 决策④：保留期默认 3 天，env LUCENT_LOG_RETENTION_DAYS 可调。
  */
 export function cleanupOldLogs(): void {
   const retentionDays = resolvedConfig.logRetentionDays;

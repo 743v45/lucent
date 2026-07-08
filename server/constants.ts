@@ -37,7 +37,7 @@ export const MAX_REQUEST_BODY_SIZE = 50 * 1024 * 1024;
 // ==================== 日志配置 ====================
 // 存储已切 SQLite（见 docs/log-storage-design.md），不再有按文件大小轮转；
 // MAX_LOG_FILE_SIZE / MAX_LOG_FILES / MAX_LOG_FILES_TO_READ 等 JSONL 轮转常量已退役。
-export const LOG_RETENTION_DAYS = 30;               // 日志自动清理天数（env LUCENT_LOG_RETENTION_DAYS 可覆盖）
+export const LOG_RETENTION_DAYS = 3;                // 日志自动清理天数（env LUCENT_LOG_RETENTION_DAYS 可覆盖）
 export const DEFAULT_LOG_QUERY_LIMIT = 100;         // 日志查询默认返回条数
 
 /**

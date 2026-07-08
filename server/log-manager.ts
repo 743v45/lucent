@@ -191,7 +191,7 @@ export function clearAllLogs(): { success: boolean; deleted: number } {
 }
 
 /**
- * 清理过期日志（DELETE 旧行 + VACUUM）。决策④：保留期默认 30 天，env 可调。
+ * 清理过期日志（DELETE 旧行 + VACUUM）。决策④：保留期默认 3 天，env 可调。
  */
 export function cleanupOldLogs(): { deleted: number } {
   try {
