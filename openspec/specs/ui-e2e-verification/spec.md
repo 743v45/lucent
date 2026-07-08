@@ -133,3 +133,49 @@ the one selector meant to survive. Keeping the set minimal avoids test-coupling 
 #### Scenario: README documents the workflow
 - **WHEN** reading `README.md`
 - **THEN** it MUST contain a section describing `npm run e2e` and the Playwright UI e2e layer
+
+### Requirement: A dedicated detail-panel spec MUST cover response multi-modes and boundary responses beyond the seed's chat-SSE flow
+
+Beyond the seed's chat-SSE happy path, there MUST be a spec (`e2e/detail-request-response.spec.ts`)
+that asserts the Request/Response detail tabs across response modes and edge cases, reusing
+the shared stack fixture (no reinvented isolation stack, no hand-rolled SSE/JSON fixtures). It
+MUST cover: (a) a non-streaming `chat-json` response renders in the Response tab distinctly from
+`chat-sse` (the rendered body contains the `chat.completion` object and MUST NOT contain SSE
+chunk markers like `chat.completion.chunk` or `data:`); (b) the JSON view's `expand-all` ↔
+`collapse-all` toggle actually expands and collapses nested nodes (a deep key hidden by default
+becomes visible after `expand-all` and hidden again after `collapse-all`, and the toggle button's
+`data-testid` flips `expand-all` ↔ `collapse-all` accordingly); (c) an empty response body and
+4xx/5xx error responses do not crash the detail panel — the panel renders, the Response tab's
+`response-body` is visible, and the header surfaces the upstream status code.
+
+**Rationale:** The seed only proves the SSE happy path. Multi-mode rendering, the collapse
+interaction, and error/empty robustness are exactly where the detail panel regresses in
+practice — a malformed or empty upstream response can blank or crash the panel. The upstream
+modes used (`chat-json`, `error-400`, `error-500`, and the additive `empty` mode) come from the
+shared `createMockUpstream`; no real upstream is contacted and no real key is used.
+
+#### Scenario: Non-streaming chat-JSON renders distinctly from chat-SSE
+- **GIVEN** the stack is up with an `openai-chat` provider pointed at a mock upstream in `chat-json` mode
+- **WHEN** the spec sends a chat-completions request through the proxy and opens the detail's Response tab
+- **THEN** `response-body` MUST render the `chat.completion` object (e.g. contain `chat.completion` and the chat-JSON-only `system_fingerprint`)
+- **AND** MUST NOT contain SSE markers (`chat.completion.chunk`, `data:`)
+
+#### Scenario: expand-all / collapse-all toggles nested JSON nodes
+- **GIVEN** the Response tab is showing a `chat-json` body in the JSON view (default collapsed to level 2)
+- **WHEN** the spec clicks `expand-all`, then `collapse-all`
+- **THEN** a deep nested key hidden by default MUST become visible after `expand-all`
+- **AND** the toggle button's `data-testid` MUST flip `expand-all` → `collapse-all` → `expand-all`
+- **AND** the deep key MUST be hidden again after `collapse-all`
+
+#### Scenario: Empty response body does not crash the detail panel
+- **GIVEN** the mock upstream returns a `200` with an empty body (the `empty` mode)
+- **WHEN** the spec opens that log's detail and switches to the Response tab
+- **THEN** the detail panel MUST render without error
+- **AND** `response-body` MUST remain visible (empty body handled, not a blank/crash)
+
+#### Scenario: 4xx/5xx error responses render status and error body without crashing
+- **GIVEN** the mock upstream returns a `400` (or `500`) error response with an error JSON body
+- **WHEN** the spec opens that log's detail
+- **THEN** the header MUST surface the upstream status code (`400` / `500`)
+- **AND** the detail panel MUST render without error
+- **AND** the Response tab's `response-body` MUST render the error body (contain `error`)
