@@ -224,6 +224,13 @@ try {
     sseLog?.body?.input === 'What is latin for Ant?' && (sseLog?.response?.body?.type === 'sse_raw' || Array.isArray(sseLog?.response?.body?.lines)),
     `input=${sseLog?.body?.input} resp.type=${sseLog?.response?.body?.type}`);
 
+  // ③b TTFT 时延（stream-timing）：0 < 首 token < duration，且 tokens/s > 0
+  check('SSE-③b TTFT: 0<首token<duration 且 tokens/s>0',
+    typeof sseLog?.ttftFirstTokenMs === 'number' && sseLog.ttftFirstTokenMs > 0
+      && sseLog.ttftFirstTokenMs < sseLog.duration
+      && typeof sseLog?.tokensPerSecond === 'number' && sseLog.tokensPerSecond > 0,
+    `ttftFirst=${sseLog?.ttftFirstTokenMs} thinking=${sseLog?.ttftThinkingMs} answer=${sseLog?.ttftAnswerMs} tps=${sseLog?.tokensPerSecond} dur=${sseLog?.duration}`);
+
   // ④ /api/logs 接口
   const apiRes1 = await fetch(`${WEB}/api/logs?limit=50`);
   const apiJson1 = await apiRes1.json();
@@ -253,9 +260,19 @@ try {
       itemCount >= 1 && userCount >= 1, `items=${itemCount} user=${userCount}`);
 
     await page.goto(`http://127.0.0.1:${VITE_PORT}/`);
-    await page.waitForTimeout(500);
+    // 等列表渲染完成再计数，避免 goto 后日志未拉取完的竞态导致 rows=0 抖动
+    await page.getByTestId('log-row').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
     const rowCount = await page.getByTestId('log-row').count();
     check('SSE-⑤c 日志列表渲染 log-row', rowCount >= 1, `rows=${rowCount}`);
+
+    // ⑤d Meta tab 展示 TTFT 时延（DOM 文本值非 n/a —— 防前端漏接字段）
+    await page.goto(`http://127.0.0.1:${VITE_PORT}/?log=${sseLog.id}`);
+    await page.getByTestId('tab-meta').click();
+    await page.getByTestId('ttft-first-token').waitFor({ state: 'visible', timeout: 5000 });
+    const ttftText = (await page.getByTestId('ttft-first-token').textContent()) ?? '';
+    check('SSE-⑤d Meta tab 展示首 token 时延(数值,非 n/a)',
+      /\d+ms/.test(ttftText) && !ttftText.includes('n/a'),
+      `ttft-first-token=${ttftText}`);
     await browser.close();
   }
 
@@ -300,7 +317,8 @@ try {
     const browser = await chromium.launch();
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${VITE_PORT}/?log=${jsonLog.id}&tab=response`);
-    await page.waitForTimeout(500);
+    // 等 Response tab 渲染完，避免 visible=false 抖动
+    await page.getByTestId('response-body').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
     const respVisible = await page.getByTestId('response-body').isVisible().catch(() => false);
     const respText = respVisible ? (await page.getByTestId('response-body').textContent()) : '';
     check('JSON-⑤ Response tab 渲染 response-body 含 "output"',

@@ -1,7 +1,7 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
 import type { LogEntry, TabType, SSERawBody, SSERawLine, KVCacheBlock } from '../../types';
 import { ENDPOINT_LABELS } from '../../types';
-import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, CACHE_HIT_RATE_GOOD_THRESHOLD, CACHE_HIT_RATE_BAD_THRESHOLD, getStatusColor } from '../../constants';
+import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, CACHE_HIT_RATE_GOOD_THRESHOLD, CACHE_HIT_RATE_BAD_THRESHOLD, STORAGE_KEY_DETAIL_BODY_EXPANDED, STORAGE_KEY_DETAIL_HEADERS_EXPANDED, getStatusColor } from '../../constants';
 import { resolveResponseType } from '../../utils/response-type';
 import { JsonView, darkStyles } from 'react-json-view-lite';
 import ReactMarkdown from 'react-markdown';
@@ -67,18 +67,7 @@ function CopyButton({ onCopy }: { onCopy: () => void }) {
   );
 }
 
-// ==================== Collapse Button ====================
-
-function CollapseButton({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
-  return (
-    <button
-      onClick={onToggle}
-      className="px-3 py-0.5 text-[13px] font-[510] text-text-quaternary hover:text-text-secondary bg-bg-active rounded-md transition-colors"
-    >
-      {collapsed ? '展开' : '折叠'}
-    </button>
-  );
-}
+// ==================== Expand Button ====================
 
 function ExpandAllButton({ expanded, onToggle }: { expanded: boolean; onToggle: () => void }) {
   return (
@@ -90,6 +79,27 @@ function ExpandAllButton({ expanded, onToggle }: { expanded: boolean; onToggle: 
       {expanded ? '收起全部' : '展开全部'}
     </button>
   );
+}
+
+// ==================== Persistence Helpers ====================
+
+// 从 localStorage 读 { request, response } 布尔对，格式不对或缺省一律回 false（折叠）。
+// 详情面板的 Body 全展开 / Headers 折叠态都走这个套路记忆，切日志不再重置。
+function readExpandedPair(key: string): { request: boolean; response: boolean } {
+  try {
+    const raw = localStorage.getItem(key);
+    if (raw) {
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object'
+        && typeof parsed.request === 'boolean'
+        && typeof parsed.response === 'boolean') {
+        return { request: parsed.request, response: parsed.response };
+      }
+    }
+  } catch {
+    // 损坏 / 禁用 localStorage：回退默认折叠
+  }
+  return { request: false, response: false };
 }
 
 // ==================== Format Helpers ====================
@@ -221,24 +231,36 @@ const TAB_CONFIG: { key: TabType; label: string }[] = [
 ];
 
 export function DetailPanel({ log, activeTab, onTabChange, searchTerm }: DetailPanelProps): JSX.Element {
-  // body 展开态（单一真相源）：false=折叠到 JSON_COLLAPSED_EXPAND_LEVEL（默认，避免大 body 全展开卡顿），
-  // true=全展开。CollapseButton 与 ExpandAllButton 共享这一份状态——历史上用 bodyCollapsed + expandAll
-  // 两个独立 boolean，会出现 desync（先「展开」把 collapsed 置 false，再「展开全部」，再「收起全部」时，
-  // expandAll 关掉后回落到 collapsed=false 即「全展开」，按钮写着「收起全部」却什么都不收起）；合成单个
-  // boolean 后两个按钮永远一致。
-  const [bodyExpanded, setBodyExpanded] = useState<{ request: boolean; response: boolean }>({
-    request: false,
-    response: false,
-  });
+  // body 展开态（单一真相源，记忆）：false=折叠到 JSON_COLLAPSED_EXPAND_LEVEL，true=全展开。
+  // 初始值读 localStorage，切日志不再重置——用户点开的「全展开」跨日志保留。
+  // 历史上 bodyCollapsed + expandAll 双 boolean 会 desync（两个按钮写出互相矛盾的状态），
+  // 早合成单个 boolean；这次又把重复的 CollapseButton 按钮删了，UI 只剩一个 ExpandAllButton。
+  const [bodyExpanded, setBodyExpanded] = useState<{ request: boolean; response: boolean }>(
+    () => readExpandedPair(STORAGE_KEY_DETAIL_BODY_EXPANDED)
+  );
 
-  // 切日志时重置展开态：与下方 key={log.id} 重建子树（重置 sseViewMode / Headers 折叠 / KV 折叠等）意图一致。
-  // 否则上一条日志的「全展开」会带到新日志，让大 body 一进来就全展开，违背默认折叠的防卡顿初衷。
+  // headers 折叠态（记忆）：与 body 同套路，初始读 localStorage，切日志不重置。
+  const [headersExpanded, setHeadersExpanded] = useState<{ request: boolean; response: boolean }>(
+    () => readExpandedPair(STORAGE_KEY_DETAIL_HEADERS_EXPANDED)
+  );
+
+  // 变化即落盘（mount 时也会写一次默认值，无副作用）
   useEffect(() => {
-    setBodyExpanded({ request: false, response: false });
-  }, [log?.id]);
+    try { localStorage.setItem(STORAGE_KEY_DETAIL_BODY_EXPANDED, JSON.stringify(bodyExpanded)); } catch { /* ignore */ }
+  }, [bodyExpanded]);
+  useEffect(() => {
+    try { localStorage.setItem(STORAGE_KEY_DETAIL_HEADERS_EXPANDED, JSON.stringify(headersExpanded)); } catch { /* ignore */ }
+  }, [headersExpanded]);
 
   const toggleBodyExpanded = useCallback((type: 'request' | 'response') => {
     setBodyExpanded(prev => ({
+      ...prev,
+      [type]: !prev[type],
+    }));
+  }, []);
+
+  const toggleHeadersExpanded = useCallback((type: 'request' | 'response') => {
+    setHeadersExpanded(prev => ({
       ...prev,
       [type]: !prev[type],
     }));
@@ -266,6 +288,8 @@ export function DetailPanel({ log, activeTab, onTabChange, searchTerm }: DetailP
             log={log}
             expanded={bodyExpanded.request}
             onToggle={() => toggleBodyExpanded('request')}
+            headersExpanded={headersExpanded.request}
+            onToggleHeaders={() => toggleHeadersExpanded('request')}
             onCopy={copyBody}
           />
         );
@@ -275,6 +299,8 @@ export function DetailPanel({ log, activeTab, onTabChange, searchTerm }: DetailP
             log={log}
             expanded={bodyExpanded.response}
             onToggle={() => toggleBodyExpanded('response')}
+            headersExpanded={headersExpanded.response}
+            onToggleHeaders={() => toggleHeadersExpanded('response')}
             onCopy={copyBody}
             searchTerm={searchTerm}
           />
@@ -365,7 +391,9 @@ export function DetailPanel({ log, activeTab, onTabChange, searchTerm }: DetailP
         </div>
 
         {/* Tab Content */}
-        {/* key={log.id}：切日志时强制重建内容子树，重置 KVCacheTab/ContextTab/ResponseTab 等内部 state（折叠态、选中项、SSE 视图模式等） */}
+        {/* key={log.id}：切日志时强制重建内容子树，重置 ResponseTab 的 sseViewMode、
+            KVCacheTab 的块折叠、ContextTab 的分组折叠/选中项等内部 state。
+            Body 全展开 / Headers 折叠已上提到 DetailPanel 并记忆，不在这里重置。 */}
         <div className="flex-1 min-h-0 bg-bg-deep" key={log.id}>
           {renderTabContent()}
         </div>
@@ -378,23 +406,22 @@ export function DetailPanel({ log, activeTab, onTabChange, searchTerm }: DetailP
 
 function CollapsibleSection({
   title,
-  defaultExpanded = false,
+  expanded,
+  onToggle,
+  testId,
   children,
 }: {
   title: string;
-  defaultExpanded?: boolean;
+  expanded: boolean;
+  onToggle: () => void;
+  testId?: string;
   children: React.ReactNode;
 }) {
-  const [expanded, setExpanded] = useState(defaultExpanded);
-
-  const handleToggle = () => {
-    setExpanded(!expanded);
-  };
-
   return (
     <div className="mb-3">
       <button
-        onClick={handleToggle}
+        onClick={onToggle}
+        data-testid={testId}
         className="flex items-center gap-2 w-full text-left py-1 text-[17px] font-[510] text-text-secondary hover:text-text-primary transition-colors"
       >
         <ChevronIcon expanded={expanded} />
@@ -457,14 +484,16 @@ interface RequestTabProps {
   log: LogEntry;
   expanded: boolean;
   onToggle: () => void;
+  headersExpanded: boolean;
+  onToggleHeaders: () => void;
   onCopy: (data: unknown) => void;
 }
 
-function RequestTab({ log, expanded, onToggle, onCopy }: RequestTabProps): JSX.Element {
+function RequestTab({ log, expanded, onToggle, headersExpanded, onToggleHeaders, onCopy }: RequestTabProps): JSX.Element {
   return (
     <div className="flex flex-col h-full bg-bg-deep">
       <div className="p-4">
-        <CollapsibleSection title="Headers">
+        <CollapsibleSection title="Headers" expanded={headersExpanded} onToggle={onToggleHeaders} testId="request-headers">
           <HeadersDisplay headers={log.request.headers} />
         </CollapsibleSection>
       </div>
@@ -475,7 +504,6 @@ function RequestTab({ log, expanded, onToggle, onCopy }: RequestTabProps): JSX.E
           <span className="text-[17px] font-[510] text-text-secondary">Body</span>
           <div className="flex items-center gap-2">
             <ExpandAllButton expanded={expanded} onToggle={onToggle} />
-            <CollapseButton collapsed={!expanded} onToggle={onToggle} />
             <CopyButton onCopy={() => onCopy(log.request.body)} />
           </div>
         </div>
@@ -524,6 +552,8 @@ interface ResponseTabProps {
   log: LogEntry;
   expanded: boolean;
   onToggle: () => void;
+  headersExpanded: boolean;
+  onToggleHeaders: () => void;
   onCopy: (data: unknown) => void;
   searchTerm?: string;
 }
@@ -543,7 +573,7 @@ function sseLinesToRawText(lines: SSERawLine[]): string {
   }).join('\n\n');
 }
 
-function ResponseTab({ log, expanded, onToggle, onCopy, searchTerm }: ResponseTabProps): JSX.Element {
+function ResponseTab({ log, expanded, onToggle, headersExpanded, onToggleHeaders, onCopy, searchTerm }: ResponseTabProps): JSX.Element {
   const response = log.response;
   // 默认 raw：原始 SSE 文本完整可见(含 ping/error 等元事件)，结构化视图丢失这些事件
   const [sseViewMode, setSseViewMode] = useState<SSEViewMode>('raw');
@@ -579,7 +609,7 @@ function ResponseTab({ log, expanded, onToggle, onCopy, searchTerm }: ResponseTa
   return (
     <div className="flex flex-col h-full bg-bg-deep">
       <div className="p-4">
-        <CollapsibleSection title="Headers">
+        <CollapsibleSection title="Headers" expanded={headersExpanded} onToggle={onToggleHeaders} testId="response-headers">
           <HeadersDisplay headers={response.headers} />
         </CollapsibleSection>
       </div>
@@ -600,7 +630,6 @@ function ResponseTab({ log, expanded, onToggle, onCopy, searchTerm }: ResponseTa
               <SSEViewToggle mode={sseViewMode} onModeChange={setSseViewMode} />
             )}
             <ExpandAllButton expanded={expanded} onToggle={onToggle} />
-            <CollapseButton collapsed={!expanded} onToggle={onToggle} />
             <CopyButton onCopy={() => onCopy(sseViewMode === 'raw' ? rawSSEText : extractedBody)} />
           </div>
         </div>
@@ -1343,6 +1372,34 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
             description="从请求发出到收到完整响应的总耗时（含网络传输）"
           />
           <MetaRow
+            label="首 token 时延"
+            value={log.ttftFirstTokenMs != null ? `${log.ttftFirstTokenMs}ms` : 'n/a'}
+            testId="ttft-first-token"
+            description="TTFT：客户端请求到达代理 → 首个生成 token（思考/回答先到者）的时延。反映 prefill 等待，是 reasoning 模型的大头延迟。流式专属，非流式显示 n/a"
+          />
+          {log.ttftThinkingMs != null && (
+            <MetaRow
+              label="思考首 token"
+              value={`${log.ttftThinkingMs}ms`}
+              testId="ttft-thinking"
+              description="首个思考（reasoning）token 的时延；无思考流则不显示"
+            />
+          )}
+          {log.ttftAnswerMs != null && (
+            <MetaRow
+              label="回答首 token"
+              value={`${log.ttftAnswerMs}ms`}
+              testId="ttft-answer"
+              description="首个回答文本 token 的时延"
+            />
+          )}
+          <MetaRow
+            label="生成速度"
+            value={log.tokensPerSecond != null ? `${log.tokensPerSecond} tok/s` : 'n/a'}
+            testId="tokens-per-second"
+            description="decode 阶段吞吐：首 token 之后的 output tokens 生成速度（tokens/秒）。流式专属"
+          />
+          <MetaRow
             label="流式"
             value={log.metadata.stream ? '是' : '否'}
             description="是否使用 SSE 流式传输。开启后响应会逐步返回，适合长文本生成"
@@ -1408,6 +1465,7 @@ function MetaRow({
   valueClassName = '',
   valuePrefix,
   description,
+  testId,
 }: {
   label: string;
   value: string;
@@ -1415,6 +1473,7 @@ function MetaRow({
   valueClassName?: string;
   valuePrefix?: React.ReactNode;
   description?: string;
+  testId?: string;
 }) {
   return (
     <div className="flex justify-between items-center">
@@ -1440,6 +1499,7 @@ function MetaRow({
       </span>
       <span
         className={`text-text-primary flex items-center gap-1 ${mono ? 'font-mono text-sm' : ''} ${valueClassName}`}
+        data-testid={testId}
       >
         {valuePrefix}
         {value}

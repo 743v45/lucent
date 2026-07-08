@@ -139,6 +139,14 @@ export interface LogEntry {
   apiType?: EndpointType;
   clientType?: ClientType;
   duration: number;
+  /** 首个生成 token（思考或回答，先到者）相对请求到达的时延，ms；流式专属，缺省=无数据 */
+  ttftFirstTokenMs?: number;
+  /** 首个思考 token 相对请求到达的时延，ms；无思考则缺省 */
+  ttftThinkingMs?: number;
+  /** 首个回答 token 相对请求到达的时延，ms；无回答文本则缺省 */
+  ttftAnswerMs?: number;
+  /** 生成吞吐（decode 阶段，首 token 之后），tokens/秒；流式专属 */
+  tokensPerSecond?: number;
   tokenUsage?: {
     input_tokens: number;
     output_tokens: number;
@@ -213,6 +221,10 @@ export interface RawLogEntry {
     body: unknown;
   } | null;
   duration: number;
+  ttftFirstTokenMs?: number;
+  ttftThinkingMs?: number;
+  ttftAnswerMs?: number;
+  tokensPerSecond?: number;
   isStream: boolean;
   mainAgent: boolean;
   inProgress?: boolean;

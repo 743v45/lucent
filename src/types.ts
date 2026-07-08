@@ -12,6 +12,14 @@ export interface LogEntry {
   apiType?: EndpointType;
   clientType?: ClientType;
   duration: number;
+  /** 首个生成 token（思考/回答先到者）相对请求到达的时延，ms；流式专属 */
+  ttftFirstTokenMs?: number;
+  /** 首个思考 token 相对请求到达的时延，ms */
+  ttftThinkingMs?: number;
+  /** 首个回答 token 相对请求到达的时延，ms */
+  ttftAnswerMs?: number;
+  /** 生成吞吐（decode 阶段），tokens/秒；流式专属 */
+  tokensPerSecond?: number;
   tokenUsage?: TokenUsage;
   metadata: Metadata;
   kvCache?: KVCacheInfo;

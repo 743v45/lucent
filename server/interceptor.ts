@@ -19,6 +19,7 @@ import * as LogWriter from './services/log-writer.js';
 import {
   INTERNAL_HEADERS,
   PROXY_TRACE_HEADER,
+  REQ_START_HEADER,
   MAX_BODY_PARSE_FAILURE_LENGTH,
   MAX_RESPONSE_BODY_LENGTH,
 } from './constants.js';
@@ -103,6 +104,7 @@ function buildResponseBase(response: Response): {
 function handleStreamingResponse(
   response: Response,
   entry: RawLogEntry,
+  reqStartMs: number,
 ): Response {
   entry.response = {
     ...buildResponseBase(response),
@@ -113,7 +115,7 @@ function handleStreamingResponse(
     throw new Error('流式响应缺少 body');
   }
   const [clientBody, logBody] = response.body.tee();
-  const task = extractInBackground(logBody, entry,
+  const task = extractInBackground(logBody, entry, reqStartMs,
     (e) => LogWriter.writeLogEntry(e),
     () => {},
   );
@@ -143,6 +145,7 @@ function handleStreamingFailure(
 async function handleNormalResponse(
   response: Response,
   entry: RawLogEntry,
+  reqStartMs: number,
 ): Promise<void> {
   const cloned = response.clone();
   const text = await cloned.text();
@@ -159,6 +162,8 @@ async function handleNormalResponse(
     body,
   };
 
+  // duration 统一在「响应体完全消费」后定值（响应头到达 ≠ 完成）
+  entry.duration = Date.now() - reqStartMs;
   entry.tokenUsage = extractTokenUsage(body);
   LogWriter.writeLogEntry(entry);
 }
@@ -243,6 +248,12 @@ export function setupInterceptor(): void {
     const providerName = headers['x-lucent-provider'] || null;
     const endpointType = (headers['x-lucent-endpoint'] as EndpointType) || null;
 
+    // TTFT/Duration 时钟起点：优先 proxy.ts 注入的「客户端请求到达代理」时刻；
+    // 缺失/非法（如不走 proxy.ts 的直连 fetch）回退到本拦截器 fetch 起始时间。
+    const reqStartRaw = headers[REQ_START_HEADER];
+    const reqStartParsed = reqStartRaw !== undefined ? Number(reqStartRaw) : NaN;
+    const reqStartMs = Number.isFinite(reqStartParsed) ? reqStartParsed : startTime;
+
     // 只拦截代理转发请求或显式包含 anthropic/openai 的 URL
     if (!isProxyTrace && !urlStr.includes('anthropic') && !urlStr.includes('claude') && !urlStr.includes('openai')) {
       return originalFetch.call(this, url, options);
@@ -254,6 +265,7 @@ export function setupInterceptor(): void {
       delete h[PROXY_TRACE_HEADER];
       delete h['x-lucent-provider'];
       delete h['x-lucent-endpoint'];
+      delete h[REQ_START_HEADER];
     }
 
     // 构建请求日志
@@ -262,7 +274,8 @@ export function setupInterceptor(): void {
 
     try {
       const response = await originalFetch.call(this, url, options);
-      entry.duration = Date.now() - startTime;
+      // 临时 duration（响应头到达）；流式由收集器在流结束覆盖、非流式由 handleNormalResponse 在 body 读完后覆盖
+      entry.duration = Date.now() - reqStartMs;
 
       // 优先根据 response Content-Type 判断是否为流式响应，回退到 request.body.stream
       const respCT = (response.headers.get('content-type') || '').toLowerCase();
@@ -271,21 +284,21 @@ export function setupInterceptor(): void {
 
       if (isStreamResponse) {
         try {
-          return handleStreamingResponse(response, entry);
+          return handleStreamingResponse(response, entry, reqStartMs);
         } catch {
           handleStreamingFailure(response, entry);
           return response;
         }
       } else {
         try {
-          await handleNormalResponse(response, entry);
+          await handleNormalResponse(response, entry, reqStartMs);
         } catch {
           LogWriter.writeLogEntry(entry);
         }
         return response;
       }
     } catch (err) {
-      entry.duration = Date.now() - startTime;
+      entry.duration = Date.now() - reqStartMs;
       const errno = (err as NodeJS.ErrnoException)?.code;
       if (errno === 'EPIPE') {
         // 客户端断开，静默处理，返回空 Response（fetch 约定必须返回 Response）

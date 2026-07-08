@@ -5,7 +5,11 @@
  * 对应 TAE-49 审查点：
  *  - Request 折叠态/展开态 渲染 + 复制
  *  - Response SSE 原始视图 / 结构化(JSON)视图 渲染 + 复制
- *  - 切日志时内部 state（折叠态 / SSE 视图模式）是否重置（key={log.id} 重建子树）
+ *
+ * TAE-70 增项（合并重复展开按钮 + 展开态记忆）：
+ *  - 单按钮 toggle（「展开全部」/「收起全部」自洽，CollapseButton 已删）
+ *  - Body 全展开 / Headers 折叠 跨日志记忆（localStorage，切日志不重置）
+ *  - SSE 视图模式仍由 key={log.id} 重建子树重置（不在记忆范围）
  *
  * 复用 tests/e2e-helpers.ts 的 createMockUpstream（单一真相源）。
  * 截图落在 /tmp/lucent-detailpanel-shots/，作为验收证据。
@@ -242,38 +246,34 @@ try {
   check('Response JSON 展开全部：text Hello from JSON response. 可见', respJsonExpanded.includes('Hello from JSON response.'), `head=${respJsonExpanded.slice(0, 80)}`);
   await shot(page, '06-response-json.png');
 
-  // ============ 折叠/展开 状态机边界用例 ============
-  console.log('\n【折叠/展开 状态机边界】');
-  // 用例：默认折叠 → 点「展开」(CollapseButton, collapsed=false) → 点「展开全部」(expandAll=true)
-  //      → 点「收起全部」(expandAll=false)。期望收起全部后回到折叠态。
-  //      此用例暴露 expandAll 与 collapsed 双 state 解耦的潜在 desync。
+  // ============ 单按钮 toggle 用例（合并后 CollapseButton 已删）============
+  console.log('\n【单按钮 toggle（展开全部 / 收起全部）】');
+  // 合并前 RequestTab/ResponseTab 同时挂了「展开全部」(ExpandAllButton) 和「展开」(CollapseButton)
+  // 两个按钮接同一份状态，历史上双 boolean 会 desync；现已合并成单个 ExpandAllButton，
+  // 这里验证单按钮 toggle 自洽：折叠 → 展开 → 收起 回到折叠。
   await page.goto(`${VITE}/?log=${sseLogA.id}&tab=request`);
   await page.waitForTimeout(500);
   await page.getByTestId('tab-request').click().catch(() => { /* noop */ });
   await page.waitForTimeout(300);
   // 1) 默认折叠：content 不可见
   const b1 = (await page.getByTestId('request-body').textContent()) || '';
-  check('边界 step1 默认折叠：content 不可见', !b1.includes('What is latin for Ant?'), '');
-  // 2) 点「展开」(CollapseButton) → content 可见
-  await page.getByText('展开', { exact: true }).click().catch(() => { /* noop */ });
-  await page.waitForTimeout(300);
-  const b2 = (await page.getByTestId('request-body').textContent()) || '';
-  check('边界 step2 点「展开」：content 可见', b2.includes('What is latin for Ant?'), '');
-  // 3) 点「展开全部」→ content 可见
+  check('toggle step1 默认折叠：content 不可见', !b1.includes('What is latin for Ant?'), '');
+  // 2) 点「展开全部」→ content 可见
   await page.getByTestId('expand-all').click().catch(() => { /* noop */ });
   await page.waitForTimeout(300);
-  const b3 = (await page.getByTestId('request-body').textContent()) || '';
-  check('边界 step3 点「展开全部」：content 可见', b3.includes('What is latin for Ant?'), '');
-  // 4) 点「收起全部」→ 期望回到折叠态(content 不可见)
+  const b2 = (await page.getByTestId('request-body').textContent()) || '';
+  check('toggle step2 点「展开全部」：content 可见', b2.includes('What is latin for Ant?'), '');
+  // 3) 点「收起全部」→ 回到折叠态(content 不可见)
   await page.getByTestId('collapse-all').click().catch(() => { /* noop */ });
   await page.waitForTimeout(400);
-  const b4 = (await page.getByTestId('request-body').textContent()) || '';
-  const b4Sees = b4.includes('What is latin for Ant?');
-  check('边界 step4 点「收起全部」：应回到折叠态(content 不可见)', !b4Sees, `content可见=${b4Sees}（若 true=收起全部未生效，state desync bug）`);
+  const b3 = (await page.getByTestId('request-body').textContent()) || '';
+  const b3Sees = b3.includes('What is latin for Ant?');
+  check('toggle step3 点「收起全部」：应回到折叠态(content 不可见)', !b3Sees, `content可见=${b3Sees}`);
 
-  // ============ 切日志：内部 state 重置探针（客户端切换，不走 page.goto）============
-  console.log('\n【切日志 state 重置探针（客户端 sidebar 切换）】');
-  // 在 log A 上展开全部（Request），然后用 sidebar 点 log B（客户端，不重载），看折叠态是否重置
+  // ============ 切日志：Body 展开态持久化探针（客户端切换，不走 page.goto）============
+  console.log('\n【切日志 Body 展开态持久化探针（客户端 sidebar 切换）】');
+  // 记忆生效后：在 log A 上「展开全部」(Request)，sidebar 客户端切到 log B，
+  // 展开态应跨日志保留（content 仍可见），而不是被重置。
   await page.goto(`${VITE}/?log=${sseLogA.id}&tab=request`);
   await page.waitForTimeout(500);
   await page.getByTestId('expand-all').click().catch(() => { /* noop */ });
@@ -286,9 +286,33 @@ try {
   await page.waitForTimeout(600);
   const afterSwitchB = (await page.getByTestId('request-body').textContent()) || '';
   const bSeesContent = afterSwitchB.includes('What is latin for Ant?');
-  // 期望（按 DetailPanel 注释）：切日志后折叠态重置 → content 不可见
-  check('切日志后 Request 折叠态重置（content 应不可见）', !bSeesContent, `content可见=${bSeesContent}（若 true=折叠态未重置，bodyCollapsed/expandAll 持久化 bug）`);
+  // 期望（记忆生效）：切日志后 Body 展开态保留 → content 仍可见
+  check('切日志后 Request Body 展开态保留（持久化生效，content 仍可见）', bSeesContent, `content可见=${bSeesContent}（若 false=展开态被重置，持久化 bug）`);
   await shot(page, '07-after-switch-log.png');
+
+  // ============ Headers 折叠态持久化探针 ============
+  console.log('\n【Headers 折叠态持久化探针】');
+  // Headers 默认折叠（CollapsibleSection expanded=false，header key 文本不在 DOM）。
+  // 点开 request-headers → header 文本可见；客户端切到 log B，折叠态应保留（仍可见）。
+  await page.goto(`${VITE}/?log=${sseLogA.id}&tab=request`);
+  await page.waitForTimeout(500);
+  // 1) 默认折叠：header(anthropic-version) 不可见
+  const panelText0 = (await page.getByTestId('detail-panel').textContent()) || '';
+  const h0Sees = panelText0.includes('anthropic-version');
+  check('headers step1 默认折叠：header(anthropic-version) 不可见', !h0Sees, `visible=${h0Sees}`);
+  // 2) 点开 request-headers → header 文本可见
+  await page.getByTestId('request-headers').click().catch(() => { /* noop */ });
+  await page.waitForTimeout(300);
+  const panelText1 = (await page.getByTestId('detail-panel').textContent()) || '';
+  const h1Sees = panelText1.includes('anthropic-version');
+  check('headers step2 点开 Headers：header(anthropic-version) 可见', h1Sees, `visible=${h1Sees}`);
+  await shot(page, '08-headers-expanded.png');
+  // 3) 客户端切到 log B → 折叠态保留（header 仍可见）
+  await page.locator(`[data-testid="log-row"][data-logid="${sseLogB.id}"]`).click().catch(() => { /* noop */ });
+  await page.waitForTimeout(600);
+  const panelText2 = (await page.getByTestId('detail-panel').textContent()) || '';
+  const h2Sees = panelText2.includes('anthropic-version');
+  check('headers step3 切日志后 Headers 折叠态保留（header 仍可见）', h2Sees, `visible=${h2Sees}（若 false=Headers 折叠态被重置）`);
 
   // SSE 视图模式重置探针：在 log A response 切到「结构化」，客户端切到 log B response，应回到默认 raw
   await page.locator(`[data-testid="log-row"][data-logid="${sseLogA.id}"]`).click().catch(() => { /* noop */ });

@@ -85,7 +85,7 @@ function killGroup(proc: ChildProcess | null): void {
 
 export const test = base.extend<{ lucent: LucentStack }>({
   lucent: [
-    async ({}, use) => {
+    async ({ browser }, use) => {
       const configDir = mkdtempSync(join(tmpdir(), 'lucent-ui-e2e-'));
       const logDir = join(configDir, 'logs');
       // 随机端口（与 e2e-helpers.createTestEnv 同套路，30000–55000）
@@ -189,6 +189,22 @@ export const test = base.extend<{ lucent: LucentStack }>({
         await waitForStdout(backend, /Lucent|代理|listen|启动/i, 'backend');
         await waitForStdout(vite, /Local:|ready in/i, 'vite');
         await waitForPort(`${webBaseUrl}/`, 'vite');
+        // 预热：端口可连只代表 dev server 起来了，不代表模块图编完。首屏 page.goto 默认
+        // 15s 超时，而 vite 冷启要现做 optimizeDeps + 按需 transform 整张模块图（App、各组件、
+        // @lobehub/ui 一堆），负载一高就破 15s，排在前头的 spec 扛冷启成本时偶发挂 CI。
+        // 起栈时用真实浏览器把首屏完整加载一次——让 vite 把测试会请求到的整张图（含动态
+        // import / CSS / 深层组件）全 transform 完并缓存，spec 里的 goto 进来就是热的。
+        // （只 fetch 入口 + main 模块不够：传递依赖仍是冷的，实跑验证过。）
+        // 超时给到 90s：真·干净冷启（无 .vite 依赖预打包缓存）+ 系统高负载时首轮 vite
+        // 转换实测会逼近/超 60s，60s 边界偶发挂；放宽到 90s 留足预算，缓存一热就 3s 的事。
+        {
+          const warmup = await browser.newPage();
+          try {
+            await warmup.goto(webBaseUrl, { waitUntil: 'load', timeout: 90_000 });
+          } finally {
+            await warmup.close();
+          }
+        }
         await use(stack);
       } finally {
         killGroup(backend);
@@ -198,7 +214,7 @@ export const test = base.extend<{ lucent: LucentStack }>({
         try { rmSync(configDir, { recursive: true, force: true }); } catch { /* noop */ }
       }
     },
-    { scope: 'worker' },
+    { scope: 'worker', timeout: 180_000 },
   ],
 });
 

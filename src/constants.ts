@@ -41,6 +41,10 @@ export const URL_PARAM_TAB = 'tab';
 
 // ==================== localStorage ====================
 export const STORAGE_KEY_SIDEBAR_WIDTH = 'logListWidth';
+// 详情面板 Body 全展开态（{ request, response }，JSON）——记忆，切日志不重置
+export const STORAGE_KEY_DETAIL_BODY_EXPANDED = 'lucent.detailBodyExpanded';
+// 详情面板 Headers 折叠态（{ request, response }，JSON）——记忆，切日志不重置
+export const STORAGE_KEY_DETAIL_HEADERS_EXPANDED = 'lucent.detailHeadersExpanded';
 
 // ==================== URL 截断 ====================
 export const URL_SEARCH_PREVIEW_LENGTH = 20;

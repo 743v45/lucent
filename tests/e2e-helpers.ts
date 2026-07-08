@@ -257,6 +257,7 @@ export type OpenAIResponseMode =
   | 'chat-tool-calls'    // 带 tool_calls 的 SSE 流
   | 'responses-sse'      // Responses API SSE 流
   | 'responses-json'     // 非流式 Responses
+  | 'empty'              // 200 + 空 body（UI 边界用例：空 response body 不应崩 detail 面板）
   | 'error-400'
   | 'error-401'
   | 'error-429'
@@ -363,6 +364,7 @@ export async function createMockUpstream(opts?: { name?: string; format?: MockFo
         case 'chat-tool-calls':   respondSSE(res, openaiChatToolCallsSSEEvents()); break;
         case 'responses-sse':     respondSSE(res, openaiResponsesSSEEvents()); break;
         case 'responses-json':    respondJSON(res, 200, openaiResponsesJsonBody()); break;
+        case 'empty':             res.writeHead(200, { 'content-type': 'application/json', 'content-length': '0' }); res.end(); break;
         case 'error-400':         respondJSON(res, 400, openaiErrorByStatus(400, 'invalid_request_error', 'Invalid model')); break;
         case 'error-401':         respondJSON(res, 401, openaiErrorByStatus(401, 'invalid_api_key', 'Incorrect API key')); break;
         case 'error-429':         respondJSON(res, 429, openaiErrorByStatus(429, 'rate_limit_exceeded', 'Rate limit exceeded')); break;

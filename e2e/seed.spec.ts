@@ -35,6 +35,8 @@ test.describe('种子 spec：请求穿越代理 → Web UI 出日志 → 点开�
     const logId = await lucent.latestLogId('openai', 'openai-chat');
 
     // ② 打开 Web UI，列表出现 log-row
+    // 共享栈（workers:1 + worker-scoped fixture）下日志会在兄弟 spec 间累积，
+    // 列表常多于一行——这里只断言「至少一行可见」，具体点哪行靠下面的 data-logid。
     await page.goto(lucent.webBaseUrl);
     await expect(page.getByTestId('log-row').first()).toBeVisible();
     const rowCount = await page.getByTestId('log-row').count();
