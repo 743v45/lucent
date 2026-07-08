@@ -75,6 +75,8 @@ export const ANTHROPIC_API_VERSION = '2023-06-01';
 // ==================== 自定义请求头 ====================
 /** 标记请求经过本代理的 trace header，用于请求追踪 */
 export const PROXY_TRACE_HEADER = 'x-lucent-trace';
+/** 客户端请求到达代理的时刻（epoch ms 字符串），用作 TTFT/Duration 的时钟起点 */
+export const REQ_START_HEADER = 'x-lucent-req-start-ms';
 /** 内部组件间通信使用的请求头，不透传到上游 */
 export const INTERNAL_HEADERS = ['x-lucent-internal', 'x-cc-viewer-internal'] as const;
 

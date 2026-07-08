@@ -120,6 +120,10 @@ export function normalizeLogEntry(raw: any): LogEntry {
     apiType: raw.apiType,
     clientType: raw.clientType || 'unknown',
     duration: raw.duration || 0,
+    ttftFirstTokenMs: raw.ttftFirstTokenMs,
+    ttftThinkingMs: raw.ttftThinkingMs,
+    ttftAnswerMs: raw.ttftAnswerMs,
+    tokensPerSecond: raw.tokensPerSecond,
     metadata: {
       model: body.model || 'unknown',
       provider,

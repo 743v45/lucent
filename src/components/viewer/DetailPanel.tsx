@@ -1333,6 +1333,34 @@ function MetaTab({ log }: MetaTabProps): JSX.Element {
             description="从请求发出到收到完整响应的总耗时（含网络传输）"
           />
           <MetaRow
+            label="首 token 时延"
+            value={log.ttftFirstTokenMs != null ? `${log.ttftFirstTokenMs}ms` : 'n/a'}
+            testId="ttft-first-token"
+            description="TTFT：客户端请求到达代理 → 首个生成 token（思考/回答先到者）的时延。反映 prefill 等待，是 reasoning 模型的大头延迟。流式专属，非流式显示 n/a"
+          />
+          {log.ttftThinkingMs != null && (
+            <MetaRow
+              label="思考首 token"
+              value={`${log.ttftThinkingMs}ms`}
+              testId="ttft-thinking"
+              description="首个思考（reasoning）token 的时延；无思考流则不显示"
+            />
+          )}
+          {log.ttftAnswerMs != null && (
+            <MetaRow
+              label="回答首 token"
+              value={`${log.ttftAnswerMs}ms`}
+              testId="ttft-answer"
+              description="首个回答文本 token 的时延"
+            />
+          )}
+          <MetaRow
+            label="生成速度"
+            value={log.tokensPerSecond != null ? `${log.tokensPerSecond} tok/s` : 'n/a'}
+            testId="tokens-per-second"
+            description="decode 阶段吞吐：首 token 之后的 output tokens 生成速度（tokens/秒）。流式专属"
+          />
+          <MetaRow
             label="流式"
             value={log.metadata.stream ? '是' : '否'}
             description="是否使用 SSE 流式传输。开启后响应会逐步返回，适合长文本生成"
@@ -1398,6 +1426,7 @@ function MetaRow({
   valueClassName = '',
   valuePrefix,
   description,
+  testId,
 }: {
   label: string;
   value: string;
@@ -1405,6 +1434,7 @@ function MetaRow({
   valueClassName?: string;
   valuePrefix?: React.ReactNode;
   description?: string;
+  testId?: string;
 }) {
   return (
     <div className="flex justify-between items-center">
@@ -1430,6 +1460,7 @@ function MetaRow({
       </span>
       <span
         className={`text-text-primary flex items-center gap-1 ${mono ? 'font-mono text-sm' : ''} ${valueClassName}`}
+        data-testid={testId}
       >
         {valuePrefix}
         {value}

@@ -18,7 +18,7 @@ const dbgSse = createDebug('lucent:interceptor:sse');
 // ==================== SSE 提取函数（from shared 单源） ====================
 // extractFromEvent / extractFromSSELines / extractedToResponseBody 统一在
 // shared/sse-events.ts，前后端共用，避免两份逻辑漂移。
-import { extractFromSSELines } from '../shared/sse-events.js';
+import { extractFromSSELines, classifySSEEventTokenBucket } from '../shared/sse-events.js';
 export {
   extractFromEvent,
   extractFromSSELines,
@@ -74,9 +74,38 @@ const SSE_COLLECT_MAX_BYTES = 2 * 1024 * 1024; // 2MB
  * 带超时保护：如果上游在 SSE_COLLECT_TIMEOUT_MS 内未关闭流，
  * 写入已收集的部分数据并标记 truncated=true
  */
+/**
+ * 用首 token 时刻 + reqStartMs 派生 TTFT 字段、终结流式 duration、算 tokens/s，写到 entry 上。
+ * 在写日志（onLogEntry）前调用。
+ */
+function finalizeStreamTiming(
+  entry: RawLogEntry,
+  firstThinkingAt: number | undefined,
+  firstAnswerAt: number | undefined,
+  reqStartMs: number,
+): void {
+  const candidates = [firstThinkingAt, firstAnswerAt].filter((x): x is number => x !== undefined);
+  const firstTokenAt = candidates.length > 0 ? Math.min(...candidates) : undefined;
+
+  if (firstTokenAt !== undefined) entry.ttftFirstTokenMs = firstTokenAt - reqStartMs;
+  if (firstThinkingAt !== undefined) entry.ttftThinkingMs = firstThinkingAt - reqStartMs;
+  if (firstAnswerAt !== undefined) entry.ttftAnswerMs = firstAnswerAt - reqStartMs;
+
+  // 流式 duration：请求到达 → 流消费结束（覆盖拦截器在响应头到达时设的临时值）
+  entry.duration = Date.now() - reqStartMs;
+
+  // tokens/s：decode 阶段吞吐（首 token 之后的生成速度），流式专属
+  const outTokens = entry.tokenUsage?.output_tokens ?? 0;
+  if (entry.ttftFirstTokenMs !== undefined && entry.duration > entry.ttftFirstTokenMs && outTokens > 0) {
+    const tps = outTokens / ((entry.duration - entry.ttftFirstTokenMs) / 1000);
+    entry.tokensPerSecond = Math.round(tps * 10) / 10;
+  }
+}
+
 export async function collectSSELinesInBackground(
   body: ReadableStream<Uint8Array>,
   entry: RawLogEntry,
+  reqStartMs: number,
   onLogEntry: (entry: RawLogEntry) => void,
   onDeltaCommit: () => void,
 ): Promise<void> {
@@ -84,6 +113,9 @@ export async function collectSSELinesInBackground(
   let totalBytes = 0;
   let truncated = false;
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  // TTFT：首个思考/回答内容 delta 到达的墙钟时刻（两桶各记一次）
+  let firstThinkingAt: number | undefined;
+  let firstAnswerAt: number | undefined;
 
   try {
     const eventStream = body
@@ -107,10 +139,19 @@ export async function collectSSELinesInBackground(
           truncated = true;
           return 'limit' as const;
         }
-        lines.push({
-          event: value.event || '',
-          data: value.data || '',
-        });
+        const ev = value.event || '';
+        const dat = value.data || '';
+        lines.push({ event: ev, data: dat });
+        // TTFT：首个思考/回答内容 delta 到达时刻（两桶都拿到后停止分类省 CPU）
+        if (firstThinkingAt === undefined || firstAnswerAt === undefined) {
+          let parsed: any;
+          try { parsed = JSON.parse(dat); } catch { parsed = null; }
+          if (parsed) {
+            const cls = classifySSEEventTokenBucket(ev, parsed, entry.endpointType ?? null);
+            if (cls.thinking && firstThinkingAt === undefined) firstThinkingAt = Date.now();
+            if (cls.answer && firstAnswerAt === undefined) firstAnswerAt = Date.now();
+          }
+        }
       }
     })();
 
@@ -153,6 +194,9 @@ export async function collectSSELinesInBackground(
       };
     }
 
+    // 派生 TTFT / 终结流式 duration / tokens/s（须在 tokenUsage 设好后、写日志前）
+    finalizeStreamTiming(entry, firstThinkingAt, firstAnswerAt, reqStartMs);
+
     onLogEntry(entry);
     onDeltaCommit();
 
@@ -171,6 +215,7 @@ export async function collectSSELinesInBackground(
         ...(lines.length > 0 ? { truncated: true } : {}),
       },
     };
+    finalizeStreamTiming(entry, firstThinkingAt, firstAnswerAt, reqStartMs);
     onLogEntry(entry);
     onDeltaCommit();
   } finally {

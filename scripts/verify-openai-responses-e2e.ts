@@ -224,6 +224,13 @@ try {
     sseLog?.body?.input === 'What is latin for Ant?' && (sseLog?.response?.body?.type === 'sse_raw' || Array.isArray(sseLog?.response?.body?.lines)),
     `input=${sseLog?.body?.input} resp.type=${sseLog?.response?.body?.type}`);
 
+  // ③b TTFT 时延（stream-timing）：0 < 首 token < duration，且 tokens/s > 0
+  check('SSE-③b TTFT: 0<首token<duration 且 tokens/s>0',
+    typeof sseLog?.ttftFirstTokenMs === 'number' && sseLog.ttftFirstTokenMs > 0
+      && sseLog.ttftFirstTokenMs < sseLog.duration
+      && typeof sseLog?.tokensPerSecond === 'number' && sseLog.tokensPerSecond > 0,
+    `ttftFirst=${sseLog?.ttftFirstTokenMs} thinking=${sseLog?.ttftThinkingMs} answer=${sseLog?.ttftAnswerMs} tps=${sseLog?.tokensPerSecond} dur=${sseLog?.duration}`);
+
   // ④ /api/logs 接口
   const apiRes1 = await fetch(`${WEB}/api/logs?limit=50`);
   const apiJson1 = await apiRes1.json();
