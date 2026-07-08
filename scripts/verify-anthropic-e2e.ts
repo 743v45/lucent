@@ -244,7 +244,8 @@ try {
 
     // 列表 log-row 可见
     await page.goto(`http://127.0.0.1:${VITE_PORT}/`);
-    await page.waitForTimeout(500);
+    // 等列表渲染完成再计数，避免 goto 后日志未拉取完的竞态导致 rows=0 抖动
+    await page.getByTestId('log-row').first().waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
     const rowCount = await page.getByTestId('log-row').count();
     check('SSE-⑤c 日志列表渲染 log-row',
       rowCount >= 1, `rows=${rowCount}`);
@@ -293,7 +294,8 @@ try {
     const browser = await chromium.launch();
     const page = await browser.newPage();
     await page.goto(`http://127.0.0.1:${VITE_PORT}/?log=${jsonLog.id}&tab=response`);
-    await page.waitForTimeout(500);
+    // 等 Response tab 渲染完，避免 visible=false 抖动
+    await page.getByTestId('response-body').waitFor({ state: 'visible', timeout: 5000 }).catch(() => {});
 
     const respBodyVisible = await page.getByTestId('response-body').isVisible().catch(() => false);
     const respText = respBodyVisible ? (await page.getByTestId('response-body').textContent()) : '';
