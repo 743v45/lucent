@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
+import { message } from 'antd';
 import { LogListPanel } from './components/dashboard/LogListPanel';
 import { DetailPanel } from './components/viewer/DetailPanel';
 import { SettingsContext } from './contexts/SettingsContext';
@@ -6,7 +7,7 @@ import { SettingsModal } from './components/settings/SettingsModal';
 import { BodyRewriteModal } from './components/settings/BodyRewriteModal';
 import { UsageGuide } from './components/common/UsageGuide';
 import { useLogs } from './hooks/useLogs';
-import { ArrowPathIcon, Cog6ToothIcon, InformationCircleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
+import { ArrowPathIcon, Cog6ToothIcon, EyeSlashIcon, InformationCircleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import type { TabType, Provider } from './types';
 import {
   URL_PARAM_LOG_ID,
@@ -18,7 +19,7 @@ import {
   DEFAULT_THEME,
   DEFAULT_ACTIVE_TAB,
 } from './constants';
-import { getProxyStatus } from './utils/api';
+import { getProxyStatus, setLogRecording } from './utils/api';
 
 const PROVIDER_FILTER_STORAGE_KEY = 'lucent.providerFilter';
 const PROVIDER_FILTER_ALL = 'all';
@@ -94,16 +95,24 @@ function App(): JSX.Element {
     localStorage.setItem(ENDPOINT_FILTER_STORAGE_KEY, type);
   }, []);
 
-  // 从代理状态拉取 providers 列表（用于筛选下拉）
+  // 从代理状态拉取 providers 列表（用于筛选下拉）+ 记录开关状态
   const [providers, setProviders] = useState<Provider[]>([]);
+  // 是否记录日志（默认 true=记录；false=「只过路」只转发不落库）
+  const [logRecording, setLogRecordingState] = useState<boolean>(true);
+  const [logRecordingEnvLocked, setLogRecordingEnvLocked] = useState<boolean>(false);
+  const [recordingBusy, setRecordingBusy] = useState(false);
   useEffect(() => {
     let cancelled = false;
     const loadProviders = async () => {
       try {
         const status = await getProxyStatus();
-        const list = (status as { providers?: Provider[] }).providers;
-        if (!cancelled && Array.isArray(list)) {
-          setProviders(list);
+        if (!cancelled) {
+          const list = (status as { providers?: Provider[] }).providers;
+          if (Array.isArray(list)) {
+            setProviders(list);
+          }
+          setLogRecordingState(status.logRecording ?? true);
+          setLogRecordingEnvLocked(status.logRecordingEnvLocked ?? false);
         }
       } catch {
         // 静默失败：筛选下拉为空即不显示
@@ -114,6 +123,32 @@ function App(): JSX.Element {
       cancelled = true;
     };
   }, []);
+
+  // 切换「记录日志 / 只过路」（无二次确认；env 锁定时不可切并提示）
+  const handleToggleRecording = useCallback(async () => {
+    if (logRecordingEnvLocked) {
+      message.warning('记录开关被环境变量 LUCENT_LOG_RECORDING 锁定，无法在此切换');
+      return;
+    }
+    const next = !logRecording;
+    setRecordingBusy(true);
+    try {
+      const r = await setLogRecording(next);
+      setLogRecordingState(r.recording);
+      setLogRecordingEnvLocked(r.envLocked);
+      if (r.envLocked) {
+        message.warning('记录开关被环境变量 LUCENT_LOG_RECORDING 锁定，未生效');
+      } else if (r.recording) {
+        message.success('已恢复记录日志');
+      } else {
+        message.success('已切到只过路：转发照旧，不再记录日志');
+      }
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '切换失败');
+    } finally {
+      setRecordingBusy(false);
+    }
+  }, [logRecording, logRecordingEnvLocked]);
 
   const selectedLog = logs.find(log => log.id === selectedLogId);
 
@@ -191,6 +226,26 @@ function App(): JSX.Element {
               title="刷新"
             >
               <ArrowPathIcon className="w-[18px] h-[18px]" />
+            </button>
+            {/* 记录开关：两态 toggle（EyeSlashIcon + 高亮）。高亮=「只过路」激活（不记录日志） */}
+            <button
+              data-testid="recording-toggle"
+              className={`px-2 py-1.5 rounded-md text-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                logRecording
+                  ? 'text-text-tertiary hover:text-text-primary hover:bg-bg-active'
+                  : 'text-brand-accent bg-bg-active'
+              }`}
+              onClick={handleToggleRecording}
+              disabled={logRecordingEnvLocked || recordingBusy}
+              title={
+                logRecordingEnvLocked
+                  ? '记录开关被环境变量 LUCENT_LOG_RECORDING 锁定'
+                  : logRecording
+                    ? '记录日志中（点击切到只过路）'
+                    : '只过路（不记录日志），点击恢复记录'
+              }
+            >
+              <EyeSlashIcon className="w-[18px] h-[18px]" />
             </button>
             <button
               className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"

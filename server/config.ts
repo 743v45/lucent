@@ -30,6 +30,11 @@ export interface ProxyConfig {
   logRetentionDays?: number;
   /** 可选：全局请求 body 重写规则（opt-in，缺省视为无规则，代理保持透明） */
   bodyRewrites?: BodyRewriteRule[];
+  /**
+   * 是否记录日志（true=落库，false=「只过路」只转发不记录）。
+   * 缺省视为 true（保持现状全量记录）。env LUCENT_LOG_RECORDING 覆盖。
+   */
+  logRecording?: boolean;
 }
 
 /**
@@ -45,6 +50,8 @@ export interface ResolvedConfig {
   providers: Provider[];
   /** SQLite 数据库路径（env LUCENT_DB_PATH 覆盖） */
   dbPath: string;
+  /** 是否记录日志（env LUCENT_LOG_RECORDING 覆盖，缺省 true） */
+  logRecording: boolean;
 }
 
 // ==================== 默认配置 ====================
@@ -81,6 +88,8 @@ function buildDefaultConfig(): ProxyConfig {
         replacement: '',
       },
     ],
+    // 默认全量记录日志（现状）；关掉即「只过路」。env LUCENT_LOG_RECORDING 覆盖。
+    logRecording: true,
   };
 }
 
@@ -249,6 +258,9 @@ function validateConfig(cfg: unknown): asserts cfg is ProxyConfig {
   if (c.bodyRewrites !== undefined) {
     validateBodyRewrites(c.bodyRewrites);
   }
+  if (c.logRecording !== undefined && typeof c.logRecording !== 'boolean') {
+    throw new Error('config.logRecording must be a boolean');
+  }
 }
 
 // ==================== 核心 API ====================
@@ -264,6 +276,18 @@ function parseEnvNumber(name: string, fallback: number): number {
 }
 
 /**
+ * 解析环境变量中的布尔值：未设置返回 fallback；
+ * 设置时 'false'/'0'/'no'/'off'/'」（忽略大小写与空白）为 false，其余为 true。
+ */
+function parseEnvBool(name: string, fallback: boolean): boolean {
+  const val = process.env[name];
+  if (val === undefined) return fallback;
+  const s = val.trim().toLowerCase();
+  if (s === 'false' || s === '0' || s === 'no' || s === 'off' || s === '') return false;
+  return true;
+}
+
+/**
  * 解析完整配置：环境变量 > 配置文件 > 默认值
  */
 export function resolveEffectiveConfig(): ResolvedConfig {
@@ -275,8 +299,36 @@ export function resolveEffectiveConfig(): ResolvedConfig {
     logDir:              process.env.LUCENT_LOG_DIR           || raw.logDir             || LOG_DIR,
     dbPath:              process.env.LUCENT_DB_PATH            || raw.dbPath             || DB_PATH,
     logRetentionDays:    parseEnvNumber('LUCENT_LOG_RETENTION_DAYS', raw.logRetentionDays ?? LOG_RETENTION_DAYS),
+    logRecording:        parseEnvBool('LUCENT_LOG_RECORDING',  raw.logRecording ?? true),
     providers:           raw.providers,
   };
+}
+
+/**
+ * 运行时读取「是否记录日志」的有效值（env 覆盖 > 配置文件 > 默认 true）。
+ * 每次实时解析，反映 toggle 改动——热路径（writeLogEntry）门控用。
+ */
+export function isLogRecording(): boolean {
+  return parseEnvBool('LUCENT_LOG_RECORDING', getConfig().logRecording ?? true);
+}
+
+/**
+ * 环境变量 LUCENT_LOG_RECORDING 是否已设置（设置时 toggle 写入的 config 值不立即生效）。
+ */
+export function logRecordingEnvOverridden(): boolean {
+  return process.env.LUCENT_LOG_RECORDING !== undefined;
+}
+
+/**
+ * 设置「是否记录日志」并持久化到 config.json。
+ * env 锁定时：config.logRecording 仍写入（保留用户意图，env 去掉后生效），
+ * 但返回的 recording 是 env 决定的有效值，envLocked=true 供调用方提示用户。
+ */
+export function setLogRecording(value: boolean): { recording: boolean; envLocked: boolean } {
+  const config = getConfig();
+  config.logRecording = value;
+  saveConfig(config);
+  return { recording: isLogRecording(), envLocked: logRecordingEnvOverridden() };
 }
 
 /**

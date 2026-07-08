@@ -11,6 +11,7 @@
 import { insertLog, deleteOldLogs, vacuum } from './db.js';
 import { initDb, getDb } from './db-instance.js';
 import { invalidateCache as invalidateReaderCache } from './log-reader.js';
+import { isLogRecording } from '../config.js';
 import type { RawLogEntry } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
@@ -80,6 +81,12 @@ function enqueue(task: () => void): void {
  * SQLite 路径直接不写——DB 只存完整条目，读路径无需再过滤，也不浪费行。
  */
 export function writeLogEntry(entry: RawLogEntry): void {
+  // 记录开关门控（咽喉点，盖住 interceptor 全部 5 个调用点 + 未来新增）：
+  // 「只过路」(logRecording=false) 时短路，不写 SQLite；转发链路不受影响。
+  if (!isLogRecording()) {
+    dbg('logRecording=false（只过路），跳过写入 id=%s', entry.id);
+    return;
+  }
   if (entry.response == null) {
     dbg('跳过无响应条目 id=%s（不写入）', entry.id);
     return;

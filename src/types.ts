@@ -177,6 +177,10 @@ export interface ProxyStatus {
   proxyPort: number;
   logFile: string | null;
   providers?: Provider[];
+  /** 是否记录日志（有效值，env LUCENT_LOG_RECORDING 覆盖时由 env 决定） */
+  logRecording?: boolean;
+  /** 记录开关是否被环境变量 LUCENT_LOG_RECORDING 锁定（锁定时 UI 不可切） */
+  logRecordingEnvLocked?: boolean;
 }
 
 // ==================== UI 状态 ====================
