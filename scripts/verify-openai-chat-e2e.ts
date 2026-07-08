@@ -241,6 +241,15 @@ try {
     check('SSE-⑤c 日志列表渲染 log-row',
       rowCount >= 1, `rows=${rowCount}`);
 
+    // ⑤d Meta tab 展示 TTFT 时延（DOM 文本值非 n/a —— 防前端漏接字段）
+    await page.goto(`http://127.0.0.1:${VITE_PORT}/?log=${sseLog.id}`);
+    await page.getByTestId('tab-meta').click();
+    await page.getByTestId('ttft-first-token').waitFor({ state: 'visible', timeout: 5000 });
+    const ttftText = (await page.getByTestId('ttft-first-token').textContent()) ?? '';
+    check('SSE-⑤d Meta tab 展示首 token 时延(数值,非 n/a)',
+      /\d+ms/.test(ttftText) && !ttftText.includes('n/a'),
+      `ttft-first-token=${ttftText}`);
+
     await browser.close();
   }
 
