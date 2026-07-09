@@ -296,3 +296,57 @@ scripts. A spec locks them behind real dropdown clicks and view switches.
 - **WHEN** the spec stalls the `/api/logs` fetches (route hold) and loads the page
 - **THEN** the `log-loading` state MUST be visible while the fetch is pending
 - **AND** after releasing the fetch, rows MUST appear and the loading state MUST disappear
+
+### Requirement: A dedicated detail-panel spec MUST cover the KV-Cache, Context, and Meta tabs
+
+Beyond Request/Response, there MUST be a spec (`e2e/detail-kvcache-context-meta.spec.ts`)
+that asserts the KV-Cache, Context, and Meta detail tabs render their content and that switching
+among the three tabs does not cross-contaminate them, reusing the shared stack fixture (no
+reinvented isolation stack, no hand-rolled SSE/JSON fixtures). The KV-Cache hit state is produced
+via the shared mock upstream's Anthropic `sse-hit` mode (a response whose `usage` carries
+`cache_read_input_tokens`) together with a request body carrying `cache_control` markers — this is
+the only path that surfaces a populated KV-Cache view, because OpenAI auto-cache reads
+(`prompt_tokens_details.cached_tokens`) are dropped during log normalization and render as the
+empty state; the empty KV-Cache state is covered by an OpenAI `chat-sse` request. The Context tab
+is exercised with a multi-turn request carrying a system message and tools so the stats card, the
+conversation/system/tools groups, and item selection all render. The Meta tab asserts the real
+logged metadata (model, endpoint, duration, stream, token usage).
+
+**Rationale:** KV-Cache / Context / Meta are the detail views most likely to regress on data
+shape — a cache-bearing response, a multi-turn body, or a metadata field change can blank a tab or
+crash the panel. The seed and the Request/Response spec do not touch these three tabs at all.
+Asserting the real server-computed `kvCache`/`context`/metadata (not fabricated shapes) is what
+catches those regressions; the Anthropic hit path is used precisely because it is the faithful
+non-empty path, and the OpenAI gap is documented rather than papered over.
+
+#### Scenario: KV-Cache hit renders the overview and block-level cache entries
+- **GIVEN** the stack routes an `anthropic-messages` provider at a mock upstream in `sse-hit` mode, and the request body carries `cache_control` markers on system / message / tool blocks
+- **WHEN** the spec sends `POST /anthropic/v1/messages` through the proxy and opens the detail's KV-Cache tab
+- **THEN** the overview MUST render the hit rate as a percentage (e.g. `80.0%`) with the `命中率` label
+- **AND** MUST show the explicit-cache mode badge (`显式缓存`)
+- **AND** MUST render at least one block group (e.g. `系统提示词`) whose blocks carry the `命中` label
+
+#### Scenario: KV-Cache empty state for a request without cache
+- **GIVEN** the mock upstream returns a `chat-sse` stream whose usage has no cached tokens
+- **WHEN** the spec opens that log's detail and switches to the KV-Cache tab
+- **THEN** the hit rate MUST show the no-value placeholder (`—`)
+- **AND** the empty-state copy MUST be visible (e.g. `支持缓存但本次未命中`)
+
+#### Scenario: Context tab renders entries, stats, and selection detail
+- **GIVEN** the mock upstream returns a `chat-sse` stream for a multi-turn request with a system message and tools
+- **WHEN** the spec opens the detail's Context tab
+- **THEN** `context-item` entries MUST render (conversation history, system prompt, tools)
+- **AND** the stats card and group titles MUST be visible (e.g. `总消息`, `对话历史`, `系统提示词`, `可用工具`)
+- **AND** clicking a tool `context-item` MUST surface that tool's description in the right pane
+
+#### Scenario: Meta tab renders the logged metadata
+- **GIVEN** the mock upstream returns a `chat-sse` stream
+- **WHEN** the spec opens the detail's Meta tab
+- **THEN** the panel MUST render the real logged metadata: model, endpoint type, duration, stream flag, and token usage (e.g. contain `gpt-4o`, `openai-chat`, `ms`, `流式`, `Input Tokens`)
+
+#### Scenario: Switching the three tabs does not cross-contaminate
+- **GIVEN** a log whose KV-Cache, Context, and Meta tabs all have content
+- **WHEN** the spec cycles KV-Cache → Context → Meta
+- **THEN** each tab MUST render only its own content (KV-Cache `命中率`, Context `context-item`, Meta `Agent 类型`)
+- **AND** the other two tabs' distinctive markers MUST NOT be present on the active tab
+

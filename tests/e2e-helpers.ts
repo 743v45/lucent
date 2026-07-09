@@ -242,6 +242,7 @@ export interface CapturedRequest {
 /** mock 上游响应模式（Anthropic 格式） */
 export type AnthropicResponseMode =
   | 'sse-text'          // 标准文本 SSE 流
+  | 'sse-hit'           // 文本 SSE 流 + cache_read 命中（usage.cache_read_input_tokens>0，造 KV-Cache 命中态，供 detail KV-Cache tab 断言）
   | 'sse-tool-use'      // Tool Use SSE 流
   | 'sse-thinking'      // 思考 + 文本 SSE 流
   | 'json'              // 非流式 JSON 响应
@@ -373,6 +374,7 @@ export async function createMockUpstream(opts?: { name?: string; format?: MockFo
     } else {
       switch (mode as AnthropicResponseMode) {
         case 'sse-text':       respondSSE(res, anthropicTextSSEEvents()); break;
+        case 'sse-hit':        respondSSE(res, anthropicHitSSEEvents()); break;
         case 'sse-tool-use':   respondSSE(res, anthropicToolUseSSEEvents()); break;
         case 'sse-thinking':   respondSSE(res, anthropicThinkingSSEEvents()); break;
         case 'json':           respondJSON(res, 200, anthropicJsonResponse()); break;
@@ -480,6 +482,55 @@ function anthropicTextSSEEvents(): string[] {
       type: 'message_delta',
       delta: { stop_reason: 'end_turn', stop_sequence: null },
       usage: { output_tokens: 15 },
+    }) + '\n\n',
+    'event: message_stop\ndata: ' + JSON.stringify({
+      type: 'message_stop',
+    }) + '\n\n',
+  ];
+}
+
+/** 文本 SSE 流 + KV-Cache 命中：与 sse-text 同构，仅 message_start.usage 改成命中态——
+ * cache_read_input_tokens=400 / input_tokens=100 → 显式缓存口径下命中率 400/(100+400)=80%、
+ * status=hit、块标「命中」（供 detail 面板 KV-Cache tab 断言命中态渲染：80.0% 大数字 +
+ * 堆叠条 + 命中/新建/未缓存数字 + 块级「命中」标签）。
+ *
+ * 注：块级内容（system/messages/tools 的 cache_control 标记）由请求 body 决定，不由本
+ * fixture 决定——spec 在请求体里带 cache_control 标记，命中 token 数由此 fixture 的 usage 给。 */
+function anthropicHitSSEEvents(): string[] {
+  return [
+    'event: message_start\ndata: ' + JSON.stringify({
+      type: 'message_start',
+      message: {
+        id: 'msg_e2e_hit', type: 'message', role: 'assistant',
+        model: 'claude-sonnet-4-20250514', content: [],
+        stop_reason: null, stop_sequence: null,
+        usage: {
+          input_tokens: 100, output_tokens: 0,
+          cache_creation_input_tokens: 0,
+          cache_read_input_tokens: 400,
+          cache_creation: { ephemeral_1h_input_tokens: 0, ephemeral_5m_input_tokens: 0 },
+          output_tokens_details: { thinking_tokens: 0 },
+          server_tool_use: { web_fetch_requests: 0, web_search_requests: 0 },
+          service_tier: 'standard',
+          inference_geo: 'us-east-1',
+        },
+      },
+    }) + '\n\n',
+    'event: content_block_start\ndata: ' + JSON.stringify({
+      type: 'content_block_start', index: 0,
+      content_block: { type: 'text', text: '' },
+    }) + '\n\n',
+    'event: content_block_delta\ndata: ' + JSON.stringify({
+      type: 'content_block_delta', index: 0,
+      delta: { type: 'text_delta', text: 'Cached response.' },
+    }) + '\n\n',
+    'event: content_block_stop\ndata: ' + JSON.stringify({
+      type: 'content_block_stop', index: 0,
+    }) + '\n\n',
+    'event: message_delta\ndata: ' + JSON.stringify({
+      type: 'message_delta',
+      delta: { stop_reason: 'end_turn', stop_sequence: null },
+      usage: { output_tokens: 12 },
     }) + '\n\n',
     'event: message_stop\ndata: ' + JSON.stringify({
       type: 'message_stop',

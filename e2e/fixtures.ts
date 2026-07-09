@@ -27,6 +27,13 @@ export interface LucentStack {
   proxyBaseUrl: string;
   /** mock 上游：spec 里 setMode / reset */
   upstream: MockUpstream;
+  /**
+   * mock 上游（Anthropic 协议）：供需要显式缓存 / Context 多分组的 spec 用。
+   * 配置里另挂了一个 name='anthropic' 的供应商，anthropic-messages 端点指向它——
+   * spec 经 `postThroughProxy('/anthropic/v1/messages', ...)` 发请求即落到这条上游。
+   * 不需要 Anthropic 数据的 spec 不碰它，互不影响。
+   */
+  upstreamAnthropic: MockUpstream;
   /** POST JSON 请求穿过代理，返回 { status, body } */
   postThroughProxy(path: string, headers: Record<string, string>, body: unknown): Promise<{ status: number; body: string }>;
   /** 经后端 /api/logs 读已落库的条目（SQLite 后端，不再读 JSONL） */
@@ -99,6 +106,12 @@ export const test = base.extend<{ lucent: LucentStack }>({
       // mock 上游：只配 openai-chat，format='openai' 用 chat-sse/chat-json 等 mode
       const upstream = await createMockUpstream({ name: 'ui-e2e', format: 'openai' });
       const upstreamBase = `http://127.0.0.1:${upstream.port}/v1`;
+      // mock 上游（Anthropic 协议）：给需要显式 KV-Cache / 富 Context 的 spec 用。
+      // OpenAI 自动缓存的 cache 命中走不进 KV-Cache tab（buildContextFromRequest 归一化时
+      // 丢 prompt_tokens_details），只有 Anthropic 显式缓存（body 带 cache_control + usage
+      // 带 cache_read/creation）能命中 detail 面板的块级渲染，所以单独挂一条上游。
+      const upstreamAnthropic = await createMockUpstream({ name: 'ui-e2e-anthropic', format: 'anthropic' });
+      const upstreamAnthropicBase = `http://127.0.0.1:${upstreamAnthropic.port}/v1`;
 
       // 两个供应商：'openai'（兄弟 spec 的 /openai/... 请求都走它，勿改名）+ 'beta'。
       // 'beta' 专供 log-list-filter spec 验「按供应商筛选」——单供应商时筛选退化为全选，
@@ -119,6 +132,11 @@ export const test = base.extend<{ lucent: LucentStack }>({
               id: 'p-beta',
               name: 'beta',
               endpoints: { 'anthropic-messages': null, 'openai-chat': upstreamBase, 'openai-responses': null },
+            },
+            {
+              id: 'p-anthropic',
+              name: 'anthropic',
+              endpoints: { 'anthropic-messages': upstreamAnthropicBase, 'openai-chat': null, 'openai-responses': null },
             },
           ],
         }),
@@ -166,6 +184,7 @@ export const test = base.extend<{ lucent: LucentStack }>({
         webBaseUrl,
         proxyBaseUrl,
         upstream,
+        upstreamAnthropic,
         postThroughProxy(path, headers, body) {
           return fetch(`${proxyBaseUrl}${path}`, {
             method: 'POST',
@@ -223,6 +242,7 @@ export const test = base.extend<{ lucent: LucentStack }>({
         killGroup(backend);
         killGroup(vite);
         await upstream.close();
+        await upstreamAnthropic.close();
         await new Promise((r) => setTimeout(r, 400));
         try { rmSync(configDir, { recursive: true, force: true }); } catch { /* noop */ }
       }
