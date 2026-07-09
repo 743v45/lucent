@@ -36,14 +36,12 @@ const DRAIN_TIMEOUT_MS = 5000;
 // ==================== 初始化 ====================
 
 /**
- * 初始化：开库 + 建表 + 一次性迁移现有 JSONL（幂等）。
- * 迁移结果记 debug；之后 live 读写只走 SQLite。
+ * 初始化：开库 + 建表。之后 live 读写只走 SQLite。
  */
 export function init(resolvedCfg: ResolvedConfig): void {
   resolvedConfig = resolvedCfg;
-  const mig = initDb(resolvedCfg.dbPath, resolvedCfg.logDir);
-  dbg('init: dbPath=%s 迁移 imported=%d skipped=%d errors=%d files=%d',
-    resolvedCfg.dbPath, mig.imported, mig.skipped, mig.errors, mig.files);
+  initDb(resolvedCfg.dbPath);
+  dbg('init: dbPath=%s', resolvedCfg.dbPath);
 }
 
 /**

@@ -14,6 +14,7 @@ import {
   buildSearchText, deleteOldLogs, countLogs, getStats, clearAllLogs,
   encodeCursor, decodeCursor, type DB,
 } from '../server/services/db.js';
+import { initDb, closeDb, getDb } from '../server/services/db-instance.js';
 import type { RawLogEntry } from '../server/types.js';
 
 // ==================== fixture ====================
@@ -172,6 +173,34 @@ describe('migrateFromJsonl', () => {
     expect(r2.imported).toBe(0);
     expect(r2.skipped).toBe(3);
     expect(countLogs(db)).toBe(3);
+  });
+});
+
+// ==================== initDb（启动初始化，不再迁移）====================
+
+describe('initDb 不再自动迁移 JSONL', () => {
+  let dir: string;
+  let dbPath: string;
+  let logDir: string;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'lucent-initdb-'));
+    dbPath = join(dir, 'test.db');
+    logDir = join(dir, 'logs');
+    mkdirSync(logDir, { recursive: true });
+    // logDir 放一条有效 JSONL——若 initDb 仍自动迁移，logs 表会有 1 行
+    const e = makeEntry({ id: 'init1', timestamp: '2026-07-08T10:00:00.000Z' });
+    writeFileSync(join(logDir, 'lucent_2026-07-08_10-00-00.jsonl'), JSON.stringify(e) + '\n');
+  });
+
+  afterEach(() => {
+    closeDb();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('initDb(logDir 含 JSONL) 后 logs 表仍为空（启动不再迁移）', () => {
+    initDb(dbPath);
+    expect(countLogs(getDb())).toBe(0);
   });
 });
 
