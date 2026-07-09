@@ -194,6 +194,25 @@ describe('extractTokenUsage', () => {
     });
   });
 
+  it('OpenAI Responses 响应格式（cached_tokens 在 input_tokens_details）', () => {
+    const body = {
+      usage: {
+        input_tokens: 200,
+        output_tokens: 80,
+        input_tokens_details: { cached_tokens: 50 },
+        output_tokens_details: { reasoning_tokens: 10 },
+      },
+    };
+    // Responses 的 cached 命中在 input_tokens_details.cached_tokens（与 Chat 的 prompt_tokens_details 不同）
+    const result = extractTokenUsage(body);
+    expect(result).toEqual({
+      input_tokens: 200,
+      output_tokens: 80,
+      cache_read_tokens: 50,
+      cache_creation_tokens: undefined,
+    });
+  });
+
   it('无 usage 字段返回 undefined', () => {
     expect(extractTokenUsage({})).toBeUndefined();
     expect(extractTokenUsage(null)).toBeUndefined();

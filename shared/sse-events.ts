@@ -173,8 +173,13 @@ export function extractFromEvent(eventType: string, data: any, acc: ExtractedInf
       }
     }
     if (data.type === 'response.completed' && data.response?.usage) {
-      acc.usage.input = data.response.usage.input_tokens || acc.usage.input;
-      acc.usage.output = data.response.usage.output_tokens || acc.usage.output;
+      const u = data.response.usage;
+      acc.usage.input = u.input_tokens || acc.usage.input;
+      acc.usage.output = u.output_tokens || acc.usage.output;
+      // Responses 的 cache 命中读在 input_tokens_details.cached_tokens
+      // （注意与 Chat 的 prompt_tokens_details.cached_tokens 不同字段名）
+      const respCached = u.input_tokens_details?.cached_tokens;
+      if (typeof respCached === 'number') acc.usage.cache_read = respCached;
     }
   }
 }

@@ -147,11 +147,13 @@ export function extractTokenUsage(responseBody: unknown): TokenUsage | undefined
     : (typeof usage.completion_tokens === 'number' ? usage.completion_tokens : 0);
 
   // cache 读：Anthropic 的 cache_read_input_tokens / cache_creation_input_tokens，
-  // 兼容 OpenAI 的 prompt_tokens_details.cached_tokens。
+  // 兼容 OpenAI Chat 的 prompt_tokens_details.cached_tokens 与 Responses 的 input_tokens_details.cached_tokens
+  // （Chat 与 Responses 的 cached_tokens 字段名不同，两处都认）。
   const promptTokensDetails = usage.prompt_tokens_details as Record<string, unknown> | undefined;
+  const inputTokensDetails = usage.input_tokens_details as Record<string, unknown> | undefined;
   const cachedTokens = typeof promptTokensDetails?.cached_tokens === 'number'
     ? promptTokensDetails.cached_tokens
-    : undefined;
+    : (typeof inputTokensDetails?.cached_tokens === 'number' ? inputTokensDetails.cached_tokens : undefined);
 
   const result = {
     input_tokens: inputTokens,

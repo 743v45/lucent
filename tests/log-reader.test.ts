@@ -93,6 +93,35 @@ describe('buildContextFromRequest — contextWindow 口径', () => {
     expect(log.kvCache?.cacheReadTokens).toBe(29184);
   });
 
+  it('OpenAI Chat 非流式：tokenUsage 经归一化后 KV-Cache 命中数 / 上下文占比不再为 0（回归）', () => {
+    // 复现生产链路：interceptor.extractTokenUsage → DB → reconstructEntry(tokenUsage) →
+    // buildContextFromRequest 归一化成 input_tokens / cache_read_input_tokens → extractCachedContent。
+    // 历史 bug：归一化键与 kvcache 的 OpenAI 分支读的键对不上，命中数 / totalInputTokens 全 0，
+    // 进而 contextWindow 也不算。
+    const log = {
+      id: 'test-openai-chat-kvcache',
+      timestamp: '2026-07-09T00:00:00.000Z',
+      request: { method: 'POST', url: 'https://api.openai.com/v1/chat/completions', headers: {}, body: { model: 'gpt-4o', messages: [{ role: 'user', content: 'hi' }] } },
+      response: { status: 200, statusText: 'OK', headers: {}, body: { usage: { prompt_tokens: 1000, completion_tokens: 200, prompt_tokens_details: { cached_tokens: 600 } } } },
+      agentType: 'main',
+      duration: 0,
+      metadata: { model: 'gpt-4o', provider: 'openai', stream: false },
+      tokenUsage: { input_tokens: 1000, output_tokens: 200, cache_read_tokens: 600 },
+      endpointType: 'openai-chat',
+    } as unknown as LogEntry;
+
+    buildContextFromRequest(log);
+
+    expect(log.kvCache?.cacheReadTokens).toBe(600);
+    expect(log.kvCache?.totalInputTokens).toBe(1000);
+    expect(log.kvCache?.hitRate).toBe(60);
+    expect(log.kvCache?.status).toBe('hit');
+    // totalInputTokens>0 后上下文占比应被计算（历史 bug 下 contextWindow 缺失）
+    expect(log.context?.contextWindow).toBeDefined();
+    // totalTokens = totalInputTokens(1000) + output_tokens(200) = 1200
+    expect(log.context?.contextWindow?.totalTokens).toBe(1200);
+  });
+
   it('OpenAI 多轮 tool-use：assistant content:null 不原样透传（前端按数组解构会崩）', () => {
     const log = {
       id: 'test-null-content',

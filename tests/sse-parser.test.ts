@@ -242,5 +242,28 @@ describe('extractFromEvent', () => {
       expect(acc.usage.input).toBe(100);
       expect(acc.usage.output).toBe(50);
     });
+
+    it('response.completed 抽取 input_tokens_details.cached_tokens 为 cache_read（回归）', () => {
+      // Responses 的 cache 命中在 input_tokens_details.cached_tokens（与 Chat 的 prompt_tokens_details 不同）。
+      // 历史 bug：response.completed 只取 input/output，漏了 cached_tokens。
+      const acc = createEmptyExtractedInfo();
+      const data = {
+        type: 'response.completed',
+        response: {
+          usage: {
+            input_tokens: 1000,
+            output_tokens: 50,
+            input_tokens_details: { cached_tokens: 700 },
+            output_tokens_details: { reasoning_tokens: 20 },
+          },
+        },
+      };
+
+      extractFromEvent('', data, acc);
+
+      expect(acc.usage.input).toBe(1000);
+      expect(acc.usage.output).toBe(50);
+      expect(acc.usage.cache_read).toBe(700);
+    });
   });
 });
