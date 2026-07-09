@@ -179,3 +179,55 @@ shared `createMockUpstream`; no real upstream is contacted and no real key is us
 - **THEN** the header MUST surface the upstream status code (`400` / `500`)
 - **AND** the detail panel MUST render without error
 - **AND** the Response tab's `response-body` MUST render the error body (contain `error`)
+
+### Requirement: A dedicated global-interactions spec MUST cover the top bar and global UI behavior (refresh / URL sync / sidebar drag / realtime push)
+
+Beyond the seed and detail specs, there MUST be a spec (`e2e/global-interactions.spec.ts`) that drives the
+top bar and global interactions through real browser input, reusing the shared stack fixture (no reinvented
+isolation stack, no real upstream, no real key). It MUST assert the actual app behavior (not guessed intent)
+across four areas: (a) the refresh button (`refresh-btn`) re-fetches logs and surfaces a request that landed
+after the page loaded; (b) URL state sync — selecting a log writes `?log=<id>`, switching to a non-default
+tab writes `?tab=<key>`, the default tab writes no `tab` param, and a full `page.reload()` restores the exact
+same log and tab; (c) sidebar drag-resize — real mouse events on `sidebar-splitter` change the
+`log-list-panel` width, clamp to the min/max bounds, persist to `localStorage` (`logListWidth`), and survive
+reload; (d) realtime push — the spec locks in the CURRENT reality that a second request does NOT silently
+appear in the list (the frontend has no `EventSource`/polling and `server/routes/logs.ts`'s `/api/logs/stream`
+is a heartbeat-only skeleton whose comments state realtime push is not wired), so the new row only appears
+after clicking refresh.
+
+**Rationale:** These four interactions are where global UI regressions hide — a broken refresh silently stalls
+the list, a URL-sync regression loses the shared-link/deep-link contract (reload drops selection or tab), a
+drag bug lets the sidebar collapse past its bounds or forget the width on reload, and a misassumed "realtime
+push" would let a regression in the refresh path go unnoticed. Asserting actual behavior — including the
+currently-unwired push — keeps the spec honest; if push is later wired up, the realtime scenario fails loudly
+and forces the spec to be updated to assert auto-appearance.
+
+#### Scenario: Refresh button surfaces a request that landed after page load
+- **GIVEN** the stack is up and the Web UI is already showing a first `log-row`
+- **WHEN** the spec sends a second request through the proxy (which lands in the backend) and then clicks `refresh-btn`
+- **THEN** the second request's `log-row` (by `data-logid`) MUST appear in the list
+- **AND** the spec MUST first confirm the second row was NOT present before the refresh click
+
+#### Scenario: URL state sync for log selection and active tab, surviving reload
+- **GIVEN** a log exists and the Web UI is open
+- **WHEN** the spec clicks that log's row, switches to a non-default tab (e.g. `response`), then `page.reload()`
+- **THEN** the URL MUST carry `log=<id>` after selection (and no `tab` param while the default tab is active)
+- **AND** the URL MUST carry `tab=response` after switching to the Response tab
+- **AND** after reload the same log MUST remain selected (the detail panel renders, not the empty state) and the same tab MUST remain active
+- **AND** switching back to the default tab MUST remove the `tab` param while keeping `log=<id>`
+
+#### Scenario: Sidebar drag-resize changes width, clamps to bounds, persists, and survives reload
+- **GIVEN** the Web UI is open with the sidebar at its default width (fresh `localStorage`)
+- **WHEN** the spec drives real mouse events (down on `sidebar-splitter`, move, up) to a target x
+- **THEN** the `log-list-panel` width MUST follow the drag (increase when dragged right)
+- **AND** dragging far past the max bound MUST clamp the width to the configured maximum
+- **AND** dragging far below the min bound MUST clamp the width to the configured minimum
+- **AND** on mouse-up the width MUST be written to `localStorage` (`logListWidth`)
+- **AND** a full `page.reload()` MUST restore the dragged width
+
+#### Scenario: Realtime push is currently not wired — a second request does not auto-appear
+- **GIVEN** the stack is up and the Web UI is already showing a first `log-row`
+- **WHEN** the spec sends a second request through the proxy (which lands in the backend) and waits without refreshing
+- **THEN** the second request's `log-row` MUST NOT appear in the list (the frontend has no realtime consumer)
+- **AND** clicking `refresh-btn` afterwards MUST make it appear (the list updates via refresh, not push)
+- **NOTE** this scenario locks in current behavior; when realtime push is implemented it MUST be updated to assert auto-appearance
