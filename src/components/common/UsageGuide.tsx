@@ -134,7 +134,7 @@ export function UsageGuide({ open, onClose, onOpenSettings }: UsageGuideProps) {
       width={560}
       footer={null}
     >
-      <div className="flex flex-col gap-4">
+      <div className="flex flex-col gap-4" data-testid="usage-guide">
         {/* 文案两段 */}
         <div className="flex flex-col gap-2">
           <p className="text-[14px] text-text-secondary leading-relaxed">
@@ -156,7 +156,12 @@ export function UsageGuide({ open, onClose, onOpenSettings }: UsageGuideProps) {
                   <h3 className="text-[14px] font-[560] text-text-primary m-0">{groupName}</h3>
                   <div className="flex flex-col gap-2">
                     {groupLines.map((line, index) => (
-                      <div key={`${line.providerName}-${line.endpointType}`} className="flex flex-col gap-1">
+                      <div
+                        key={`${line.providerName}-${line.endpointType}`}
+                        className="flex flex-col gap-1"
+                        data-testid="access-line"
+                        data-client={line.clientName}
+                      >
                         <div className="flex items-center gap-2">
                           <code className="flex-1 text-[13px] px-2 py-1.5 rounded bg-bg-deep text-text-primary font-mono break-all">
                             {line.cmd}
@@ -164,6 +169,7 @@ export function UsageGuide({ open, onClose, onOpenSettings }: UsageGuideProps) {
                           <Button
                             type="text"
                             size="small"
+                            data-testid="copy-cmd"
                             icon={copiedIndex === index ? <CheckOutlined /> : <CopyOutlined />}
                             onClick={() => handleCopy(line.cmd, index)}
                             className={copiedIndex === index ? '!text-success' : '!text-text-quaternary hover:!text-text-primary'}
