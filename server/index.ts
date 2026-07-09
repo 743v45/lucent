@@ -193,8 +193,11 @@ server.on('close', () => {
 // ==================== 直接运行 ====================
 
 if (import.meta.url === `file://${process.argv[1]}`) {
-  startServer().catch(error => {
+  startServer().catch(async (error) => {
     console.error('[Lucent] 启动失败:', error.message);
+    // 启动失败（如端口占用）也要优雅收尾：drainWriteQueue + closeDb(wal_checkpoint(TRUNCATE))。
+    // 否则本轮已执行的初始化/清理写入堆在 WAL 不落盘，反复启动会把 WAL 撑爆。
+    await shutdownServer();
     process.exit(1);
   });
 

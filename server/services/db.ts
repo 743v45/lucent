@@ -270,6 +270,9 @@ export function insertLogsBatch(db: DB, entries: RawLogEntry[]): { imported: num
 /**
  * 从 JSONL 目录一次性迁移导入（幂等，可重跑）。
  * 每批 BATCH 条一个事务，兼顾吞吐与内存。
+ *
+ * 注：自 2026-07-09 起不再在启动时自动调用（见
+ * openspec/changes/2026-07-09-stop-startup-migration），仅作手动/一次性迁移工具保留。
  */
 export function migrateFromJsonl(
   db: DB,
