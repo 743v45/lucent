@@ -18,7 +18,7 @@
 
 import { createServer } from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdtempSync, writeFileSync, rmSync, readdirSync, readFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -183,6 +183,48 @@ const OAI_RESP_REQ = { model: 'gpt-4o', input: 'hi' };
 const forwardedPaths = {};
 const testedPaths = {};
 
+// ==================== Web API 工具（SQLite 后端读路径 + 记录开关） ====================
+
+async function getJson(url) {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** /api/logs/stats → { totalEntries, ... }（totalEntries = SELECT COUNT(*) FROM logs） */
+function getStats() {
+  return getJson(`${WEB}/api/logs/stats`);
+}
+
+/** /api/logs?keyset 分页 → { total, logs: [...], ... } */
+function getLogs(query) {
+  return getJson(`${WEB}/api/logs${query ? `?${query}` : ''}`);
+}
+
+/** POST /api/recording { recording } → { success, recording, envLocked } */
+async function setRecording(recording) {
+  try {
+    const res = await fetch(`${WEB}/api/recording`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ recording }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+/** /api/status → { ..., logRecording, logRecordingEnvLocked } */
+function getStatus() {
+  return getJson(`${WEB}/api/status`);
+}
+
 try {
 
   // ---- 场景 1: 预设 anthropic 代理转发 ----
@@ -276,35 +318,27 @@ try {
     check('10. 三种 endpoint 测试连接路径 == 代理转发路径(完全一致)', true);
   }
 
-  // ---- 场景 11-12: 日志完整性(对应 openspec/specs/log-integrity) ----
+  // ---- 场景 11-12: 日志完整性（SQLite 后端，对应 openspec/specs/log-integrity） ----
+  // 存储已切 SQLite（无双写），原 JSONL 读法在干净临时目录恒为 0 条 → 改走 /api/logs（SQLite 读路径）。
   console.log('');
-  await new Promise(r => setTimeout(r, 600));  // 等日志落盘
-  const logDir = join(CONFIG_DIR, 'logs');
-  let lastEntries = [];
-  try {
-    const files = readdirSync(logDir).filter(f => f.endsWith('.jsonl')).sort();
-    if (files.length > 0) {
-      const content = readFileSync(join(logDir, files[files.length - 1]), 'utf-8');
-      // 标准 JSONL：一行一条 JSON
-      lastEntries = content.split('\n').filter(s => s.trim().startsWith('{')).map(s => JSON.parse(s));
-    }
-  } catch {
-    lastEntries = [];
-  }
+  await new Promise(r => setTimeout(r, 600));  // 等写队列落库
+
   const deltaFields = ['_deltaFormat', '_isCheckpoint', '_totalMessageCount', '_conversationId', '_inPlaceReplaceDetected'];
 
-  // 场景 11: 连续 anthropic 请求的日志 body.messages 必须完整(无 delta 清空)
+  // 场景 11: 连续 anthropic 请求日志 body.messages 完整(无 delta 清空)
   {
-    const fooEntries = lastEntries.filter(e => e.providerName === 'foo' && e.endpointType === 'anthropic-messages');
-    const last2 = fooEntries.slice(-2);
+    const fooQs = new URLSearchParams({ providerName: 'foo', endpointType: 'anthropic-messages', limit: '10' }).toString();
+    const data = await getLogs(fooQs);
+    const fooEntries = (data?.logs || []).filter(e => e?.request?.body?.messages);
+    const last2 = fooEntries.slice(0, 2);
     let ok11 = last2.length >= 2;
     let detail11 = '';
     if (ok11) {
-      const m1 = last2[0]?.body?.messages;
-      const m2 = last2[1]?.body?.messages;
+      const m1 = last2[0].request.body.messages;
+      const m2 = last2[1].request.body.messages;
       const lenOk = Array.isArray(m1) && m1.length > 0 && Array.isArray(m2) && m2.length > 0 && m1.length === m2.length;
       ok11 = lenOk;
-      if (!lenOk) detail11 = '条目1 msgs.len=' + (m1?.length) + ' 条目2 msgs.len=' + (m2?.length);
+      if (!lenOk) detail11 = '条目1 msgs.len=' + m1?.length + ' 条目2 msgs.len=' + m2?.length;
     } else {
       detail11 = 'foo 条目不足, 仅 ' + last2.length + ' 条';
     }
@@ -313,10 +347,57 @@ try {
 
   // 场景 12: 所有日志条目无 delta 残留字段
   {
-    const withDelta = lastEntries.filter(e => deltaFields.some(f => f in e));
+    const data = await getLogs('limit=100');
+    const entries = data?.logs || [];
+    const withDelta = entries.filter(e => deltaFields.some(f => f in e));
     const ok12 = withDelta.length === 0;
     check('12. 所有日志条目无 delta 残留字段(_deltaFormat/_isCheckpoint/...)', ok12,
       ok12 ? '' : withDelta.length + ' 条带 delta 字段');
+  }
+
+  // ---- 场景 13-15: 记录开关 / 「只过路」(TAE-76) ----
+  console.log('');
+
+  // 场景 13: 默认 logRecording=true，/api/status 暴露该字段
+  {
+    const st = await getStatus();
+    check('13. /api/status 默认 logRecording=true', st?.logRecording === true, `logRecording=${st?.logRecording}`);
+  }
+
+  // 场景 14（正向对照）: 记录开启时发请求 → SQLite 计数 +1（证明计数非空判，反向用例才可信）
+  {
+    const before = (await getStats())?.totalEntries;
+    await post(`${PROXY}/custom/foo/v1/messages`, ANTH_HEADERS, ANTH_REQ);
+    await new Promise(r => setTimeout(r, 600));
+    const after = (await getStats())?.totalEntries;
+    check('14. 记录开启 → 发请求后 SQLite 新增 1 行(正向对照)',
+      typeof before === 'number' && after === before + 1,
+      `before=${before} after=${after}`);
+  }
+
+  // 场景 15（反向用例）: 切到「只过路」→ 发请求 → 转发照旧(上游收到) 且 SQLite 无新增行
+  // 失败（库里有新增）必须 FAIL、退出非 0——这正是 gate 失效的检出点。
+  {
+    const recOff = await setRecording(false);
+    const stOff = await getStatus();
+    const before = (await getStats())?.totalEntries;
+    upstreamHits.length = 0;
+    await post(`${PROXY}/custom/foo/v1/messages`, ANTH_HEADERS, ANTH_REQ);
+    const forwardedWhileOff = lastUpstream()?.url;
+    await new Promise(r => setTimeout(r, 600));
+    const after = (await getStats())?.totalEntries;
+    const grew = typeof before === 'number' && typeof after === 'number' ? after - before : null;
+
+    check('15a. 切「只过路」后 /api/status logRecording=false',
+      recOff?.recording === false && stOff?.logRecording === false,
+      `recording=${recOff?.recording} status=${stOff?.logRecording}`);
+    check('15b. 「只过路」转发链路不变 → 上游仍收到 /v1/messages',
+      forwardedWhileOff === '/v1/messages', `上游收到: ${forwardedWhileOff}`);
+    check('15c. 「只过路」发请求后 SQLite 无新增行(反向用例, gate 失效必退出非 0)',
+      grew === 0, `before=${before} after=${after}（新增 ${grew} 行）`);
+
+    // 恢复记录，不留副作用
+    await setRecording(true);
   }
 
 } finally {

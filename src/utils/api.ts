@@ -40,8 +40,23 @@ export async function getProxyStatus(): Promise<{
   proxyPort: number;
   logFile: string | null;
   providers?: import('../types').Provider[];
+  logRecording?: boolean;
+  logRecordingEnvLocked?: boolean;
 }> {
   return request('/status');
+}
+
+/**
+ * 切换「记录日志 / 只过路」开关（持久化）。
+ * 返回有效值 recording 与是否被 env 锁定 envLocked。
+ */
+export async function setLogRecording(
+  recording: boolean
+): Promise<{ success: boolean; recording: boolean; envLocked: boolean }> {
+  return request('/recording', {
+    method: 'POST',
+    body: JSON.stringify({ recording }),
+  });
 }
 
 /**
