@@ -52,10 +52,12 @@ lead 已拍板：默认 `logRecording=true`，支持 env `LUCENT_LOG_RECORDING` 
   - `getProxyStatus` 返回类型同步；新增 `setLogRecording(recording)` 封装 `POST /api/recording`。
 
 - **顶栏开关（[`src/App.tsx`](../../src/App.tsx)）**
-  - 右上角操作区加第 5 个**两态 toggle**（heroicons `EyeSlashIcon`/`EyeIcon`）：
-    - 记录中（`logRecording=true`）→ `EyeIcon`，常规色，tooltip「记录日志中（点击切到只过路）」。
-    - 只过路（`logRecording=false`）→ `EyeSlashIcon`，高亮态（`text-brand-accent` + `bg-bg-active`），
-      tooltip「只过路（不记录日志）」。
+  - 右上角操作区加第 5 个**两态 toggle**：单 heroicons `EyeSlashIcon` + 高亮两态（开关带高亮，
+    与 owner 早先确认一致），不切图标：
+    - 记录中（`logRecording=true`）→ `EyeSlashIcon` 常规 dim 色（`text-text-tertiary`），
+      tooltip「记录日志中（点击切到只过路）」。
+    - 只过路（`logRecording=false`）→ 同一枚 `EyeSlashIcon` 高亮态（`text-brand-accent` + `bg-bg-active`），
+      tooltip「只过路（不记录日志），点击恢复记录」。
   - 点击即切（**无二次确认**），调 `setLogRecording(next)`，成功后更新本地态 + `message.success`
     轻 toast（「已切到只过路：转发照旧，不再记录日志」/「已恢复记录日志」）。
   - `logRecordingEnvLocked=true` 时按钮禁用 + tooltip 提示「被环境变量 LUCENT_LOG_RECORDING 锁定」，

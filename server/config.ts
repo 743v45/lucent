@@ -276,14 +276,15 @@ function parseEnvNumber(name: string, fallback: number): number {
 }
 
 /**
- * 解析环境变量中的布尔值：未设置返回 fallback；
- * 设置时 'false'/'0'/'no'/'off'/'」（忽略大小写与空白）为 false，其余为 true。
+ * 解析环境变量中的布尔值：未设置（或设为空串）返回 fallback；
+ * 显式 falsey 词（'false'/'0'/'no'/'off'，忽略大小写与空白）为 false，其余为 true。
+ * 空串视为「没真设」→ 走 fallback（对记录开关即默认开），避免误设静默关掉日志。
  */
 function parseEnvBool(name: string, fallback: boolean): boolean {
   const val = process.env[name];
-  if (val === undefined) return fallback;
+  if (val === undefined || val.trim() === '') return fallback;
   const s = val.trim().toLowerCase();
-  if (s === 'false' || s === '0' || s === 'no' || s === 'off' || s === '') return false;
+  if (s === 'false' || s === '0' || s === 'no' || s === 'off') return false;
   return true;
 }
 
