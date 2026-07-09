@@ -317,6 +317,7 @@ export function LogListPanel({
 
   return (
     <div
+      data-testid="log-list-panel"
       className="h-full flex flex-col border-r border-border-subtle bg-bg-panel shrink-0"
       style={{ width }}
     >

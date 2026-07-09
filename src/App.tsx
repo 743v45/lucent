@@ -220,6 +220,7 @@ function App(): JSX.Element {
           {/* 右：操作 */}
           <div className="ml-auto flex items-center gap-2">
             <button
+              data-testid="refresh-btn"
               className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
               onClick={loadLogs}
               disabled={logsLoading}
@@ -295,6 +296,7 @@ function App(): JSX.Element {
           />
           {/* 拖拽分割栏 */}
           <div
+            data-testid="sidebar-splitter"
             className="w-1 bg-border-subtle hover:bg-brand-accent cursor-col-resize transition-colors shrink-0"
             onMouseDown={handleMouseDown}
           />
