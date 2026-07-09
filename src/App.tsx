@@ -264,6 +264,7 @@ function App(): JSX.Element {
               <WrenchScrewdriverIcon className="w-[18px] h-[18px]" />
             </button>
             <button
+              data-testid="settings-open-btn"
               className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
               onClick={() => setSettingsOpen(true)}
               title="配置"

@@ -330,6 +330,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                   return (
                     <div
                       key={preset.name}
+                      data-testid="preset-item"
+                      data-name={preset.name}
                       className={`flex items-center gap-2 px-3 py-2 rounded-md border border-border-subtle transition-colors ${
                         alreadyAdded
                           ? 'opacity-50 cursor-default bg-bg-surface/30'
@@ -357,6 +359,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
               type="dashed"
               block
               onClick={() => setShowCustomInput(true)}
+              data-testid="show-custom-input-btn"
             >
               自定义供应商
             </Button>
@@ -369,6 +372,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                 onPressEnter={handleCreateCustom}
                 placeholder="输入自定义名称"
                 className="flex-1"
+                data-testid="custom-name-input"
                 autoFocus
               />
               <Button
@@ -376,6 +380,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                 type="primary"
                 onClick={handleCreateCustom}
                 loading={loading}
+                data-testid="custom-confirm-btn"
               >
                 确认
               </Button>
@@ -397,6 +402,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     return (
       <div
         key={p.name}
+        data-testid="provider-row"
+        data-name={p.name}
         className={`relative flex flex-col items-center gap-1.5 p-3 rounded-md border transition-colors cursor-pointer ${
           isExpanded
             ? 'bg-bg-elevated border-brand-accent/50'
@@ -411,6 +418,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           icon={<DeleteOutlined />}
           danger
           onClick={e => { e.stopPropagation(); handleDelete(p.name); }}
+          data-testid="delete-provider-btn"
           className="!absolute !top-1 !right-1 !text-error/60 hover:!text-error !p-0 !w-5 !h-5"
         />
 
@@ -517,6 +525,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                     placeholder={val === null ? '不支持（留空）' : '输入上游 URL'}
                     status={hasUrlError ? "error" : undefined}
                     className="flex-1"
+                    data-testid="endpoint-input"
+                    data-protocol={et}
                   />
                   {showReset && defaultUrl && (
                     <Tooltip
@@ -541,12 +551,18 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                       size="small"
                       loading={isTesting}
                       onClick={() => handleTest(p.name, et)}
+                      data-testid="test-connection-btn"
+                      data-protocol={et}
                     >
                       测试
                     </Button>
                   )}
                   {result && (
-                    <div className={`flex items-center gap-1 text-xs ${
+                    <div
+                      data-testid="test-result"
+                      data-protocol={et}
+                      data-ok={result.ok ? 'true' : 'false'}
+                      className={`flex items-center gap-1 text-xs ${
                       result.ok ? 'text-success' : 'text-warning'
                     }`}>
                       {result.ok ? <CheckCircleOutlined /> : <ExclamationCircleOutlined />}
@@ -626,7 +642,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       footer={null}
       destroyOnHidden
     >
-      <div className="h-[420px] flex flex-col">
+      <div className="h-[420px] flex flex-col" data-testid="settings-modal">
         {showPresetPanel ? (
           renderPresetPanel()
         ) : (
@@ -652,6 +668,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                 block
                 onClick={handleCreate}
                 loading={loading}
+                data-testid="add-provider-btn"
               >
                 新增供应商
               </Button>
