@@ -30,12 +30,28 @@ async function getProviderFull(page: import('@playwright/test').Page, name: stri
   }, name);
 }
 
+/**
+ * 等待 SettingsModal 初始列表加载完成（loadProviders 跑完）。
+ *
+ * 必要性：Modal 的 [open] effect 异步拉列表——`await listProviders()` 后才 `setProviders(list)`。
+ * 若在它落地前就「新增供应商」，新建的乐观更新 `setProviders(prev => [...prev, created])`
+ * 会被随后 resolve 的 `setProviders(list)`（不含刚建的）覆盖，导致该行不渲染（冷启 / 高负载
+ * 下窗口更宽，曾偶发挂）。`provider-row` 只在 loadProviders 跑到末尾 `setLoading(false)` 后
+ * 才渲染，所以等「至少一行可见」= 列表已加载完，新建不再跟初始加载抢状态。这也贴合真实
+ * 用户流（看到列表再点新增）。
+ */
+async function waitForListLoaded(page: import('@playwright/test').Page) {
+  await expect(page.getByTestId('provider-row').first(), 'SettingsModal 初始列表应加载完').toBeVisible({ timeout: 20_000 });
+}
+
 test.describe('供应商设置（SettingsModal 全流程）', () => {
   test('预设供应商：网格一键添加 → 落地列表 + 落盘', async ({ page, lucent }) => {
     await page.goto(lucent.webBaseUrl);
     // 打开 SettingsModal
     await page.getByTestId('settings-open-btn').click();
     await expect(page.getByTestId('settings-modal')).toBeVisible();
+    // 等初始列表加载完再交互（否则新建的乐观更新会被异步加载覆盖 → 偶发不渲染）
+    await waitForListLoaded(page);
 
     // 列表初始只有种子 openai（worker-scoped 栈，别的 spec 不动 provider）
     const beforeCount = await page.getByTestId('provider-row').count();
@@ -65,6 +81,7 @@ test.describe('供应商设置（SettingsModal 全流程）', () => {
     await page.goto(lucent.webBaseUrl);
     await page.getByTestId('settings-open-btn').click();
     await expect(page.getByTestId('settings-modal')).toBeVisible();
+    await waitForListLoaded(page);
 
     // 进预设面板 → 展开「自定义供应商」输入
     await page.getByTestId('add-provider-btn').click();
@@ -109,6 +126,7 @@ test.describe('供应商设置（SettingsModal 全流程）', () => {
     await page.goto(lucent.webBaseUrl);
     await page.getByTestId('settings-open-btn').click();
     await expect(page.getByTestId('settings-modal')).toBeVisible();
+    await waitForListLoaded(page);
 
     // 建一个自定义供应商并配上指向 mock 上游的 openai-chat 端点
     await page.getByTestId('add-provider-btn').click();
@@ -147,6 +165,7 @@ test.describe('供应商设置（SettingsModal 全流程）', () => {
     await page.goto(lucent.webBaseUrl);
     await page.getByTestId('settings-open-btn').click();
     await expect(page.getByTestId('settings-modal')).toBeVisible();
+    await waitForListLoaded(page);
 
     // 先建一个待删供应商
     await page.getByTestId('add-provider-btn').click();
