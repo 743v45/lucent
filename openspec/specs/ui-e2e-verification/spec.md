@@ -249,8 +249,8 @@ unconfigured protocol yields the empty state; (d) filter state persists across
 the rendered row set unchanged; (e) timeline↔session view switch loses no rows and
 duplicates none, and same-`threadId` logs (content-addressed from the first user message)
 collapse into one session group; (f) `>PAGE_SIZE` logs paginate — the first page is
-`PAGE_SIZE`, a manual "load more" is offered, and clicking it grows the list until `hasMore`
-flips false; (g) the initial fetch shows a "loading" state. To exercise provider filtering
+`PAGE_SIZE`, a "load more" affordance is shown while `hasMore`, and reaching the bottom
+of the list (the `onScroll` trigger) loads the next page until `hasMore` flips false; (g) the initial fetch shows a "loading" state. To exercise provider filtering
 the fixture configures a second provider (`beta`) alongside `openai` — a single provider
 makes the filter degenerate (selecting it equals "all") and cannot prove exclusion.
 
@@ -287,10 +287,10 @@ scripts. A spec locks them behind real dropdown clicks and view switches.
 - **THEN** the session row set MUST equal the timeline row set (no loss), with no duplicate ids
 - **AND** a session group with `count=2` MUST exist (the two same-thread logs collapsed into one group)
 
-#### Scenario: Pagination beyond PAGE_SIZE via manual load-more
+#### Scenario: Pagination beyond PAGE_SIZE via the onScroll trigger
 - **GIVEN** more than `PAGE_SIZE` logs exist
-- **THEN** the first page MUST render exactly `PAGE_SIZE` rows and the `load-more-btn` MUST be visible
-- **AND** clicking it MUST grow the row count, after which `hasMore` is false and the button disappears
+- **THEN** the first page MUST render exactly `PAGE_SIZE` rows and the `load-more-btn` MUST be visible (the `hasMore` cue)
+- **AND** scrolling the list to the bottom MUST load the next page and grow the row count, after which `hasMore` is false and the button disappears
 
 #### Scenario: Initial fetch shows a loading state
 - **WHEN** the spec stalls the `/api/logs` fetches (route hold) and loads the page

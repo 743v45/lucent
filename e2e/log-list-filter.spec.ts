@@ -215,7 +215,7 @@ test.describe('日志列表与多维筛选', () => {
     expect(backIds.slice().sort(), '切回 timeline 行集不变').toEqual(timelineIds.slice().sort());
   });
 
-  test('加载更多：>PAGE_SIZE 分页，点击补齐', async ({ page, lucent }) => {
+  test('加载更多：>PAGE_SIZE 分页，滚到底补齐', async ({ page, lucent }) => {
     lucent.upstream.reset();
     lucent.upstream.setMode('chat-json');
     // 干净起步：worker 共享后端里有兄弟测试累积的日志，清掉让「首屏正好 50」确定。
