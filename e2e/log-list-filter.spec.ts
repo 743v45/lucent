@@ -132,6 +132,9 @@ test.describe('日志列表与多维筛选', () => {
 
   test('按协议筛选：OpenAI Chat 留行；Anthropic Messages → 空态（排除）', async ({ page, lucent }) => {
     lucent.upstream.reset();
+    // worker 共享后端：先清掉兄弟 spec（如 detail-kvcache 的 Anthropic 请求）残留日志，
+    // 让本用例只持有自己发的那条 beta 请求，Anthropic→空态的断言才不被动摇。
+    await lucent.clearLogs();
     await sendChat(lucent, 'beta', { content: 'LLF-PROTO' });
     await expect.poll(async () => (await betaLogs(lucent)).length, { timeout: 10_000 }).toBeGreaterThanOrEqual(1);
 
