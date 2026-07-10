@@ -201,6 +201,34 @@ describe('extractCachedContent', () => {
     expect(result.hitRate).toBe(0);
   });
 
+  it('OpenAI Chat 走 log-reader 归一化后的 usage 也能算出命中（回归）', () => {
+    // 复现生产链路：log-reader.buildContextFromRequest 把 usage 归一化成 Anthropic 风格键
+    // （input_tokens / cache_read_input_tokens）后再传入。历史 bug：isOpenAI 分支只读
+    // prompt_tokens / prompt_tokens_details，归一化后这俩键不存在 → 命中数 / totalInputTokens 全 0。
+    const result = extractCachedContent(
+      { messages: [] },
+      { input_tokens: 1000, output_tokens: 200, cache_read_input_tokens: 600 },
+      { endpointType: 'openai-chat' },
+    );
+    expect(result.cacheReadTokens).toBe(600);
+    expect(result.totalInputTokens).toBe(1000);
+    expect(result.hitRate).toBe(60);
+    expect(result.status).toBe('hit');
+  });
+
+  it('OpenAI Responses 归一化 usage 也能算出命中（回归）', () => {
+    // Responses 流式经 sse-extractor 抽取后，input_tokens_details.cached_tokens 并入 cache_read_input_tokens
+    const result = extractCachedContent(
+      { messages: [] },
+      { input_tokens: 500, output_tokens: 10, cache_read_input_tokens: 300 },
+      { endpointType: 'openai-responses' },
+    );
+    expect(result.cacheReadTokens).toBe(300);
+    expect(result.totalInputTokens).toBe(500);
+    expect(result.hitRate).toBe(60);
+    expect(result.status).toBe('hit');
+  });
+
   it('status 四态：first-create', () => {
     const result = extractCachedContent(
       { messages: [] },

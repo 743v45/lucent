@@ -358,11 +358,22 @@ export function extractCachedContent(
 
   // token 提取（按协议分支）
   if (isOpenAI) {
-    // OpenAI 自动缓存：cached_tokens 当作 read，无 create 概念
-    const cachedTokens = usage?.prompt_tokens_details?.cached_tokens || 0;
+    // OpenAI 自动缓存：只有 cached_tokens（命中读），无 create 概念。
+    //
+    // usage 可能是两种形状，都得认（修历史 bug：log-reader 把 usage 归一化成
+    // Anthropic 风格键后再传入，而这里原先只读 OpenAI 原始键，导致生产里 OpenAI
+    // 的 cached_tokens 命中数 / totalInputTokens / 命中率 / 上下文占比全算成 0）：
+    //   - log-reader 归一化后：input_tokens + cache_read_input_tokens
+    //   - 原始 OpenAI usage（非流式 fallback / 单测直调）：prompt_tokens + prompt_tokens_details.cached_tokens
+    //   - Responses 流式经 sse-extractor 抽取后：cache_read 已并入 cache_read_input_tokens
+    // 优先取归一化键，缺失再回退原始键。
+    const cachedTokens =
+      usage?.cache_read_input_tokens ??
+      usage?.prompt_tokens_details?.cached_tokens ?? 0;
     result.cacheReadTokens = cachedTokens;
     result.cacheCreateTokens = 0;
-    result.totalInputTokens = usage?.prompt_tokens || 0;
+    // OpenAI 的 input token 数本身已含 cached（prompt_tokens / input_tokens 都是全量输入），不再叠加
+    result.totalInputTokens = usage?.input_tokens ?? usage?.prompt_tokens ?? 0;
   } else {
     // Anthropic 显式缓存（默认分支）
     result.cacheCreateTokens = usage?.cache_creation_input_tokens || 0;
