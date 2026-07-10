@@ -222,6 +222,7 @@ export function identifyProvider(url: string): 'openai' | 'claude' | 'unknown' {
  * - Codex CLI: 包含 "codex"
  * - Cursor: 包含 "cursor"
  * - Windsurf: 包含 "windsurf"
+ * - ZCode: 包含 "zcode"（智谱 Z Code 客户端，UA 形如 `ZCode/3.3.0 ...`），或携带 x-zcode-* 专属头
  * - 测试客户端: 包含 "test-client" 或 "lucent-test"
  */
 export function identifyClient(headers: Record<string, string>): ClientType {
@@ -251,6 +252,11 @@ export function identifyClient(headers: Record<string, string>): ClientType {
   // Windsurf
   if (ua.includes('windsurf')) {
     return 'windsurf';
+  }
+
+  // ZCode（智谱 Z Code 客户端）：UA 含 "zcode"，或携带 x-zcode-* 专属头（防 UA 变化更稳）
+  if (ua.includes('zcode') || headers['x-zcode-app-version'] || headers['x-zcode-agent']) {
+    return 'zcode';
   }
 
   // Test Client

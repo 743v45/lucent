@@ -36,7 +36,7 @@ export interface LogEntry {
 
 export type AgentType = 'main' | 'sub';
 
-export type ClientType = 'claude-code' | 'opencode' | 'codex' | 'cursor' | 'windsurf' | 'test-client' | 'unknown';
+export type ClientType = 'claude-code' | 'opencode' | 'codex' | 'cursor' | 'windsurf' | 'zcode' | 'test-client' | 'unknown';
 
 export interface RequestData {
   method: string;

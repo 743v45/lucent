@@ -81,7 +81,7 @@ export const PRESET_NAMES: ReadonlySet<string> = new Set([
 
 // ==================== 客户端类型 ====================
 
-export type ClientType = 'claude-code' | 'opencode' | 'codex' | 'cursor' | 'windsurf' | 'test-client' | 'unknown';
+export type ClientType = 'claude-code' | 'opencode' | 'codex' | 'cursor' | 'windsurf' | 'zcode' | 'test-client' | 'unknown';
 
 // ==================== Agent 类型 ====================
 
