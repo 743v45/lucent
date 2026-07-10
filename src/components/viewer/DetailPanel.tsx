@@ -1030,7 +1030,7 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
         return {
           title: '系统提示词',
           cards: segments.map((seg, i) => ({
-            label: multi ? `段 ${i + 1}` : undefined,
+            label: multi ? `#${i + 1}` : undefined,
             content: seg,
             kind: 'segment' as const,
           })),
@@ -1048,7 +1048,9 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
         const msg = data.messages?.[selected.index];
         if (!msg) return null;
         return {
-          title: `${roleLabelOf(msg)} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`,
+          // 标题只留角色：timestamp 是整个请求的统一时间（见 log-reader ctxMsgs），
+          // 逐条展示会误导成「每条消息各自的时间」，去掉。
+          title: roleLabelOf(msg),
           cards: messageToCards(msg),
         };
       }
@@ -1108,7 +1110,8 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
                 <ContextListItem
                   key={i}
                   role={roleLabel}
-                  label={`${roleLabel} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`}
+                  // 只显角色：每条消息的 timestamp 都是同一个请求时间（无分化），展示会误导。
+                  label={roleLabel}
                   isSelected={selected?.type === 'message' && selected?.index === i}
                   onClick={() => setSelected({ type: 'message', index: i })}
                   color={roleColor}

@@ -63,6 +63,10 @@ test.describe('Context 面板：系统提示词左一整块、右多段卡片', 
     await expect(segCards, '3 段应渲染 3 张段卡片').toHaveCount(3);
 
     const cardTexts = await segCards.allTextContents();
+    // 卡片头按用户要求用 #1 / #2 / #3（不用中文「段 N」）
+    expect(cardTexts[0]).toContain('#1');
+    expect(cardTexts[1]).toContain('#2');
+    expect(cardTexts[2]).toContain('#3');
     expect(cardTexts[0]).toContain('TAE90 seg one');
     expect(cardTexts[1]).toContain('TAE90 seg two');
     expect(cardTexts[2]).toContain('TAE90 seg three');
@@ -109,11 +113,11 @@ test.describe('Context 面板：系统提示词左一整块、右多段卡片', 
     await expect(segCards, '单段右侧渲染 1 张段卡片').toHaveCount(1);
   });
 
-  test('对话历史：一条 user 消息 content 多 block → 左侧仍 1 项、右侧多张卡片', async ({ page, lucent }) => {
+  test('对话历史：一条 user 消息 content 多 block → 左侧仍 1 项、右侧多张卡片，且列表不显示无意义时间', async ({ page, lucent }) => {
     lucent.upstream.reset();
     lucent.upstream.setMode('chat-json');
 
-    // 一条 user 消息，content 是多 part 数组（OpenAI Chat content parts）→ 一个左项、多张右卡。
+    // 一条多 block 的 user 消息 + 一条 assistant 回复，content 多 part 数组 → 一个左项、多张右卡。
     const body = {
       model: 'gpt-4o',
       max_tokens: 1,
@@ -121,10 +125,11 @@ test.describe('Context 面板：系统提示词左一整块、右多段卡片', 
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'TAE90 user block one' },
-            { type: 'text', text: 'TAE90 user block two' },
+            { type: 'text', text: '帮我查一下今天的天气' },
+            { type: 'text', text: '顺便看看明天的' },
           ],
         },
+        { role: 'assistant', content: '好的，我来查。' },
       ],
     };
 
@@ -143,13 +148,21 @@ test.describe('Context 面板：系统提示词左一整块、右多段卡片', 
     const userItems = page.locator('[data-testid="context-item"][data-role="user"]');
     await expect(userItems, '多 block 的 user 消息左侧应为 1 个整块项').toHaveCount(1);
 
+    // 列表项只显角色，不带时间：timestamp 是整个请求的统一时间（无分化），展示会误导
+    const userLabel = (await userItems.first().textContent())?.trim() ?? '';
+    expect(userLabel, '对话历史列表项不应再带 HH:mm:ss 时间').toBe('user');
+    expect(userLabel).not.toMatch(/\d{2}:\d{2}:\d{2}/);
+
     // 选中后右侧按 block 渲染 2 张 text 卡片
     await userItems.first().click();
     const textCards = page.locator('[data-testid="context-card"][data-kind="text"]');
     await expect(textCards, '2 个 content block 应渲染 2 张卡片').toHaveCount(2);
 
     const cardTexts = await textCards.allTextContents();
-    expect(cardTexts[0]).toContain('TAE90 user block one');
-    expect(cardTexts[1]).toContain('TAE90 user block two');
+    expect(cardTexts[0]).toContain('帮我查一下今天的天气');
+    expect(cardTexts[1]).toContain('顺便看看明天的');
+
+    // 验收截图：对话历史多卡片效果（test-results/tae90-context-msg-multiblock.png）
+    await page.screenshot({ path: 'test-results/tae90-context-msg-multiblock.png' });
   });
 });
