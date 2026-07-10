@@ -399,4 +399,49 @@ regression protection; a routing change could silently ship wrong commands that 
 - **AND** the preset `openai` command MUST appear exactly once despite having both
   `openai-chat` and `openai-responses` configured (the dedup rule)
 
+### Requirement: A dedicated provider-settings spec MUST cover the SettingsModal full flow (preset / custom / test-connection / delete)
+
+Beyond the seed and detail specs, there MUST be a spec (`e2e/provider-settings.spec.ts`) that drives the
+supplier-config modal (`SettingsModal`) through every interaction path a user takes, reusing the shared
+stack fixture (no reinvented isolation stack, no hand-rolled fixtures). It MUST cover: (a) the preset grid —
+clicking a not-yet-added preset lands a new `provider-row` and writes the provider to backend config; (b) custom
+creation — typing a name, then editing an endpoint's baseUrl, then blur-triggered autosave, MUST persist to
+backend config AND survive a page reload (the provider remains in the list and the endpoint value is still on
+disk when the backend re-reads config); (c) test connection — with the endpoint pointed at the mock upstream,
+the spec MUST observe a success result when the upstream returns `200` and a failure result when it returns
+`500`, toggled by `setMode` (no real upstream contacted); (d) delete — clicking the row-scoped delete button
+fires a `confirm` dialog naming the provider, and accepting it removes the `provider-row` and makes the backend
+return `404` for that provider.
+
+**Rationale:** Provider config is the on-ramp to the whole proxy — every preset/custom/endpoint/delete path is a
+place the UI silently breaks (autosave that doesn't persist, a delete that doesn't confirm, a test button that
+mis-reports reachability). The detail/seed specs never touch this modal; this spec is the regression net for the
+full SettingsModal flow, and the `data-testid` hooks it relies on (`settings-modal` / `provider-row` /
+`endpoint-input` / `test-connection-btn` / `delete-provider-btn`) are the stable contract for it.
+
+#### Scenario: Preset grid adds a provider and persists it
+- **GIVEN** the SettingsModal is open
+- **WHEN** the spec clicks `add-provider-btn` and then a `preset-item` that is not already added
+- **THEN** a `provider-row` with that preset's name MUST appear in the list (count +1)
+- **AND** the backend config MUST contain the provider with its preset endpoint (verified via `GET /api/providers/:name/full`)
+
+#### Scenario: Custom provider creation + endpoint autosave persists across reload
+- **GIVEN** the preset panel's custom input is shown
+- **WHEN** the spec enters a name, confirms, fills an `endpoint-input` baseUrl, and blurs it (triggering autosave)
+- **THEN** a `provider-row` for the custom name MUST appear
+- **AND** the backend config MUST hold the entered endpoint (autosave persisted to disk)
+- **AND** after a page reload and modal reopen, the provider-row MUST still be present and the endpoint value MUST still be on disk (backend re-read config)
+
+#### Scenario: Test connection reports success on 200 and failure on 500
+- **GIVEN** a provider whose `openai-chat` endpoint points at the mock upstream (persisted in config)
+- **WHEN** the upstream mode is `chat-json` and the spec clicks `test-connection-btn`
+- **THEN** the `test-result` for that protocol MUST have `data-ok="true"` and show a duration (`ms`)
+- **AND** when the upstream mode switches to `error-500` and the button is clicked again, the `test-result` MUST flip to `data-ok="false"` and surface the `500`
+
+#### Scenario: Delete confirms then removes the provider from list and config
+- **GIVEN** a provider exists with a `provider-row`
+- **WHEN** the spec clicks that row's `delete-provider-btn`
+- **THEN** a `confirm` dialog MUST appear whose message names the provider
+- **AND** accepting it MUST remove the `provider-row` (count -1)
+- **AND** the backend MUST return `404` for that provider afterward
 
