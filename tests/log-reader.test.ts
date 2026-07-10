@@ -159,6 +159,103 @@ describe('buildContextFromRequest — contextWindow 口径', () => {
 });
 
 /**
+ * buildContextFromRequest — 系统提示词多段还原（TAE-90）
+ * context.systemPrompt 必须是 string[]（N 段就 N 个元素），systemPromptLength 按段总长（含 \n）算。
+ */
+describe('buildContextFromRequest — 系统提示词按段保留', () => {
+  it('Anthropic body.system 多段 → context.systemPrompt 为数组、count=3、不拼接', () => {
+    const log = {
+      id: 'test-sys-multi',
+      timestamp: '2026-07-10T00:00:00.000Z',
+      request: {
+        method: 'POST',
+        url: 'https://api.anthropic.com/v1/messages',
+        headers: {},
+        body: {
+          model: 'glm-5.2',
+          system: [
+            { type: 'text', text: 'seg-0' },
+            { type: 'text', text: 'seg-1', cache_control: { type: 'ephemeral' } },
+            { type: 'text', text: 'seg-2', cache_control: { type: 'ephemeral' } },
+          ],
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+      },
+      response: { status: 200, statusText: 'OK', headers: {}, body: {} },
+      agentType: 'main',
+      duration: 0,
+      metadata: { model: 'glm-5.2', provider: 'claude', stream: false },
+      endpointType: 'anthropic-messages',
+    } as unknown as LogEntry;
+
+    buildContextFromRequest(log);
+
+    // 3 段就是 3 个元素，原文不拼接
+    expect(log.context?.systemPrompt).toEqual(['seg-0', 'seg-1', 'seg-2']);
+    // 段总长口径：'seg-0\nseg-1\nseg-2'.length = 18
+    expect(log.context?.summary?.systemPromptLength).toBe('seg-0\nseg-1\nseg-2'.length);
+  });
+
+  it('Anthropic body.system 字符串 → 单段数组（反向：单段不回归）', () => {
+    const log = {
+      id: 'test-sys-single',
+      timestamp: '2026-07-10T00:00:00.000Z',
+      request: {
+        method: 'POST',
+        url: 'https://api.anthropic.com/v1/messages',
+        headers: {},
+        body: {
+          model: 'glm-5.2',
+          system: 'only-one-segment',
+          messages: [{ role: 'user', content: 'hi' }],
+        },
+      },
+      response: { status: 200, statusText: 'OK', headers: {}, body: {} },
+      agentType: 'main',
+      duration: 0,
+      metadata: { model: 'glm-5.2', provider: 'claude', stream: false },
+      endpointType: 'anthropic-messages',
+    } as unknown as LogEntry;
+
+    buildContextFromRequest(log);
+
+    expect(log.context?.systemPrompt).toEqual(['only-one-segment']);
+    expect(log.context?.summary?.systemPromptLength).toBe('only-one-segment'.length);
+  });
+
+  it('OpenAI Chat 多条 system 消息 → 多段（修原先只留首条的丢弃 bug）', () => {
+    const log = {
+      id: 'test-sys-chat',
+      timestamp: '2026-07-10T00:00:00.000Z',
+      request: {
+        method: 'POST',
+        url: 'https://api.openai.com/v1/chat/completions',
+        headers: {},
+        body: {
+          model: 'gpt-4o',
+          messages: [
+            { role: 'system', content: 'sys-A' },
+            { role: 'system', content: 'sys-B' },
+            { role: 'user', content: 'hi' },
+          ],
+        },
+      },
+      response: { status: 200, statusText: 'OK', headers: {}, body: {} },
+      agentType: 'main',
+      duration: 0,
+      metadata: { model: 'gpt-4o', provider: 'openai', stream: false },
+      endpointType: 'openai-chat',
+    } as unknown as LogEntry;
+
+    buildContextFromRequest(log);
+
+    expect(log.context?.systemPrompt).toEqual(['sys-A', 'sys-B']);
+    // 两条 system 消息不混入对话历史（只留 user）
+    expect(log.context?.messages).toHaveLength(1);
+  });
+});
+
+/**
  * applyContextCache：读路径按 log.id 记忆提取结果。
  * 日志不可变 → 同 id 第二次读应命中缓存、贴回同一份 context/kvCache，不再重提。
  * 见 TAE-73（迁移后刷新页面重复触发上下文提取）。

@@ -28,8 +28,14 @@ export interface NormalizedTool {
   description?: string;
 }
 
+/**
+ * 系统提示词：按「段」保留，N 段就 N 个元素（不再 join 成单串）。
+ * - Anthropic `body.system` 数组：每个 text block = 一段；字符串：单段。
+ * - OpenAI Chat：每条 system 消息 = 一段（多条全保留，不再只留首条）。
+ * - OpenAI Responses `instructions`：单段。
+ */
 export interface ExtractedContext {
-  systemPrompt?: string;
+  systemPrompt?: string[];
   messages: NormalizedMessage[];
   tools: NormalizedTool[];
 }
@@ -77,14 +83,15 @@ export const detectApiType = detectEndpointType;
 export function extractAnthropicMessages(body: any): ExtractedContext | null {
   if (!body || typeof body !== 'object') return null;
 
-  let systemPrompt: string | undefined;
+  let systemPrompt: string[] | undefined;
   if (typeof body.system === 'string') {
-    systemPrompt = body.system;
+    systemPrompt = [body.system];
   } else if (Array.isArray(body.system)) {
-    systemPrompt = body.system
+    // 每个 text block = 一段，保序保留，不再 join。
+    const segments = body.system
       .filter((b: any) => b.type === 'text' && typeof b.text === 'string')
-      .map((b: any) => b.text)
-      .join('\n') || undefined;
+      .map((b: any) => b.text);
+    systemPrompt = segments.length ? segments : undefined;
   }
 
   const messages: NormalizedMessage[] = Array.isArray(body.messages)
@@ -111,18 +118,21 @@ export function extractOpenAIChat(body: any): ExtractedContext | null {
   if (!body || typeof body !== 'object') return null;
 
   const rawMessages = Array.isArray(body.messages) ? body.messages : [];
-  let systemPrompt: string | undefined;
+  // 每条 system 消息 = 一段，多条全保留（不再只留首条 continue 掉后面的）。
+  const systemSegments: string[] = [];
 
   const messages: NormalizedMessage[] = [];
   for (const msg of rawMessages) {
     if (msg.role === 'system') {
-      if (!systemPrompt) {
-        systemPrompt = typeof msg.content === 'string'
+      const segment = typeof msg.content === 'string'
+        ? msg.content
+        : Array.isArray(msg.content)
           ? msg.content
-          : Array.isArray(msg.content)
-            ? msg.content.filter((b: any) => b.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('\n')
-            : undefined;
-      }
+              .filter((b: any) => b.type === 'text' && typeof b.text === 'string')
+              .map((b: any) => b.text)
+              .join('\n')
+          : undefined;
+      if (typeof segment === 'string') systemSegments.push(segment);
       continue;
     }
     messages.push({
@@ -143,7 +153,11 @@ export function extractOpenAIChat(body: any): ExtractedContext | null {
       })
     : [];
 
-  return { systemPrompt, messages, tools };
+  return {
+    systemPrompt: systemSegments.length ? systemSegments : undefined,
+    messages,
+    tools,
+  };
 }
 
 // ==================== OpenAI Responses API ====================
@@ -151,8 +165,9 @@ export function extractOpenAIChat(body: any): ExtractedContext | null {
 export function extractOpenAIResponses(body: any): ExtractedContext | null {
   if (!body || typeof body !== 'object') return null;
 
+  // instructions 语义上是单段。
   const systemPrompt = typeof body.instructions === 'string'
-    ? body.instructions
+    ? [body.instructions]
     : undefined;
 
   let messages: NormalizedMessage[] = [];
@@ -196,8 +211,9 @@ export function extractContext(body: any, url: string): ExtractedContext | null 
   if (endpointType && extractors[endpointType]) {
     const result = extractors[endpointType](body);
     if (result) {
-      log('提取上下文: endpointType=%s messages=%d tools=%d systemPromptLen=%d',
-        endpointType, result.messages.length, result.tools.length, result.systemPrompt?.length ?? 0);
+      log('提取上下文: endpointType=%s messages=%d tools=%d systemPromptSegments=%d systemPromptLen=%d',
+        endpointType, result.messages.length, result.tools.length,
+        result.systemPrompt?.length ?? 0, result.systemPrompt?.join('\n').length ?? 0);
     }
     return result;
   }

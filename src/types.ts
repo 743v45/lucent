@@ -227,7 +227,8 @@ export interface SettingsContextValue {
 export interface ContextData {
   messages?: ContextMessage[];
   summary?: ContextSummary;
-  systemPrompt?: string;
+  /** 系统提示词分段（N 段就 N 个元素，不再拼接）。Anthropic system 数组逐段、OpenAI Chat 逐 system 消息、Responses instructions 单段。 */
+  systemPrompt?: string[];
   tools?: Tool[];
   contextWindow?: ContextWindowInfo;
 }
