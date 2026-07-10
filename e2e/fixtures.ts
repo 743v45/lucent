@@ -40,6 +40,8 @@ export interface LucentStack {
   }>;
   /** 取指定 provider/endpoint 的最新一条日志 id（落库后才有） */
   latestLogId(provider: string, endpoint: string): Promise<string | undefined>;
+  /** 清空后端全部日志（DELETE /api/logs）。worker 共享后端，大数据量测试收尾用，避免污染兄弟 spec。 */
+  clearLogs(): Promise<void>;
 }
 
 /** 等子进程 stdout 命中正则（启动就绪信号）；超时则把累积输出拼进报错，便于诊断 */
@@ -98,6 +100,9 @@ export const test = base.extend<{ lucent: LucentStack }>({
       const upstream = await createMockUpstream({ name: 'ui-e2e', format: 'openai' });
       const upstreamBase = `http://127.0.0.1:${upstream.port}/v1`;
 
+      // 两个供应商：'openai'（兄弟 spec 的 /openai/... 请求都走它，勿改名）+ 'beta'。
+      // 'beta' 专供 log-list-filter spec 验「按供应商筛选」——单供应商时筛选退化为全选，
+      // 无法证明排除，故加一个。两者 openai-chat 都指同一 mock 上游，路由互不影响。
       writeFileSync(
         join(configDir, 'config.json'),
         JSON.stringify({
@@ -108,6 +113,11 @@ export const test = base.extend<{ lucent: LucentStack }>({
             {
               id: 'p-openai',
               name: 'openai',
+              endpoints: { 'anthropic-messages': null, 'openai-chat': upstreamBase, 'openai-responses': null },
+            },
+            {
+              id: 'p-beta',
+              name: 'beta',
               endpoints: { 'anthropic-messages': null, 'openai-chat': upstreamBase, 'openai-responses': null },
             },
           ],
@@ -182,6 +192,9 @@ export const test = base.extend<{ lucent: LucentStack }>({
           // /api/logs 按 timestamp 倒序，首个匹配即最新
           const match = logs.find((e) => e.providerName === provider && e.endpointType === endpoint);
           return match?.id as string | undefined;
+        },
+        async clearLogs() {
+          await fetch(`${backendApiBase}/api/logs`, { method: 'DELETE' });
         },
       };
 

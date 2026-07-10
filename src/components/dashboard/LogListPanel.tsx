@@ -178,6 +178,7 @@ function LogRow({
         </span>
         {log.response && (
           <span
+            data-testid="log-status"
             className={`font-[510] shrink-0 ${getStatusColor(log.response.status)}`}
           >
             {log.response.status}
@@ -207,6 +208,9 @@ function SessionListView({ logs, selectedId, onSelectLog, getAgentTypeTag, short
       {groups.map((g) => (
         <div key={g.threadId} className="mb-2">
           <button onClick={() => toggle(g.threadId)}
+            data-testid="session-group"
+            data-threadid={g.threadId}
+            data-count={g.mainLogs.length + g.subLogs.length}
             className="w-full flex items-center gap-2 p-2 rounded-lg bg-bg-surface border border-border-subtle hover:border-border-primary text-left">
             <ChevronIcon expanded={!collapsed[g.threadId]} />
             <span className="truncate flex-1 min-w-0 text-[13px] font-[510] text-text-secondary">{g.title}</span>
@@ -329,12 +333,14 @@ export function LogListPanel({
         <div className="ml-auto flex items-center gap-2 min-w-0 shrink">
           <div className="flex items-center rounded-md border border-border-subtle overflow-hidden shrink-0">
             <button
+              data-testid="view-timeline"
               onClick={() => onConversationViewChange('timeline')}
               className={`px-2.5 py-0.5 text-[13px] font-[510] transition-colors ${
                 conversationView === 'timeline' ? 'bg-bg-active text-text-primary' : 'text-text-quaternary hover:text-text-secondary bg-bg-deep'
               }`}
             >时间线</button>
             <button
+              data-testid="view-session"
               onClick={() => onConversationViewChange('session')}
               className={`px-2.5 py-0.5 text-[13px] font-[510] transition-colors ${
                 conversationView === 'session' ? 'bg-bg-active text-text-primary' : 'text-text-quaternary hover:text-text-secondary bg-bg-deep'
@@ -345,6 +351,7 @@ export function LogListPanel({
             <Select
               size="small"
               className="shrink min-w-0"
+              data-testid="provider-filter"
               value={providerFilter ?? 'all'}
               onChange={(v) => onProviderFilterChange(v)}
               options={[
@@ -365,6 +372,7 @@ export function LogListPanel({
             <Select
               size="small"
               className="shrink min-w-0"
+              data-testid="endpoint-filter"
               value={endpointFilter ?? 'all'}
               onChange={(v) => onEndpointFilterChange(v)}
               labelRender={(option) => {
@@ -408,11 +416,11 @@ export function LogListPanel({
       )}
 
       {loading ? (
-        <div className="flex-1 flex items-center justify-center min-h-[200px]">
+        <div data-testid="log-loading" className="flex-1 flex items-center justify-center min-h-[200px]">
           <Spin tip="加载中..." />
         </div>
       ) : logs.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center min-h-[200px]">
+        <div data-testid="log-empty" className="flex-1 flex items-center justify-center min-h-[200px]">
           <Empty
             description="暂无通信记录"
             image={Empty.PRESENTED_IMAGE_SIMPLE}

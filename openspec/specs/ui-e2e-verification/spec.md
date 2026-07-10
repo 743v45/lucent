@@ -231,3 +231,68 @@ and forces the spec to be updated to assert auto-appearance.
 - **THEN** the second request's `log-row` MUST NOT appear in the list (the frontend has no realtime consumer)
 - **AND** clicking `refresh-btn` afterwards MUST make it appear (the list updates via refresh, not push)
 - **NOTE** this scenario locks in current behavior; when realtime push is implemented it MUST be updated to assert auto-appearance
+
+### Requirement: A dedicated log-list-filter spec MUST cover list rendering, multi-dimension filtering, persistence, view-switch, and pagination
+
+Beyond the seed's main flow, there MUST be a spec (`e2e/log-list-filter.spec.ts`) that
+covers the "log list & multi-dimension filter" feature (TAE-48) through real interactions,
+reusing the shared stack fixture (no reinvented isolation stack, no hardcoded real keys —
+the only credential is an obvious dummy bearer token). It MUST cover: (a) list-row rendering
+— each row surfaces the agent-type tag (MainAgent/SubAgent), the upstream status code, a
+duration, and the SSE/JSON stream badge, driven by real requests whose agent type is
+controlled via the system prompt and whose status via the mock upstream's response modes;
+(b) the provider dropdown filters server-side and EXCLUDES other providers (selecting one
+provider yields exactly that provider's rows, strictly fewer than the unfiltered view,
+matching `/api/logs?providerName=`); (c) the protocol dropdown filters server-side and an
+unconfigured protocol yields the empty state; (d) filter state persists across
+`page.reload()` via `localStorage` (`lucent.providerFilter` / `lucent.endpointFilter`) with
+the rendered row set unchanged; (e) timeline↔session view switch loses no rows and
+duplicates none, and same-`threadId` logs (content-addressed from the first user message)
+collapse into one session group; (f) `>PAGE_SIZE` logs paginate — the first page is
+`PAGE_SIZE`, a "load more" affordance is shown while `hasMore`, and reaching the bottom
+of the list (the `onScroll` trigger) loads the next page until `hasMore` flips false; (g) the initial fetch shows a "loading" state. To exercise provider filtering
+the fixture configures a second provider (`beta`) alongside `openai` — a single provider
+makes the filter degenerate (selecting it equals "all") and cannot prove exclusion.
+
+**Rationale:** Filtering, persistence, view-switch grouping, and pagination are the
+regression-prone core of this panel; TAE-48 verified them but left only one-shot verify
+scripts. A spec locks them behind real dropdown clicks and view switches.
+
+#### Scenario: List rows render agent type, status, duration, and stream badge
+- **GIVEN** the stack is up with `openai` and `beta` providers pointed at a mock upstream
+- **WHEN** the spec sends beta chat requests producing a 200 (non-streaming), a 500, and a
+  SubAgent (system prompt carries `cc_is_subagent=true`), then filters the UI by `beta`
+- **THEN** the 200 row's `log-status` MUST read `200`, the row MUST show `MainAgent`, the `JSON` badge, and a duration (`Nms` or `N.Ns`)
+- **AND** the 500 row's `log-status` MUST read `500`
+- **AND** the SubAgent row MUST show the `SubAgent` tag
+
+#### Scenario: Provider dropdown filters server-side and excludes other providers
+- **GIVEN** logs exist under both `openai` and `beta`
+- **WHEN** the spec selects `beta` in the provider dropdown
+- **THEN** the visible rows MUST be exactly the `beta` logs (matching `/api/logs?providerName=beta`)
+- **AND** the visible count MUST be strictly less than the unfiltered view (openai rows excluded)
+
+#### Scenario: Protocol dropdown excludes; an unconfigured protocol shows the empty state
+- **WHEN** the spec selects `OpenAI Chat`, every visible row MUST be `openai-chat`
+- **AND** selecting `Anthropic Messages` (no such logs exist) MUST render the empty state (`log-empty`) with zero `log-row`s
+
+#### Scenario: Filter state persists across reload via localStorage
+- **WHEN** the spec sets the provider filter to `beta` and reloads the page
+- **THEN** `localStorage.lucent.providerFilter` MUST equal `beta`
+- **AND** the rendered row set after reload MUST equal the set before reload
+
+#### Scenario: View switch loses no rows and groups same-thread logs
+- **GIVEN** two beta requests share the same first user message (same content-addressed threadId) and a third differs
+- **WHEN** the spec switches timeline → session → timeline
+- **THEN** the session row set MUST equal the timeline row set (no loss), with no duplicate ids
+- **AND** a session group with `count=2` MUST exist (the two same-thread logs collapsed into one group)
+
+#### Scenario: Pagination beyond PAGE_SIZE via the onScroll trigger
+- **GIVEN** more than `PAGE_SIZE` logs exist
+- **THEN** the first page MUST render exactly `PAGE_SIZE` rows and the `load-more-btn` MUST be visible (the `hasMore` cue)
+- **AND** scrolling the list to the bottom MUST load the next page and grow the row count, after which `hasMore` is false and the button disappears
+
+#### Scenario: Initial fetch shows a loading state
+- **WHEN** the spec stalls the `/api/logs` fetches (route hold) and loads the page
+- **THEN** the `log-loading` state MUST be visible while the fetch is pending
+- **AND** after releasing the fetch, rows MUST appear and the loading state MUST disappear
