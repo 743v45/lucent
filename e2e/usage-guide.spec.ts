@@ -46,7 +46,8 @@ test.describe('使用说明弹窗 UsageGuide：自动生成 export 接入命令'
     await expect(page.getByTestId('usage-guide')).toBeVisible();
 
     // ② 断言渲染命令命中真实隔离 host:port + custom/ 前缀 + /v1 后缀（端口取自隔离栈，不写死）
-    const line = page.getByTestId('access-line').filter({ hasText: 'OPENAI_BASE_URL' });
+    // 共享 fixture 现配了多个 custom OpenAI 供应商（openai + beta），按 openai 的路径精确锁定这一行
+    const line = page.getByTestId('access-line').filter({ hasText: '/custom/openai/v1' });
     await expect(line).toBeVisible();
     const cmdText = (await line.textContent()) ?? '';
     expect(cmdText, '命令应含真实隔离 host:port').toContain(`${base}/custom/openai/v1`);
