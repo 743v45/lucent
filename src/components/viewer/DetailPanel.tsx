@@ -1,5 +1,5 @@
 import { useState, useCallback, useEffect, useMemo } from 'react';
-import type { LogEntry, TabType, SSERawBody, SSERawLine, KVCacheBlock } from '../../types';
+import type { LogEntry, TabType, SSERawBody, SSERawLine, KVCacheBlock, ContextMessage, ContentBlock } from '../../types';
 import { ENDPOINT_LABELS } from '../../types';
 import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, CACHE_HIT_RATE_GOOD_THRESHOLD, CACHE_HIT_RATE_BAD_THRESHOLD, STORAGE_KEY_DETAIL_BODY_EXPANDED, STORAGE_KEY_DETAIL_HEADERS_EXPANDED, getStatusColor } from '../../constants';
 import { resolveResponseType } from '../../utils/response-type';
@@ -904,12 +904,27 @@ interface ContextTabProps {
   searchTerm?: string;
 }
 
-// 选中项类型
+// 选中项类型：左侧每个「逻辑块」一项。system 是一整块（不再按段拆成多项），
+// 多段在右侧以多张卡片呈现；message / tool 仍各自一项。
 type SelectedItem =
-  | { type: 'systemPrompt'; index: number }
+  | { type: 'systemPrompt' }
   | { type: 'tool'; index: number }
   | { type: 'message'; index: number }
   | null;
+
+// 右侧详情卡片：系统提示词的一段、消息的一个 content block、工具描述，都映射成一张卡片。
+// 之所以拆成卡片，是因为一段 system / 一个 content block 本就是独立的语义单元——
+// 用户要的是「一整块在左、多张卡在右」，而不是把多段 join 成一坨文本。
+interface DetailCard {
+  /** 卡片头左侧标签：段号 / 类型名（如 段 1、工具调用: Bash） */
+  label?: string;
+  /** 卡片头右侧小标签（如 工具调用、工具结果） */
+  tag?: { text: string; className: string };
+  /** 卡片正文（markdown） */
+  content: string;
+  /** 卡片语义类型，供 e2e 与样式区分（segment / text / tool_use / tool_result / plain） */
+  kind: 'segment' | 'text' | 'tool_use' | 'tool_result' | 'plain';
+}
 
 // 折叠分组状态
 interface CollapsedGroups {
@@ -954,9 +969,9 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
     messages: false,
   });
 
-  // 选中项（默认选首段系统提示词）
+  // 选中项（默认选系统提示词整块；无则留空，提示用户点左侧）
   const [selected, setSelected] = useState<SelectedItem>(
-    data.systemPrompt?.length ? { type: 'systemPrompt', index: 0 } : null
+    data.systemPrompt?.length ? { type: 'systemPrompt' } : null
   );
 
   const toggleGroup = (group: keyof CollapsedGroups) => {
@@ -965,19 +980,60 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
 
   const summary = data.summary;
 
-  // 获取选中项的内容
-  const getSelectedContent = (): { title: string; content: string; contentType?: 'json' } | null => {
-    if (!selected) return null;
+  // 角色中文标签
+  const roleLabelOf = (msg: ContextMessage): string =>
+    msg.role === 'user' ? '用户' : msg.role === 'assistant' ? '助手' : msg.tool_use_id ? '工具' : msg.role;
 
+  // 一条消息 → 多张卡片：content 是字符串就一张文本卡；是 ContentBlock[] 就逐块一张卡
+  // （text / tool_use / tool_result 各自成卡）。content 归一化为空数组时返回空数组，
+  // 标题仍展示，正文区给「无内容」提示，与历史行为对齐。
+  const messageToCards = (msg: ContextMessage): DetailCard[] => {
+    if (typeof msg.content === 'string') {
+      return [{ content: msg.content, kind: 'text' }];
+    }
+    const blocks: ContentBlock[] = Array.isArray(msg.content) ? msg.content : [];
+    return blocks.map((block) => {
+      if (block.type === 'text') {
+        return { content: block.text ?? '', kind: 'text' as const };
+      }
+      if (block.type === 'tool_use') {
+        const tb = block as { name?: string; input?: unknown };
+        return {
+          label: `工具调用: ${tb.name ?? 'unknown'}`,
+          tag: { text: '工具调用', className: 'text-brand-accent' },
+          content: JSON.stringify(tb.input ?? null, null, 2),
+          kind: 'tool_use' as const,
+        };
+      }
+      if (block.type === 'tool_result') {
+        const rb = block as { content?: unknown };
+        return {
+          label: '工具结果',
+          tag: { text: '工具结果', className: 'text-tool' },
+          content: extractToolResultContent(rb.content),
+          kind: 'tool_result' as const,
+        };
+      }
+      // 未知 block 类型：原样 JSON 兜底，不丢内容。
+      return { content: JSON.stringify(block, null, 2), kind: 'plain' as const };
+    });
+  };
+
+  // 选中项 → 标题 + 卡片集合。system 一整块映射成 N 张段卡；message 逐 content block 成卡。
+  const buildDetail = (): { title: string; cards: DetailCard[] } | null => {
+    if (!selected) return null;
     switch (selected.type) {
       case 'systemPrompt': {
-        const segment = data.systemPrompt?.[selected.index];
-        if (segment === undefined) return null;
+        const segments = data.systemPrompt ?? [];
+        if (!segments.length) return null;
+        const multi = segments.length > 1;
         return {
-          title: data.systemPrompt && data.systemPrompt.length > 1
-            ? `系统提示词 #${selected.index + 1}`
-            : '系统提示词',
-          content: segment,
+          title: '系统提示词',
+          cards: segments.map((seg, i) => ({
+            label: multi ? `段 ${i + 1}` : undefined,
+            content: seg,
+            kind: 'segment' as const,
+          })),
         };
       }
       case 'tool': {
@@ -985,41 +1041,21 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
         if (!tool) return null;
         return {
           title: `工具: ${tool.name}`,
-          content: tool.description || '无描述',
+          cards: [{ content: tool.description || '无描述', kind: 'plain' }],
         };
       }
       case 'message': {
         const msg = data.messages?.[selected.index];
         if (!msg) return null;
-        // content 可能是 string / ContentBlock[]，OpenAI 多轮 tool-use 的 assistant 消息
-        // 历史上为 null（仅发起 tool_calls）。统一兜底：非数组按空内容处理，避免 .map 崩溃。
-        const contentBlocks = Array.isArray(msg.content) ? msg.content : [];
-        const contentText =
-          typeof msg.content === 'string'
-            ? msg.content
-            : contentBlocks
-                .map((block) => {
-                  if (block.type === 'text' && block.text) {
-                    return block.text;
-                  } else if (block.type === 'tool_use') {
-                    const toolBlock = block as { name?: string; input?: unknown };
-                    return `[工具调用: ${toolBlock.name ?? 'unknown'}]\n${JSON.stringify(toolBlock.input, null, 2)}`;
-                  } else if (block.type === 'tool_result') {
-                    const resultBlock = block as { content?: unknown };
-                    return `[工具结果]\n${extractToolResultContent(resultBlock.content)}`;
-                  }
-                  return '';
-                })
-                .join('\n\n');
         return {
-          title: `${msg.role === 'user' ? '用户' : msg.role === 'assistant' ? '助手' : '工具'} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`,
-          content: contentText,
+          title: `${roleLabelOf(msg)} - ${new Date(msg.timestamp).toLocaleTimeString('zh-CN')}`,
+          cards: messageToCards(msg),
         };
       }
     }
   };
 
-  const selectedContent = getSelectedContent();
+  const detail = buildDetail();
 
   return (
     <div className="flex h-full">
@@ -1082,29 +1118,22 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
           </ContextCollapsibleGroup>
         )}
 
-        {/* 系统提示词分组（N 段渲染 N 条，不再拼成 1 段） */}
-        {data.systemPrompt !== undefined && (
+        {/* 系统提示词分组：左侧一整块（一 system 一项），多段在右侧以多卡片呈现。
+            count 标段数，回应原始 bug「只显示 1、应显示 N」。 */}
+        {data.systemPrompt !== undefined && data.systemPrompt.length > 0 && (
           <ContextCollapsibleGroup
             title="系统提示词"
             count={data.systemPrompt.length}
             collapsed={collapsed.systemPrompt}
             onToggle={() => toggleGroup('systemPrompt')}
           >
-            {data.systemPrompt.map((segment, i) => {
-              // 段首预览：首个非空行截断，空段回退纯序号。
-              const firstLine = segment.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
-              const preview = firstLine.length > 24 ? `${firstLine.slice(0, 24)}…` : firstLine;
-              return (
-                <ContextListItem
-                  key={i}
-                  role="system"
-                  label={preview ? `#${i + 1} · ${preview}` : `#${i + 1}`}
-                  isSelected={selected?.type === 'systemPrompt' && selected?.index === i}
-                  onClick={() => setSelected({ type: 'systemPrompt', index: i })}
-                  color="text-warning"
-                />
-              );
-            })}
+            <ContextListItem
+              role="system"
+              label="System"
+              isSelected={selected?.type === 'systemPrompt'}
+              onClick={() => setSelected({ type: 'systemPrompt' })}
+              color="text-warning"
+            />
           </ContextCollapsibleGroup>
         )}
 
@@ -1130,16 +1159,24 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
         )}
       </div>
 
-      {/* 右侧详情 */}
+      {/* 右侧详情：选中项拆成多张卡片（system 每段一张、message 每个 content block 一张） */}
       <div className="flex-1 min-w-0 overflow-auto bg-bg-deep">
-        {selectedContent ? (
+        {detail ? (
           <div className="p-4">
             {/* 标题 */}
             <div className="mb-3 pb-3 border-b border-border-subtle">
-              <h3 className="text-[17px] font-[510] text-text-primary">{selectedContent.title}</h3>
+              <h3 className="text-[17px] font-[510] text-text-primary" data-testid="detail-title">{detail.title}</h3>
             </div>
-            {/* 内容 */}
-            <MarkdownContent content={selectedContent.content} highlight={searchTerm} />
+            {/* 卡片堆 */}
+            {detail.cards.length > 0 ? (
+              <div className="space-y-3">
+                {detail.cards.map((card, i) => (
+                  <ContextDetailCard key={i} card={card} highlight={searchTerm} />
+                ))}
+              </div>
+            ) : (
+              <span className="text-text-quaternary text-sm">（无内容）</span>
+            )}
           </div>
         ) : (
           <div className="flex items-center justify-center h-full">
@@ -1209,6 +1246,34 @@ function ContextListItem({
     >
       <span className={`${isSelected ? '' : color} font-[510]`}>{label}</span>
     </button>
+  );
+}
+
+// ==================== Context Detail Card ====================
+
+// 右侧详情的一张卡片：可选头部（标签 + 角标）+ markdown 正文。
+// system 的每一段、message 的每个 content block 都是独立卡片，不再合并成一坨文本。
+function ContextDetailCard({ card, highlight }: { card: DetailCard; highlight?: string }): JSX.Element {
+  return (
+    <div
+      data-testid="context-card"
+      data-kind={card.kind}
+      className="rounded-lg border border-border-subtle bg-bg-surface/50 overflow-hidden"
+    >
+      {(card.label || card.tag) && (
+        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border-subtle bg-bg-surface/30">
+          {card.label && <span className="text-sm font-[510] text-text-secondary">{card.label}</span>}
+          {card.tag && (
+            <span className={`text-xs px-1.5 py-0.5 rounded ${card.tag.className}`}>{card.tag.text}</span>
+          )}
+        </div>
+      )}
+      <div className="p-3">
+        {card.content
+          ? <MarkdownContent content={card.content} highlight={highlight} />
+          : <span className="text-text-quaternary text-sm">（空）</span>}
+      </div>
+    </div>
   );
 }
 
