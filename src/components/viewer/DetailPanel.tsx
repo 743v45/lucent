@@ -906,7 +906,7 @@ interface ContextTabProps {
 
 // 选中项类型
 type SelectedItem =
-  | { type: 'systemPrompt' }
+  | { type: 'systemPrompt'; index: number }
   | { type: 'tool'; index: number }
   | { type: 'message'; index: number }
   | null;
@@ -954,9 +954,9 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
     messages: false,
   });
 
-  // 选中项
+  // 选中项（默认选首段系统提示词）
   const [selected, setSelected] = useState<SelectedItem>(
-    data.systemPrompt ? { type: 'systemPrompt' } : null
+    data.systemPrompt?.length ? { type: 'systemPrompt', index: 0 } : null
   );
 
   const toggleGroup = (group: keyof CollapsedGroups) => {
@@ -970,11 +970,16 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
     if (!selected) return null;
 
     switch (selected.type) {
-      case 'systemPrompt':
+      case 'systemPrompt': {
+        const segment = data.systemPrompt?.[selected.index];
+        if (segment === undefined) return null;
         return {
-          title: '系统提示词',
-          content: data.systemPrompt || '',
+          title: data.systemPrompt && data.systemPrompt.length > 1
+            ? `系统提示词 #${selected.index + 1}`
+            : '系统提示词',
+          content: segment,
         };
+      }
       case 'tool': {
         const tool = data.tools?.[selected.index];
         if (!tool) return null;
@@ -1077,23 +1082,29 @@ function ContextTab({ log, searchTerm }: ContextTabProps): JSX.Element {
           </ContextCollapsibleGroup>
         )}
 
-        {/* 系统提示词分组 */}
+        {/* 系统提示词分组（N 段渲染 N 条，不再拼成 1 段） */}
         {data.systemPrompt !== undefined && (
           <ContextCollapsibleGroup
             title="系统提示词"
-            count={data.systemPrompt ? 1 : 0}
+            count={data.systemPrompt.length}
             collapsed={collapsed.systemPrompt}
             onToggle={() => toggleGroup('systemPrompt')}
           >
-            {data.systemPrompt && (
-              <ContextListItem
-                role="system"
-                label="System"
-                isSelected={selected?.type === 'systemPrompt'}
-                onClick={() => setSelected({ type: 'systemPrompt' })}
-                color="text-warning"
-              />
-            )}
+            {data.systemPrompt.map((segment, i) => {
+              // 段首预览：首个非空行截断，空段回退纯序号。
+              const firstLine = segment.split('\n').map((l) => l.trim()).find((l) => l.length > 0) ?? '';
+              const preview = firstLine.length > 24 ? `${firstLine.slice(0, 24)}…` : firstLine;
+              return (
+                <ContextListItem
+                  key={i}
+                  role="system"
+                  label={preview ? `#${i + 1} · ${preview}` : `#${i + 1}`}
+                  isSelected={selected?.type === 'systemPrompt' && selected?.index === i}
+                  onClick={() => setSelected({ type: 'systemPrompt', index: i })}
+                  color="text-warning"
+                />
+              );
+            })}
           </ContextCollapsibleGroup>
         )}
 

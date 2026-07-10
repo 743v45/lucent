@@ -178,7 +178,7 @@ export interface LogEntry {
       toolsCount: number;
       duration: number;
     };
-    systemPrompt?: string;
+    systemPrompt?: string[];
     tools?: Array<{ name: string; description?: string }>;
     contextWindow?: {
       totalTokens: number;

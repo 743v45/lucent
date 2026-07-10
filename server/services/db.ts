@@ -148,7 +148,7 @@ export function buildSearchText(entry: RawLogEntry): string {
 
   const extracted = extractContext(body, entry.url);
   if (extracted) {
-    if (extracted.systemPrompt) parts.push(extracted.systemPrompt);
+    if (extracted.systemPrompt?.length) parts.push(...extracted.systemPrompt);
     for (const m of extracted.messages) parts.push(flattenContent(m.content));
     for (const t of extracted.tools) parts.push(t.name);
   } else if (body?.messages && Array.isArray(body.messages)) {

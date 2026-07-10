@@ -101,3 +101,97 @@ describe('extractors — happy path（正常 content 不受影响）', () => {
     expect(ctx?.messages[0].content).toEqual([{ type: 'text', text: 'hi' }]);
   });
 });
+
+// ==================== 系统提示词多段还原（N 段不再 join 成 1 段，TAE-90） ====================
+//
+// 三协议统一按「段」口径：Anthropic system 数组逐 text block 一段；OpenAI Chat 逐 system 消息一段
+// （修原先只留首条、后面 continue 丢弃的 bug）；Responses instructions 单段。单段/字符串不回归。
+
+describe('extractors — 系统提示词按段保留，不 join', () => {
+  it('extractAnthropicMessages：body.system 多 text block → 每段一个元素（保序、不拼接）', () => {
+    const ctx = extractAnthropicMessages({
+      system: [
+        { type: 'text', text: 'seg-A' },
+        { type: 'text', text: 'seg-B', cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: 'seg-C', cache_control: { type: 'ephemeral' } },
+      ],
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    // 3 段就是 3 个元素，原文不拼接（无 '\n'）
+    expect(ctx?.systemPrompt).toEqual(['seg-A', 'seg-B', 'seg-C']);
+    expect(ctx?.systemPrompt?.join('')).toBe('seg-Aseg-Bseg-C');
+  });
+
+  it('extractAnthropicMessages：body.system 是字符串 → 单段数组（反向：不回归）', () => {
+    const ctx = extractAnthropicMessages({
+      system: 'only-segment',
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(ctx?.systemPrompt).toEqual(['only-segment']);
+  });
+
+  it('extractAnthropicMessages：body.system 数组只含非 text block → undefined', () => {
+    const ctx = extractAnthropicMessages({
+      system: [{ type: 'image', source: {} }],
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(ctx?.systemPrompt).toBeUndefined();
+  });
+
+  it('extractOpenAIChat：多条 system 消息全保留（修原先第 2 条起被丢弃的 bug）', () => {
+    const ctx = extractOpenAIChat({
+      messages: [
+        { role: 'system', content: 'sys-1' },
+        { role: 'system', content: 'sys-2' },
+        { role: 'user', content: 'hello' },
+      ],
+    });
+    // 两条 system 消息各成一段，保序
+    expect(ctx?.systemPrompt).toEqual(['sys-1', 'sys-2']);
+    // system 消息不混入对话历史
+    expect(ctx?.messages).toHaveLength(1);
+    expect(ctx?.messages[0].role).toBe('user');
+  });
+
+  it('extractOpenAIChat：单条 system 消息（数组 content）→ 单段，段内 block join', () => {
+    const ctx = extractOpenAIChat({
+      messages: [
+        { role: 'system', content: [{ type: 'text', text: 'a' }, { type: 'text', text: 'b' }] },
+        { role: 'user', content: 'hi' },
+      ],
+    });
+    // 一条 system 消息 = 一段，段内两个 text block join 成 'a\nb'
+    expect(ctx?.systemPrompt).toEqual(['a\nb']);
+  });
+
+  it('extractOpenAIChat：无 system 消息 → systemPrompt undefined（反向）', () => {
+    const ctx = extractOpenAIChat({
+      messages: [{ role: 'user', content: 'hi' }],
+    });
+    expect(ctx?.systemPrompt).toBeUndefined();
+  });
+
+  it('extractOpenAIResponses：instructions 字符串 → 单段数组', () => {
+    const ctx = extractOpenAIResponses({
+      instructions: 'be helpful',
+      input: [{ role: 'user', content: 'hi' }],
+    });
+    expect(ctx?.systemPrompt).toEqual(['be helpful']);
+  });
+
+  // 端到端分发：URL 命中 anthropic → 走 anthropic extractor，多段口径一致。
+  it('extractContext(anthropic-messages)：3 段 system → 3 个元素', () => {
+    const ctx = extractContext(
+      {
+        system: [
+          { type: 'text', text: 's1' },
+          { type: 'text', text: 's2', cache_control: { type: 'ephemeral' } },
+          { type: 'text', text: 's3', cache_control: { type: 'ephemeral' } },
+        ],
+        messages: [{ role: 'user', content: 'hi' }],
+      },
+      'https://api.anthropic.com/v1/messages',
+    );
+    expect(ctx?.systemPrompt).toEqual(['s1', 's2', 's3']);
+  });
+});

@@ -224,7 +224,7 @@ export function buildContextFromRequest(log: LogEntry): void {
   const { systemPrompt, messages, tools } = extracted;
 
   // 只有有内容才构建
-  if (messages.length === 0 && !systemPrompt && !tools?.length) return;
+  if (messages.length === 0 && !systemPrompt?.length && !tools?.length) return;
 
   // 统计
   const userMsgs = messages.filter((m: any) => m.role === 'user').length;
@@ -248,11 +248,12 @@ export function buildContextFromRequest(log: LogEntry): void {
       userMessages: userMsgs,
       assistantMessages: assistantMsgs,
       toolMessages: toolMsgs,
-      systemPromptLength: systemPrompt?.length ?? 0,
+      // 段总长（含 \n 分隔，与旧 join 口径同形；单段时与旧值一致）。该字段当前无读取方，保留契约形状。
+      systemPromptLength: systemPrompt?.join('\n').length ?? 0,
       toolsCount: tools?.length ?? 0,
       duration: 0,
     },
-    ...(systemPrompt ? { systemPrompt } : {}),
+    ...(systemPrompt?.length ? { systemPrompt } : {}),
     ...(tools?.length ? { tools } : {}),
   };
 

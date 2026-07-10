@@ -57,14 +57,14 @@ registerEndpoint('anthropic-messages', {
   extractContext(body: any): ExtractedContext | null {
     if (!body || typeof body !== 'object') return null;
 
-    let systemPrompt: string | undefined;
+    let systemPrompt: string[] | undefined;
     if (typeof body.system === 'string') {
-      systemPrompt = body.system;
+      systemPrompt = [body.system];
     } else if (Array.isArray(body.system)) {
-      systemPrompt = body.system
+      const segments = body.system
         .filter((b: any) => b.type === 'text' && typeof b.text === 'string')
-        .map((b: any) => b.text)
-        .join('\n') || undefined;
+        .map((b: any) => b.text);
+      systemPrompt = segments.length ? segments : undefined;
     }
 
     const messages = Array.isArray(body.messages)
@@ -126,18 +126,17 @@ registerEndpoint('openai-chat', {
     if (!body || typeof body !== 'object') return null;
 
     const rawMessages = Array.isArray(body.messages) ? body.messages : [];
-    let systemPrompt: string | undefined;
+    const systemSegments: string[] = [];
     const messages: any[] = [];
 
     for (const msg of rawMessages) {
       if (msg.role === 'system') {
-        if (!systemPrompt) {
-          systemPrompt = typeof msg.content === 'string'
-            ? msg.content
-            : Array.isArray(msg.content)
-              ? msg.content.filter((b: any) => b.type === 'text').map((b: any) => b.text).join('\n')
-              : undefined;
-        }
+        const segment = typeof msg.content === 'string'
+          ? msg.content
+          : Array.isArray(msg.content)
+            ? msg.content.filter((b: any) => b.type === 'text' && typeof b.text === 'string').map((b: any) => b.text).join('\n')
+            : undefined;
+        if (typeof segment === 'string') systemSegments.push(segment);
         continue;
       }
       messages.push({
@@ -155,7 +154,11 @@ registerEndpoint('openai-chat', {
         })
       : [];
 
-    return { systemPrompt, messages, tools };
+    return {
+      systemPrompt: systemSegments.length ? systemSegments : undefined,
+      messages,
+      tools,
+    };
   },
 });
 
@@ -193,7 +196,7 @@ registerEndpoint('openai-responses', {
     if (!body || typeof body !== 'object') return null;
 
     const systemPrompt = typeof body.instructions === 'string'
-      ? body.instructions
+      ? [body.instructions]
       : undefined;
 
     let messages: any[] = [];
