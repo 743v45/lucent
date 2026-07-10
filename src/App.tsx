@@ -252,6 +252,7 @@ function App(): JSX.Element {
               className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
               onClick={() => setUsageGuideOpen(true)}
               title="使用说明"
+              data-testid="usage-guide-trigger"
             >
               <InformationCircleIcon className="w-[18px] h-[18px]" />
             </button>

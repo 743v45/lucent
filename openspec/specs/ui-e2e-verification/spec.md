@@ -350,3 +350,53 @@ non-empty path, and the OpenAI gap is documented rather than papered over.
 - **THEN** each tab MUST render only its own content (KV-Cache `命中率`, Context `context-item`, Meta `Agent 类型`)
 - **AND** the other two tabs' distinctive markers MUST NOT be present on the active tab
 
+### Requirement: A dedicated UsageGuide spec MUST cover the auto-generated export commands across provider/endpoint combinations
+
+There MUST be a spec (`e2e/usage-guide.spec.ts`) that drives the UsageGuide modal through real
+interactions — open from the top bar, read the auto-generated `export` access commands, copy one,
+and close — reusing the shared stack fixture (no reinvented isolation stack, no real upstream, no
+real key). The export command is produced by `buildAccessLines`; the spec MUST assert its structure
+against the **actual isolation values** (host and port taken from the running stack's
+`proxyBaseUrl`, never hardcoded well-known ports). The spec MUST cover the command differences
+across combinations: preset provider (no `custom/` prefix) vs custom provider (`custom/` prefix);
+`anthropic-messages` (`ANTHROPIC_BASE_URL`, no `/v1`) vs `openai-chat` / `openai-responses`
+(`OPENAI_BASE_URL`, `/v1` suffix); and the dedup rule where a single provider with both
+`openai-chat` and `openai-responses` yields exactly one `OPENAI_BASE_URL` command. The minimal
+`data-testid` hooks added for this spec are `usage-guide-trigger`, `usage-guide`, `access-line`,
+and `copy-cmd`.
+
+**Rationale:** The UsageGuide is the user-facing onboarding surface — its commands must match the
+proxy's real routing (preset/custom prefix, `/v1` suffix, dedup) or clients point at the wrong URL.
+`buildAccessLines` is unit-tested in isolation, but the modal's fetch → render → copy path had no
+regression protection; a routing change could silently ship wrong commands that look right.
+
+#### Scenario: Open the modal and assert the command against real isolation host:port
+- **GIVEN** the stack is up with a custom `openai` provider configured for `openai-chat`
+- **WHEN** the spec clicks the top-bar `usage-guide-trigger` to open the modal
+- **THEN** the `usage-guide` modal MUST be visible
+- **AND** the `access-line` command MUST equal
+  `export OPENAI_BASE_URL=http://<real-host>:<real-port>/custom/openai/v1`, where the host and port
+  are the stack's actual randomized values (not hardcoded)
+- **AND** the command MUST contain the `custom/` prefix and end in `/v1`
+
+#### Scenario: Copy writes the exact command to the clipboard and the modal closes
+- **GIVEN** the UsageGuide modal is open with at least one `access-line`
+- **WHEN** the spec clicks that line's `copy-cmd` button
+- **THEN** the clipboard MUST contain the exact `export ...` command text
+- **WHEN** the spec dismisses the modal (Escape)
+- **THEN** the `usage-guide` modal MUST no longer be visible
+
+#### Scenario: Preset vs custom provider and chat/responses/anthropic produce different commands
+- **GIVEN** providers spanning preset `anthropic` (`anthropic-messages`), preset `openai`
+  (`openai-chat` + `openai-responses`), and a custom `my-glm` (`openai-chat`)
+- **WHEN** the spec opens the UsageGuide modal
+- **THEN** the preset `anthropic` command MUST be
+  `export ANTHROPIC_BASE_URL=http://<host>:<port>/anthropic` (no `custom/`, no `/v1`)
+- **AND** the preset `openai` command MUST be
+  `export OPENAI_BASE_URL=http://<host>:<port>/openai/v1` (no `custom/`, `/v1`)
+- **AND** the custom `my-glm` command MUST be
+  `export OPENAI_BASE_URL=http://<host>:<port>/custom/my-glm/v1` (`custom/`, `/v1`)
+- **AND** the preset `openai` command MUST appear exactly once despite having both
+  `openai-chat` and `openai-responses` configured (the dedup rule)
+
+
