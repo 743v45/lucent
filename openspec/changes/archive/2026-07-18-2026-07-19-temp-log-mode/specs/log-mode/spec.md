@@ -1,0 +1,123 @@
+# log-mode Specification
+
+## ADDED Requirements
+
+### Requirement: logMode 三态门控写入（off / temporary / archive）
+`ProxyConfig.logMode` SHALL 取值 `off` | `temporary` | `archive`（缺省 `archive`，保持原全量记录语义）。`writeLogEntry`（`server/services/log-writer.ts`）作为唯一咽喉点 MUST 按 mode 门控：`off` 短路不落库（转发链路照旧）；`temporary` 落库且注入 `expires_at`；`archive` 落库且 `expires_at` 为 NULL。门控 MUST 用运行时 live getter `getLogMode()`（每次实时解析，反映 toggle 改动），MUST NOT 缓存启动快照。
+
+**Rationale:** 二态 `logRecording` 逼用户在「记一堆」与「啥也不记」间二选一，调试/压测无中间态。咽喉点门控一次性盖住 interceptor 全部 5 个 `writeLogEntry` 调用点 + 未来新增，避免散射 `if`。
+
+#### Scenario: off 不落库，转发照旧
+- **GIVEN** `logMode === 'off'`
+- **WHEN** 一个请求穿越代理（上游收到、客户端收到响应）
+- **THEN** SQLite 日志计数不增
+- **AND** 上游请求/响应字节不受影响
+
+#### Scenario: archive 落库且 expires_at 为 NULL
+- **GIVEN** `logMode === 'archive'`
+- **WHEN** 一个请求完成并写入日志
+- **THEN** `logs.expires_at` MUST 为 NULL（存档，仅受保留期清理约束）
+
+#### Scenario: temporary 落库且 expires_at 非空
+- **GIVEN** `logMode === 'temporary'`
+- **WHEN** 一个请求完成并写入日志
+- **THEN** `logs.expires_at` MUST 为一个 ISO 时间戳（非 NULL）
+
+### Requirement: temporary 模式的 expires_at 必须用实时 TTL 注入
+`writeLogEntry` 在 `temporary` 模式注入 `entry.expiresAt = ISO(now + ttlMinutes)`，其中 `ttlMinutes` 由运行时 live getter `getTempTtlMinutes()` 决定（env `LUCENT_TEMP_LOG_TTL_MINUTES` > `config.tempLogTtlMinutes` > 默认 30）。MUST NOT 使用 server 启动时的 `resolvedConfig` 快照——用户运行时改 TTL（InputNumber）必须立即反映到后续写入。
+
+**Rationale:** `logMode` 走 `getLogMode()` 实时，若 TTL 读启动快照则两者不一致——用户前端改 TTL 后写入仍用旧值。e2e 回归断言（改 TTL→临时发请求→`expires_at` 距 now ≈ 新 TTL 分钟）专门守这条。
+
+#### Scenario: 运行时改 TTL 后写入反映新值
+- **GIVEN** `logMode === 'temporary'`，启动时 TTL=30
+- **WHEN** 运行时 `setLogMode('temporary', 7)` 后发一个请求
+- **THEN** 新日志的 `expires_at` 距 `now` 约 7 分钟（容差 ±2 分钟）
+- **AND** MUST NOT 是约 30 分钟（旧快照值）
+
+### Requirement: 临时日志由独立定时器按 expires_at 清理，存档行不受影响
+系统 MUST 运行一个独立于保留期清理（每 24h）的定时器，按 `TEMP_LOG_CLEANUP_INTERVAL_MS`（默认 60s）扫描并 `DELETE FROM logs WHERE expires_at IS NOT NULL AND expires_at < now`（事务内级联 `log_bodies` + 手动删 `logs_fts`）。WHERE 子句 MUST 带 `expires_at IS NOT NULL`，保证存档行（NULL）绝不被误删。该清理 MUST NOT 执行 `VACUUM`（全库写锁，每分钟跑会卡代理写入）；空间回收交给 24h 保留期清理的 VACUUM + WAL 增量页复用。
+
+**Rationale:** 临时数据 TTL 分钟级，24h 保留期清理粒度太粗清不掉。独立密定时器 + 部分索引 `idx_logs_expires WHERE expires_at IS NOT NULL` 让扫描 O(临时行数)。不 VACUUM 是关键——每分钟 VACUUM 会锁全库卡代理。
+
+#### Scenario: 已过期临时行被删，未过期临时与存档保留
+- **GIVEN** 库内有：`expires_at` 已过期、`expires_at` 未到期、`expires_at` NULL（存档）各一行
+- **WHEN** `deleteExpiredLogs(db, now)` 执行
+- **THEN** 只删过期那 1 行（返回 1）
+- **AND** 未到期临时与存档行都在（`logs` / `log_bodies` / `logs_fts` 三表级联一致）
+
+#### Scenario: 全存档库（无 expires_at 非空行）清理返回 0 不误删
+- **GIVEN** 库内全是存档行（`expires_at` 均 NULL）
+- **WHEN** `deleteExpiredLogs(db, far-future-iso)` 执行
+- **THEN** 返回 0，行数不变
+
+### Requirement: logMode 配置优先级与旧字段兼容
+有效值优先级：`LUCENT_LOG_MODE`（三态白名单） > `LUCENT_LOG_RECORDING`（兼容布尔，`true`→`archive` / `false`→`off`，无法表达 temporary） > `config.logMode` > `config.logRecording`（同兼容映射） > 默认 `archive`。非法 env 值回退下一级、不抛错（防拼错让进程起不来）。`loadConfig` 读旧 config.json（只有 `logRecording` 没 `logMode`）时 MUST 映射 `true`→`archive` / `false`→`off` 并丢弃旧字段；`saveConfig` MUST 只写 `logMode`（旧字段自然消亡，不丢用户磁盘配置）。
+
+**Rationale:** 新部署用三态 env，老部署/老 config.json 用兼容字段平滑过渡，无破坏性迁移。
+
+#### Scenario: 旧 config.json logRecording 映射到 logMode
+- **GIVEN** config.json 只有 `logRecording: false`（无 `logMode`）
+- **WHEN** `loadConfig` 读取
+- **THEN** 内存 config 的 `logMode` 为 `'off'`
+- **AND** 落盘时 config.json 不再含 `logRecording`，只含 `logMode`
+
+#### Scenario: LUCENT_LOG_MODE 覆盖 config
+- **GIVEN** config.json `logMode: 'archive'`
+- **WHEN** env `LUCENT_LOG_MODE=temporary` 启动
+- **THEN** `getLogMode()` 返回 `'temporary'`
+- **AND** `logModeEnvOverridden()` 返回 true（UI 应禁用切换）
+
+### Requirement: 切换模式不得改动已落库日志
+`setLogMode` MUST 只改 `config.logMode`（+可选 `tempLogTtlMinutes`）并持久化，MUST NOT 对已落库的日志做任何 `UPDATE`（不改其 `expires_at`）。已写入的临时日志按各自 `expires_at` 继续由清理定时器过期；已写入的存档日志保持 NULL。
+
+**Rationale:** 已落库日志不可变（`insertLog` 用 `INSERT OR IGNORE`，全程无 UPDATE 是既有不变量）。切换模式只影响后续新写入，历史数据自洽。
+
+#### Scenario: 切回 archive 后已有临时数据仍按原 TTL 过期
+- **GIVEN** 库内有未到期临时行（`expires_at` = 未来时刻），当前 `logMode='temporary'`
+- **WHEN** `setLogMode('archive')` 后等到该 `expires_at` 过去
+- **THEN** 该行被清理定时器删除（`expires_at` 未被改成 NULL）
+- **AND** 新写入的行 `expires_at` 为 NULL
+
+### Requirement: 立即清空临时删除所有 expires_at 非空行（含未过期），存档保留
+`DELETE /api/logs/temporary` MUST 删除所有 `expires_at IS NOT NULL` 的行（含尚未到期的临时行），存档行（NULL）保留。删除走与 `deleteExpiredLogs` 相同的事务级联结构（`logs_fts` + `logs` + 级联 `log_bodies`），MUST NOT VACUUM。返回 `{ deleted: <n> }`。
+
+**Rationale:** 调试场景用户想立即清掉所有临时日志、不等 TTL 到期。与「清过期」区分：清过期只删 `expires_at < now`，立即清空删 `expires_at IS NOT NULL`。
+
+#### Scenario: 立即清空删所有临时含未过期、存档保留
+- **GIVEN** 库内有：过期临时、未到期临时、存档各一行
+- **WHEN** `DELETE /api/logs/temporary`
+- **THEN** 返回 `deleted: 2`（两条临时，含未到期）
+- **AND** 库内只剩存档行
+
+### Requirement: 前端不得堆积过期或超量临时条目
+`useLogs` MUST 对 `logs` state 设软上限（`LOGS_SOFT_CAP = 500`）：`loadMore` / `addLog` 追加后若超限裁剪到最前（最新）N 条。导出给视图的列表 MUST 过滤掉 `expiresAt` 已过期（`Date.parse(expiresAt) <= Date.now()`）的条目，且每 60s 重新评估一次（避免过期项变幽灵）。配合服务端 `loadLogs` 已删不再下发，三层兜底保证浏览器无幽灵条目。
+
+**Rationale:** 临时模式高频产生短命数据，前端若只增不减会堆积内存 + 显示已过期（点进去 404）的幽灵条目。
+
+#### Scenario: state 超软上限裁剪最旧
+- **GIVEN** `logs` state 已有 500 条
+- **WHEN** `loadMore` 追加一页 50 条
+- **THEN** state 裁剪到 500 条（丢最旧的，保留最新）
+
+#### Scenario: 已过期条目渲染时过滤
+- **GIVEN** `logs` state 含一条 `expiresAt` 已过期的条目
+- **WHEN** 视图渲染（或 60s tick 触发）
+- **THEN** 该条目不渲染（从可见列表移除）
+
+### Requirement: /api/status 与 /api/recording 三态契约
+`GET /api/status` MUST 暴露 `logMode`（有效值）、`logModeEnvLocked`（env 是否锁定）、`tempLogTtlMinutes`（有效 TTL）。`POST /api/recording` body 接收 `{ logMode: 'off'|'temporary'|'archive', tempTtlMinutes?: number }`，校验 logMode 白名单 + tempTtlMinutes（若给）为正整数，调 `setLogMode` 持久化，返回 `{ success, logMode, envLocked }`。env 锁定时 config 仍写入（保留意图），但返回的有效值由 env 决定、`envLocked=true`。
+
+**Rationale:** 顶栏 Segmented + TTL InputNumber 需要读 status 渲染、写 recording 切换。env 锁定语义让 UI 禁用切换并提示，避免用户以为开关坏了。
+
+#### Scenario: status 暴露三态有效值
+- **WHEN** `GET /api/status`（无 env 锁定）
+- **THEN** 响应含 `logMode`（off/temporary/archive 之一）、`logModeEnvLocked: false`、`tempLogTtlMinutes`（正整数）
+
+#### Scenario: recording 切换并持久化
+- **WHEN** `POST /api/recording { logMode: 'temporary', tempTtlMinutes: 10 }`
+- **THEN** 响应 `{ success: true, logMode: 'temporary', envLocked: false }`
+- **AND** 后续 `getLogMode()` 返回 `'temporary'`、`getTempTtlMinutes()` 返回 10
+
+#### Scenario: 非法 logMode 被拒
+- **WHEN** `POST /api/recording { logMode: 'bogus' }`
+- **THEN** 响应 400，config 不变
