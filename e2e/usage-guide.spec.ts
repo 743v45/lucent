@@ -93,7 +93,7 @@ test.describe('使用说明弹窗 UsageGuide：自动生成 export 接入命令'
           host: u.hostname,
           webPort: 0, proxyPort: u.port,
           logFile: null, providers,
-          logRecording: true, logRecordingEnvLocked: false,
+          logMode: 'archive', logModeEnvLocked: false,
         },
       });
     });

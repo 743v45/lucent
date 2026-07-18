@@ -12,7 +12,7 @@ import { writeFileSync, readFileSync, statSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { LogEntry } from './types.js';
 import { resolveEffectiveConfig } from './config.js';
-import { listLogs, fetchBodies, getStats, clearAllLogs as dbClearAll, deleteOldLogs, vacuum, insertLogsBatch } from './services/db.js';
+import { listLogs, fetchBodies, getStats, clearAllLogs as dbClearAll, deleteOldLogs, deleteAllTemporaryLogs, vacuum, insertLogsBatch } from './services/db.js';
 import { getDb } from './services/db-instance.js';
 import { reconstructEntry } from './services/log-reader.js';
 import createDebug from 'debug';
@@ -204,6 +204,21 @@ export function cleanupOldLogs(): { deleted: number } {
     return { deleted: n };
   } catch (error) {
     log('清理旧日志失败: %O', error);
+    return { deleted: 0 };
+  }
+}
+
+/**
+ * 立即清空所有临时日志（expires_at 非空，含未过期）。供 DELETE /api/logs/temporary 用。
+ * 不 VACUUM（与 cleanupExpiredLogs 同理，频繁场景避免全库锁）。
+ */
+export function purgeTemporaryLogs(): { deleted: number } {
+  try {
+    const n = deleteAllTemporaryLogs(getDb());
+    log('清空所有临时日志: deleted=%d', n);
+    return { deleted: n };
+  } catch (error) {
+    log('清空临时日志失败: %O', error);
     return { deleted: 0 };
   }
 }

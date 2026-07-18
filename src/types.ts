@@ -32,6 +32,8 @@ export interface LogEntry {
   threadId?: string;
   /** 请求使用的端点协议（openai-chat / openai-responses / anthropic-messages） */
   endpointType?: EndpointType;
+  /** 临时日志到期时间（ISO）；缺省=存档不过期，非空=临时到期自动删 */
+  expiresAt?: string;
 }
 
 export type AgentType = 'main' | 'sub';
@@ -168,6 +170,10 @@ export interface KVCacheInfo {
   content?: string;
 }
 
+// ==================== 日志记录模式 ====================
+/** 日志记录模式：off=只过路不记 / temporary=临时落库（带 TTL，到期自动删）/ archive=存档（按保留期清理） */
+export type LogMode = 'off' | 'temporary' | 'archive';
+
 // ==================== 代理状态 ====================
 export interface ProxyStatus {
   enabled: boolean;
@@ -177,10 +183,12 @@ export interface ProxyStatus {
   proxyPort: number;
   logFile: string | null;
   providers?: Provider[];
-  /** 是否记录日志（有效值，env LUCENT_LOG_RECORDING 覆盖时由 env 决定） */
-  logRecording?: boolean;
-  /** 记录开关是否被环境变量 LUCENT_LOG_RECORDING 锁定（锁定时 UI 不可切） */
-  logRecordingEnvLocked?: boolean;
+  /** 日志记录模式（有效值，env LUCENT_LOG_MODE 覆盖时由 env 决定） */
+  logMode?: LogMode;
+  /** 记录模式是否被环境变量锁定（LUCENT_LOG_MODE / LUCENT_LOG_RECORDING，锁定时 UI 不可切） */
+  logModeEnvLocked?: boolean;
+  /** 临时模式 TTL（分钟）；仅 logMode=temporary 时有意义 */
+  tempLogTtlMinutes?: number;
 }
 
 // ==================== UI 状态 ====================

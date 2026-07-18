@@ -5,11 +5,13 @@
  * - search / providerName / endpointType 任一变化 → 重新拉首页（服务端过滤，不再客户端筛）。
  * - 请求序号守卫：搜索快速变化时，丢弃过期响应，旧结果不覆盖新结果。
  */
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getLogs } from '../utils/api';
 import type { LogEntry } from '../types';
 
 const PAGE_SIZE = 50;
+/** logs state 软上限：loadMore/addLog 追加后裁剪到最前（最新）N 条，防浏览器无限堆积 */
+const LOGS_SOFT_CAP = 500;
 
 export interface UseLogsOptions {
   search: string;
@@ -21,6 +23,12 @@ export function useLogs(opts: UseLogsOptions) {
   const { search, providerName, endpointType } = opts;
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
+  // 60s tick：让「已过期临时日志」过滤每分钟重新评估，避免过期项变幽灵残留
+  const [nowTick, setNowTick] = useState(0);
+  useEffect(() => {
+    const t = setInterval(() => setNowTick(n => n + 1), 60_000);
+    return () => clearInterval(t);
+  }, []);
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(true);
@@ -65,6 +73,7 @@ export function useLogs(opts: UseLogsOptions) {
     providerName: log.providerName,
     endpointType: log.endpointType as LogEntry['endpointType'],
     threadId: log.threadId,
+    expiresAt: log.expiresAt,
   });
 
   // 首页加载（search/过滤变化或手动刷新时调用，替换列表）
@@ -112,7 +121,10 @@ export function useLogs(opts: UseLogsOptions) {
       });
       if (!mountedRef.current || reqId !== reqIdRef.current) return;
       const formatted = (data.logs || []).map(formatLog);
-      setLogs(prev => [...prev, ...formatted]);
+      setLogs(prev => {
+        const combined = [...prev, ...formatted];
+        return combined.length > LOGS_SOFT_CAP ? combined.slice(0, LOGS_SOFT_CAP) : combined;
+      });
       cursorRef.current = data.nextCursor;
       setHasMore(data.hasMore);
       setTotal(data.total);
@@ -127,7 +139,8 @@ export function useLogs(opts: UseLogsOptions) {
   const addLog = (log: LogEntry) => {
     setLogs(prev => {
       if (prev.some(item => item.id === log.id)) return prev;
-      return [log, ...prev];
+      const combined = [log, ...prev];
+      return combined.length > LOGS_SOFT_CAP ? combined.slice(0, LOGS_SOFT_CAP) : combined;
     });
   };
 
@@ -140,8 +153,15 @@ export function useLogs(opts: UseLogsOptions) {
     };
   }, [loadLogs]);
 
+  // 过滤已过期临时日志（expiresAt < now），每分钟随 nowTick 重新评估；
+  // 配合软上限 + 服务端清理，保证前端不堆积过期幽灵条目。
+  const visibleLogs = useMemo(
+    () => logs.filter(l => !l.expiresAt || Date.parse(l.expiresAt) > Date.now()),
+    [logs, nowTick],
+  );
+
   return {
-    logs,
+    logs: visibleLogs,
     loading,
     loadingMore,
     hasMore,

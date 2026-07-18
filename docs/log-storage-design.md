@@ -10,7 +10,7 @@ Lucent 的日志存储经历了从 **JSONL 文件** 到 **SQLite + FTS5** 的迁
 
 | 表 | 内容 | 用途 |
 |---|---|---|
-| `logs` | 可索引小字段（id、timestamp、agent_type、provider_name、endpoint_type、model、status、thread_id、duration、tokenUsage 拆列、error…） | 列表 / 排序 / 过滤 / 分页，按 timestamp DESC, id DESC 建索引 |
+| `logs` | 可索引小字段（id、timestamp、agent_type、provider_name、endpoint_type、model、status、thread_id、duration、tokenUsage 拆列、error、expires_at…） | 列表 / 排序 / 过滤 / 分页，按 timestamp DESC, id DESC 建索引；`expires_at`：NULL=存档（不过期，归保留期清理），ISO 时间戳=临时日志到期（logMode=temporary 写入，独立每分钟清理） |
 | `log_bodies` | 大内容（request/response 原文 JSON + search_text） | 仅详情视图与检索时读取，列表查询不碰 |
 | `logs_fts` | FTS5 虚拟表，trigram 分词，索引 search_text | 全文检索（中英文通吃、子串语义） |
 
@@ -18,7 +18,9 @@ Lucent 的日志存储经历了从 **JSONL 文件** 到 **SQLite + FTS5** 的迁
 
 读取：`listLogs` / `searchLogs` 走索引 + keyset 游标分页（`timestamp` 游标，`id` 作稳定 tiebreaker），详情走主键直查。`search` 非空时命中 `logs_fts` 倒排（≥3 字符走 trigram，<3 字符回退 LIKE）。
 
-保留期（决策④）：默认 **30 天**，env `LUCENT_LOG_RETENTION_DAYS` 可调。清理 = `DELETE` 旧行（级联 log_bodies + 手动删 FTS）+ `VACUUM` 回收空间。启动时清一次，之后每 24h 定时清一次（长驻进程兜底）。
+保留期（决策④）：默认 **3 天**，env `LUCENT_LOG_RETENTION_DAYS` 可调。清理 = `DELETE` 旧行（级联 log_bodies + 手动删 FTS）+ `VACUUM` 回收空间。启动时清一次，之后每 24h 定时清一次（长驻进程兜底）。
+
+临时日志 TTL（与保留期清理并存，两者独立）：`logMode=temporary` 时写入的行带 `expires_at`，由独立定时器每 1 分钟扫一次 `DELETE`（`WHERE expires_at IS NOT NULL AND expires_at < now`，只 DELETE **不 VACUUM**，避免每分钟全库写锁卡代理）；存档行 `expires_at IS NULL` 不受影响。空间回收靠这里的 24h 保留期 VACUUM + WAL 增量页复用兜底。
 
 导出：仍支持 **JSONL / Markdown** 两种格式（导出产物，不是 live 存储）。
 
@@ -50,6 +52,8 @@ SQLite 上线即**唯一存储**（无双写过渡期）。首次启动 `migrate
 | env | 默认 | 说明 |
 |---|---|---|
 | `LUCENT_DB_PATH` | `~/.lucent/lucent.db` | SQLite 库路径 |
-| `LUCENT_LOG_RETENTION_DAYS` | `30` | 保留期天数，清理早于此的行 |
+| `LUCENT_LOG_RETENTION_DAYS` | `3` | 保留期天数，清理早于此的行 |
+| `LUCENT_LOG_MODE` | `archive` | 日志模式三态：`off`（只过路不记）/ `temporary`（临时落库带 TTL）/ `archive`（存档，按保留期清理）；兼容旧 `LUCENT_LOG_RECORDING`（true→archive / false→off） |
+| `LUCENT_TEMP_LOG_TTL_MINUTES` | `30` | 临时模式 TTL（分钟），仅 logMode=temporary 时写入的日志带此到期时间 |
 
 > 历史的 `LUCENT_MAX_LOG_FILE_SIZE` / `LUCENT_MAX_LOG_FILES` 随轮转退役，不再生效。

@@ -196,6 +196,8 @@ export interface LogEntry {
   threadId?: string;
   /** 是否为测试请求（配置/连接测试） */
   isTest?: boolean;
+  /** 临时日志到期时间（ISO）；缺省=存档不过期，非空=临时到期由独立定时器清理 */
+  expiresAt?: string;
 }
 
 // ==================== 拦截器原始日志格式 ====================
@@ -239,6 +241,8 @@ export interface RawLogEntry {
   endpointType?: EndpointType;
   /** 会话线索标识（内容寻址，仅 main） */
   threadId?: string;
+  /** 临时日志到期时间（ISO）；缺省=存档不过期（写库时由 logMode 决定是否注入） */
+  expiresAt?: string;
   tokenUsage?: {
     input_tokens: number;
     output_tokens: number;

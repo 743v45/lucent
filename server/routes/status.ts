@@ -4,7 +4,7 @@
  * GET  /api/status     — 代理状态
  * POST /api/enable     — 启用代理
  * POST /api/disable    — 禁用代理
- * POST /api/recording  — 切换「记录日志 / 只过路」开关
+ * POST /api/recording  — 切换日志记录模式（off / temporary / archive）
  * GET  /api/health     — 健康检查
  */
 
@@ -29,21 +29,27 @@ export function createStatusRouter(options: {
       proxyPort: config.proxyPort,
       logFile: options.getLogFile(),
       providers: config.providers,
-      // 是否记录日志（有效值）+ 是否被 env LUCENT_LOG_RECORDING 锁定
-      logRecording: Config.isLogRecording(),
-      logRecordingEnvLocked: Config.logRecordingEnvOverridden(),
+      // 日志记录模式（有效值）+ 是否被 env 锁定 + 临时 TTL（分钟）
+      logMode: Config.getLogMode(),
+      logModeEnvLocked: Config.logModeEnvOverridden(),
+      tempLogTtlMinutes: Config.getTempTtlMinutes(),
     });
   });
 
-  // POST /api/recording — 切换「记录日志 / 只过路」开关（持久化到 config.json）
+  // POST /api/recording — 切换日志记录模式（off/temporary/archive，持久化到 config.json）
   router.post('/api/recording', (req, res) => {
-    const recording = req.body?.recording;
-    if (typeof recording !== 'boolean') {
-      res.status(400).json({ error: 'recording must be a boolean' });
+    const logMode = req.body?.logMode;
+    const tempTtlMinutes = req.body?.tempTtlMinutes;
+    if (logMode !== 'off' && logMode !== 'temporary' && logMode !== 'archive') {
+      res.status(400).json({ error: 'logMode must be one of off|temporary|archive' });
       return;
     }
-    const result = Config.setLogRecording(recording);
-    res.json({ success: true, recording: result.recording, envLocked: result.envLocked });
+    if (tempTtlMinutes !== undefined && (!Number.isInteger(tempTtlMinutes) || tempTtlMinutes < 1)) {
+      res.status(400).json({ error: 'tempTtlMinutes must be a positive integer' });
+      return;
+    }
+    const result = Config.setLogMode(logMode, tempTtlMinutes);
+    res.json({ success: true, logMode: result.logMode, envLocked: result.envLocked });
   });
 
   // POST /api/enable

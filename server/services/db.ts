@@ -47,6 +47,8 @@ export interface LogRow {
   output_tokens: number | null;
   cache_read_tokens: number | null;
   cache_creation_tokens: number | null;
+  /** 临时日志到期时间（ISO）；NULL=存档不过期，非空=临时到期 */
+  expires_at: string | null;
 }
 
 /** 列表查询过滤条件 */
@@ -79,7 +81,8 @@ CREATE TABLE IF NOT EXISTS logs (
   input_tokens INTEGER,
   output_tokens INTEGER,
   cache_read_tokens INTEGER,
-  cache_creation_tokens INTEGER
+  cache_creation_tokens INTEGER,
+  expires_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_logs_ts ON logs(timestamp DESC);
 CREATE INDEX IF NOT EXISTS idx_logs_agent ON logs(agent_type);
@@ -114,6 +117,15 @@ export function openDb(dbPath: string): DB {
   db.pragma('foreign_keys = ON');
   db.pragma('cache_size = -65536'); // 64MB page cache
   db.exec(SCHEMA);
+  // 幂等加列：SCHEMA 用 CREATE TABLE IF NOT EXISTS，对已存在的旧表不会加新列，故对老库（无 expires_at）
+  // 在此 ALTER 补列。⚠️ idx_logs_expires 不能放 SCHEMA——SCHEMA 在 ALTER 前执行，老库此时无 expires_at
+  // 列，建索引会 "no such column: expires_at" 启动失败。索引统一在下面（列已确保存在后）建。
+  const cols = db.prepare('pragma table_info(logs)').all() as { name: string }[];
+  if (!cols.some(c => c.name === 'expires_at')) {
+    db.exec('ALTER TABLE logs ADD COLUMN expires_at TEXT');
+    dbg('老库迁移: 已加 logs.expires_at 列');
+  }
+  db.exec('CREATE INDEX IF NOT EXISTS idx_logs_expires ON logs(expires_at) WHERE expires_at IS NOT NULL');
   const ver = db.prepare('select sqlite_version() as v').get() as { v: string };
   dbg('数据库就绪: %s (sqlite %s)', dbPath, ver.v);
   return db;
@@ -179,11 +191,11 @@ const INSERT_LOG = `
 INSERT OR IGNORE INTO logs
   (id, timestamp, agent_type, client_type, provider_name, endpoint_type, model,
    status, duration, is_stream, is_test, thread_id, error,
-   input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens)
+   input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, expires_at)
 VALUES
   (@id, @timestamp, @agent_type, @client_type, @provider_name, @endpoint_type, @model,
    @status, @duration, @is_stream, @is_test, @thread_id, @error,
-   @input_tokens, @output_tokens, @cache_read_tokens, @cache_creation_tokens)`;
+   @input_tokens, @output_tokens, @cache_read_tokens, @cache_creation_tokens, @expires_at)`;
 
 const INSERT_BODY = `INSERT OR REPLACE INTO log_bodies (log_rowid, request, response, search_text) VALUES (?, ?, ?, ?)`;
 const INSERT_FTS = `INSERT INTO logs_fts (rowid, search_text) VALUES (?, ?)`;
@@ -210,6 +222,7 @@ function toLogParams(entry: RawLogEntry): Record<string, unknown> {
     output_tokens: tu?.output_tokens ?? null,
     cache_read_tokens: tu?.cache_read_tokens ?? null,
     cache_creation_tokens: tu?.cache_creation_tokens ?? null,
+    expires_at: entry.expiresAt ?? null,
   };
 }
 
@@ -369,9 +382,9 @@ export interface PageResult {
 
 const LOG_COLS = `rowid, id, timestamp, agent_type, client_type, provider_name, endpoint_type,
             model, status, duration, is_stream, is_test, thread_id, error,
-            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens`;
+            input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens, expires_at`;
 
-const LOG_COLS_L = LOG_COLS.replace(/\b(rowid|id|timestamp|agent_type|client_type|provider_name|endpoint_type|model|status|duration|is_stream|is_test|thread_id|error|input_tokens|output_tokens|cache_read_tokens|cache_creation_tokens)\b/g, 'l.$1');
+const LOG_COLS_L = LOG_COLS.replace(/\b(rowid|id|timestamp|agent_type|client_type|provider_name|endpoint_type|model|status|duration|is_stream|is_test|thread_id|error|input_tokens|output_tokens|cache_read_tokens|cache_creation_tokens|expires_at)\b/g, 'l.$1');
 
 /**
  * keyset 分页游标：编码「上一页最后一条」的 (timestamp, id) 为不透明 token。
@@ -484,7 +497,7 @@ export function getLogById(db: DB, id: string): { row: LogRow; request: string; 
   const row = db.prepare(
     `SELECT l.rowid, l.id, l.timestamp, l.agent_type, l.client_type, l.provider_name, l.endpoint_type,
             l.model, l.status, l.duration, l.is_stream, l.is_test, l.thread_id, l.error,
-            l.input_tokens, l.output_tokens, l.cache_read_tokens, l.cache_creation_tokens,
+            l.input_tokens, l.output_tokens, l.cache_read_tokens, l.cache_creation_tokens, l.expires_at,
             b.request, b.response, b.search_text
      FROM logs l JOIN log_bodies b ON b.log_rowid = l.rowid
      WHERE l.id = ?`,
@@ -548,6 +561,43 @@ export function deleteOldLogs(db: DB, cutoffISO: string): number {
   });
   const n = tx();
   dbg('保留期清理: 删除 %d 行 (cutoff=%s)', n, cutoffISO);
+  return n;
+}
+
+/**
+ * 删除已过期的临时日志（expires_at 非空且早于 nowISO）。
+ * 与 deleteOldLogs 同结构（事务 + 级联 log_bodies + 手动删 FTS），仅 WHERE 不同；
+ * WHERE 带 `expires_at IS NOT NULL` 保护存档数据（NULL）绝不被误删。
+ */
+export function deleteExpiredLogs(db: DB, nowISO: string): number {
+  const tx = db.transaction(() => {
+    const rowids = db.prepare(`SELECT rowid FROM logs WHERE expires_at IS NOT NULL AND expires_at < ?`).all(nowISO) as { rowid: number }[];
+    if (rowids.length === 0) return 0;
+    const idList = rowids.map(r => r.rowid).join(',');
+    db.prepare(`DELETE FROM logs_fts WHERE rowid IN (${idList})`).run();
+    db.prepare(`DELETE FROM logs WHERE rowid IN (${idList})`).run(); // ON DELETE CASCADE 清 log_bodies
+    return rowids.length;
+  });
+  const n = tx();
+  dbg('临时日志清理: 删除 %d 行 (now=%s)', n, nowISO);
+  return n;
+}
+
+/**
+ * 删除所有临时日志（expires_at 非空，含未过期）。
+ * 供「立即清空临时」用（区别于 deleteExpiredLogs 只删已过期）。结构与 deleteOldLogs 一致。
+ */
+export function deleteAllTemporaryLogs(db: DB): number {
+  const tx = db.transaction(() => {
+    const rowids = db.prepare(`SELECT rowid FROM logs WHERE expires_at IS NOT NULL`).all() as { rowid: number }[];
+    if (rowids.length === 0) return 0;
+    const idList = rowids.map(r => r.rowid).join(',');
+    db.prepare(`DELETE FROM logs_fts WHERE rowid IN (${idList})`).run();
+    db.prepare(`DELETE FROM logs WHERE rowid IN (${idList})`).run(); // ON DELETE CASCADE 清 log_bodies
+    return rowids.length;
+  });
+  const n = tx();
+  dbg('清空所有临时日志: 删除 %d 行', n);
   return n;
 }
 

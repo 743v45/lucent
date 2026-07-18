@@ -40,22 +40,24 @@ export async function getProxyStatus(): Promise<{
   proxyPort: number;
   logFile: string | null;
   providers?: import('../types').Provider[];
-  logRecording?: boolean;
-  logRecordingEnvLocked?: boolean;
+  logMode?: import('../types').LogMode;
+  logModeEnvLocked?: boolean;
+  tempLogTtlMinutes?: number;
 }> {
   return request('/status');
 }
 
 /**
- * 切换「记录日志 / 只过路」开关（持久化）。
- * 返回有效值 recording 与是否被 env 锁定 envLocked。
+ * 切换日志记录模式（持久化）。可选同时更新临时 TTL。
+ * 返回有效值 logMode 与是否被 env 锁定 envLocked。
  */
-export async function setLogRecording(
-  recording: boolean
-): Promise<{ success: boolean; recording: boolean; envLocked: boolean }> {
+export async function setLogMode(
+  logMode: import('../types').LogMode,
+  tempTtlMinutes?: number,
+): Promise<{ success: boolean; logMode: import('../types').LogMode; envLocked: boolean }> {
   return request('/recording', {
     method: 'POST',
-    body: JSON.stringify({ recording }),
+    body: JSON.stringify({ logMode, tempTtlMinutes }),
   });
 }
 
@@ -204,6 +206,13 @@ export async function clearAllLogs(): Promise<{
   deleted: number;
 }> {
   return request('/logs', { method: 'DELETE' });
+}
+
+/**
+ * 立即清空所有临时日志（expires_at 非空行，含未过期）。返回删除条数。
+ */
+export async function clearTemporaryLogs(): Promise<{ deleted: number }> {
+  return request('/logs/temporary', { method: 'DELETE' });
 }
 
 /**

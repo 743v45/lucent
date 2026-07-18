@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
-import { Empty, Input, Select, Spin, Typography } from 'antd';
+import { Empty, Input, Select, Spin, Switch, Typography } from 'antd';
 import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import type { LogEntry, AgentType, Provider, EndpointType } from '../../types';
 import { ENDPOINT_LABELS, ENDPOINT_TYPES } from '../../types';
@@ -62,6 +62,16 @@ function formatTime(timestamp: string): string {
 function formatFullDate(timestamp: string): string {
   const date = new Date(timestamp);
   return `${date.getFullYear()}/${String(date.getMonth() + 1).padStart(2, '0')}/${String(date.getDate()).padStart(2, '0')} ${formatTime(timestamp)}`;
+}
+
+/** 临时日志到期 tooltip：剩余存活时间或已过期 */
+function formatExpiresIn(expiresAt: string): string {
+  const ms = Date.parse(expiresAt) - Date.now();
+  if (!Number.isFinite(ms)) return '临时日志';
+  if (ms <= 0) return '临时日志（已过期，即将清理）';
+  const min = Math.ceil(ms / 60000);
+  if (min < 60) return `临时日志，约 ${min} 分钟后自动清理`;
+  return `临时日志，约 ${Math.floor(min / 60)}h${min % 60}m 后自动清理`;
 }
 
 /** 时间 hover 显示完整日期的组件（模块顶层，避免每次渲染重建类型） */
@@ -137,6 +147,13 @@ function LogRow({
           <Tooltip title="测试请求">
             <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-600 font-[510]">
               hi
+            </span>
+          </Tooltip>
+        )}
+        {log.expiresAt && (
+          <Tooltip title={formatExpiresIn(log.expiresAt)}>
+            <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-600 font-[510]">
+              临时
             </span>
           </Tooltip>
         )}
@@ -309,6 +326,14 @@ export function LogListPanel({
   // 滚动容器引用：用于检测「内容不足以产生纵向滚动条」
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // 「仅存档」过滤：隐藏临时行（expiresAt 非空）。仅当列表含临时数据时才显示开关。
+  const [archiveOnly, setArchiveOnly] = useState(false);
+  const displayLogs = useMemo(
+    () => (archiveOnly ? logs.filter((l) => !l.expiresAt) : logs),
+    [logs, archiveOnly],
+  );
+  const hasTemporary = logs.some((l) => l.expiresAt);
+
   // 方案 A（无感兜底）：筛选后匹配行太少、首屏撑不出滚动条时，onScroll 永不触发，
   // 更早的匹配日志就翻不出来。这里在每次渲染后检测——若不可滚动且仍有更多数据，
   // 自动补拉下一页，直到出现滚动条或数据耗尽。loadMore 自身有 loadingMore/hasMore 双守卫，不会重复加载。
@@ -394,6 +419,17 @@ export function LogListPanel({
               ]}
             />
           )}
+          {hasTemporary && (
+            <div className="flex items-center gap-1 shrink-0">
+              <Switch
+                data-testid="archive-only-switch"
+                size="small"
+                checked={archiveOnly}
+                onChange={setArchiveOnly}
+              />
+              <span className="text-text-quaternary text-[13px]">仅存档</span>
+            </div>
+          )}
           <Text data-testid="log-count" className="text-text-quaternary text-sm shrink-0">
             {total ?? logs.length} 条
           </Text>
@@ -438,13 +474,13 @@ export function LogListPanel({
           }}
         >
           {conversationView === 'timeline' ? (
-            logs.map((log) => (
+            displayLogs.map((log) => (
               <LogRow key={log.id} log={log} isSelected={selectedId === log.id} onSelect={onSelectLog}
                 getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
                 shortenUrl={shortenUrl} formatDuration={formatDuration} />
             ))
           ) : (
-            <SessionListView logs={logs} selectedId={selectedId} onSelectLog={onSelectLog}
+            <SessionListView logs={displayLogs} selectedId={selectedId} onSelectLog={onSelectLog}
               getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
               shortenUrl={shortenUrl} formatDuration={formatDuration} />
           )}

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { message } from 'antd';
+import { message, Segmented, InputNumber, Tooltip } from 'antd';
 import { LogListPanel } from './components/dashboard/LogListPanel';
 import { DetailPanel } from './components/viewer/DetailPanel';
 import { SettingsContext } from './contexts/SettingsContext';
@@ -7,8 +7,8 @@ import { SettingsModal } from './components/settings/SettingsModal';
 import { BodyRewriteModal } from './components/settings/BodyRewriteModal';
 import { UsageGuide } from './components/common/UsageGuide';
 import { useLogs } from './hooks/useLogs';
-import { ArrowPathIcon, Cog6ToothIcon, EyeSlashIcon, InformationCircleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
-import type { TabType, Provider } from './types';
+import { ArchiveBoxIcon, ArrowPathIcon, ClockIcon, Cog6ToothIcon, EyeSlashIcon, InformationCircleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
+import type { TabType, Provider, LogMode } from './types';
 import {
   URL_PARAM_LOG_ID,
   URL_PARAM_TAB,
@@ -19,7 +19,7 @@ import {
   DEFAULT_THEME,
   DEFAULT_ACTIVE_TAB,
 } from './constants';
-import { getProxyStatus, setLogRecording } from './utils/api';
+import { getProxyStatus, setLogMode, clearTemporaryLogs } from './utils/api';
 
 const PROVIDER_FILTER_STORAGE_KEY = 'lucent.providerFilter';
 const PROVIDER_FILTER_ALL = 'all';
@@ -97,10 +97,11 @@ function App(): JSX.Element {
 
   // 从代理状态拉取 providers 列表（用于筛选下拉）+ 记录开关状态
   const [providers, setProviders] = useState<Provider[]>([]);
-  // 是否记录日志（默认 true=记录；false=「只过路」只转发不落库）
-  const [logRecording, setLogRecordingState] = useState<boolean>(true);
-  const [logRecordingEnvLocked, setLogRecordingEnvLocked] = useState<boolean>(false);
-  const [recordingBusy, setRecordingBusy] = useState(false);
+  // 日志记录模式（默认 archive=存档；off=只过路不记；temporary=临时带 TTL 自动清理）
+  const [logMode, setLogModeState] = useState<LogMode>('archive');
+  const [logModeEnvLocked, setLogModeEnvLocked] = useState<boolean>(false);
+  const [tempTtlMinutes, setTempTtlMinutes] = useState<number>(30);
+  const [logModeBusy, setLogModeBusy] = useState(false);
   useEffect(() => {
     let cancelled = false;
     const loadProviders = async () => {
@@ -111,8 +112,9 @@ function App(): JSX.Element {
           if (Array.isArray(list)) {
             setProviders(list);
           }
-          setLogRecordingState(status.logRecording ?? true);
-          setLogRecordingEnvLocked(status.logRecordingEnvLocked ?? false);
+          setLogModeState(status.logMode ?? 'archive');
+          setLogModeEnvLocked(status.logModeEnvLocked ?? false);
+          setTempTtlMinutes(status.tempLogTtlMinutes ?? 30);
         }
       } catch {
         // 静默失败：筛选下拉为空即不显示
@@ -124,31 +126,65 @@ function App(): JSX.Element {
     };
   }, []);
 
-  // 切换「记录日志 / 只过路」（无二次确认；env 锁定时不可切并提示）
-  const handleToggleRecording = useCallback(async () => {
-    if (logRecordingEnvLocked) {
-      message.warning('记录开关被环境变量 LUCENT_LOG_RECORDING 锁定，无法在此切换');
+  // 切换日志记录模式（无二次确认；env 锁定时不可切并提示）
+  const handleLogModeChange = useCallback(async (mode: LogMode) => {
+    if (logModeEnvLocked) {
+      message.warning('记录模式被环境变量锁定，无法在此切换');
       return;
     }
-    const next = !logRecording;
-    setRecordingBusy(true);
+    setLogModeBusy(true);
     try {
-      const r = await setLogRecording(next);
-      setLogRecordingState(r.recording);
-      setLogRecordingEnvLocked(r.envLocked);
+      const r = await setLogMode(mode);
+      setLogModeState(r.logMode);
+      setLogModeEnvLocked(r.envLocked);
       if (r.envLocked) {
-        message.warning('记录开关被环境变量 LUCENT_LOG_RECORDING 锁定，未生效');
-      } else if (r.recording) {
-        message.success('已恢复记录日志');
-      } else {
+        message.warning('记录模式被环境变量锁定，未生效');
+      } else if (mode === 'off') {
         message.success('已切到只过路：转发照旧，不再记录日志');
+      } else if (mode === 'temporary') {
+        message.success(`已切到临时模式：记录 ${tempTtlMinutes} 分钟后自动清理`);
+      } else {
+        message.success('已切到存档模式：按保留期清理');
       }
     } catch (e) {
       message.error(e instanceof Error ? e.message : '切换失败');
     } finally {
-      setRecordingBusy(false);
+      setLogModeBusy(false);
     }
-  }, [logRecording, logRecordingEnvLocked]);
+  }, [logModeEnvLocked, tempTtlMinutes]);
+
+  // 改临时 TTL（分钟）；debounce 300ms 持久化，避免每次按键都 POST /api/recording。
+  // 仅 temporary 模式实际生效，但允许任意模式下预设。
+  const ttlDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleTempTtlChange = useCallback((val: number | null) => {
+    if (val == null || val < 1) return;
+    setTempTtlMinutes(val); // 本地即时反馈，不等服务端
+    if (ttlDebounceRef.current) clearTimeout(ttlDebounceRef.current);
+    ttlDebounceRef.current = setTimeout(async () => {
+      setLogModeBusy(true);
+      try {
+        await setLogMode(logMode, val);
+      } catch (e) {
+        message.error(e instanceof Error ? e.message : '设置 TTL 失败');
+      } finally {
+        setLogModeBusy(false);
+      }
+    }, 300);
+  }, [logMode]);
+
+  // 立即清空所有临时日志（不等 TTL 到期）
+  const handlePurgeTemporary = useCallback(async () => {
+    setLogModeBusy(true);
+    try {
+      const r = await clearTemporaryLogs();
+      message.success(`已清空 ${r.deleted} 条临时日志`);
+      loadLogs();
+    } catch (e) {
+      message.error(e instanceof Error ? e.message : '清空失败');
+    } finally {
+      setLogModeBusy(false);
+    }
+  }, [loadLogs]);
 
   const selectedLog = logs.find(log => log.id === selectedLogId);
 
@@ -228,26 +264,50 @@ function App(): JSX.Element {
             >
               <ArrowPathIcon className="w-[18px] h-[18px]" />
             </button>
-            {/* 记录开关：两态 toggle（EyeSlashIcon + 高亮）。高亮=「只过路」激活（不记录日志） */}
-            <button
-              data-testid="recording-toggle"
-              className={`px-2 py-1.5 rounded-md text-lg transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                logRecording
-                  ? 'text-text-tertiary hover:text-text-primary hover:bg-bg-active'
-                  : 'text-brand-accent bg-bg-active'
-              }`}
-              onClick={handleToggleRecording}
-              disabled={logRecordingEnvLocked || recordingBusy}
-              title={
-                logRecordingEnvLocked
-                  ? '记录开关被环境变量 LUCENT_LOG_RECORDING 锁定'
-                  : logRecording
-                    ? '记录日志中（点击切到只过路）'
-                    : '只过路（不记录日志），点击恢复记录'
-              }
-            >
-              <EyeSlashIcon className="w-[18px] h-[18px]" />
-            </button>
+            {/* 日志记录模式：三态 Segmented（只过路 / 临时 / 存档）。临时态旁可调 TTL 分钟数 */}
+            <Segmented
+              data-testid="log-mode-toggle"
+              size="small"
+              value={logMode}
+              disabled={logModeEnvLocked || logModeBusy}
+              onChange={(v) => handleLogModeChange(v as LogMode)}
+              options={[
+                { value: 'off', label: <span className="flex items-center gap-1"><EyeSlashIcon className="w-3.5 h-3.5" />只过路</span> },
+                { value: 'temporary', label: <span className="flex items-center gap-1"><ClockIcon className="w-3.5 h-3.5" />临时</span> },
+                { value: 'archive', label: <span className="flex items-center gap-1"><ArchiveBoxIcon className="w-3.5 h-3.5" />存档</span> },
+              ]}
+            />
+            {logMode === 'temporary' && (
+              <Tooltip title="临时日志存活时长（分钟），到期自动清理">
+                <InputNumber
+                  data-testid="temp-ttl-input"
+                  size="small"
+                  min={1}
+                  max={1440}
+                  value={tempTtlMinutes}
+                  onChange={(v) => handleTempTtlChange(v as number | null)}
+                  addonAfter="分"
+                  className="w-[96px]"
+                />
+              </Tooltip>
+            )}
+            {logMode === 'temporary' && (
+              <Tooltip title="立即清空所有临时日志（不等 TTL）">
+                <button
+                  data-testid="purge-temporary-btn"
+                  onClick={handlePurgeTemporary}
+                  disabled={logModeBusy}
+                  className="px-2 py-1 rounded-md text-[13px] text-text-tertiary hover:text-amber-600 hover:bg-bg-active transition-colors disabled:opacity-40"
+                >
+                  清临时
+                </button>
+              </Tooltip>
+            )}
+            {logModeEnvLocked && (
+              <Tooltip title="记录模式被环境变量 LUCENT_LOG_MODE / LUCENT_LOG_RECORDING 锁定">
+                <InformationCircleIcon className="w-4 h-4 text-amber-500" />
+              </Tooltip>
+            )}
             <button
               className="px-2 py-1.5 rounded-md text-lg text-text-tertiary hover:text-text-primary hover:bg-bg-active transition-colors"
               onClick={() => setUsageGuideOpen(true)}

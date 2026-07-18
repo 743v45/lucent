@@ -8,10 +8,10 @@
  * better-sqlite3 是同步 API，单条 insertLog 仅几十 µs，包在队列 microtask 里执行。
  */
 
-import { insertLog, deleteOldLogs, vacuum } from './db.js';
+import { insertLog, deleteOldLogs, deleteExpiredLogs, vacuum } from './db.js';
 import { initDb, getDb } from './db-instance.js';
 import { invalidateCache as invalidateReaderCache } from './log-reader.js';
-import { isLogRecording } from '../config.js';
+import { getLogMode, getTempTtlMinutes } from '../config.js';
 import type { RawLogEntry } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
@@ -79,10 +79,12 @@ function enqueue(task: () => void): void {
  * SQLite 路径直接不写——DB 只存完整条目，读路径无需再过滤，也不浪费行。
  */
 export function writeLogEntry(entry: RawLogEntry): void {
-  // 记录开关门控（咽喉点，盖住 interceptor 全部 5 个调用点 + 未来新增）：
-  // 「只过路」(logRecording=false) 时短路，不写 SQLite；转发链路不受影响。
-  if (!isLogRecording()) {
-    dbg('logRecording=false（只过路），跳过写入 id=%s', entry.id);
+  // 记录模式门控（咽喉点，盖住 interceptor 全部 5 个调用点 + 未来新增）：
+  // off=只过路（短路不写）；temporary=临时落库（注入 expires_at，到期由独立定时器清理）；
+  // archive=存档（按保留期清理）。转发链路不受影响。
+  const mode = getLogMode();
+  if (mode === 'off') {
+    dbg('logMode=off（只过路），跳过写入 id=%s', entry.id);
     return;
   }
   if (entry.response == null) {
@@ -94,6 +96,12 @@ export function writeLogEntry(entry: RawLogEntry): void {
     droppedCount++;
     dbg('写入队列背压: 丢弃新条目 (length=%d droppedCount=%d)', writeQueueLength, droppedCount);
     return;
+  }
+  // temporary 模式注入到期时间（archive 保持 undefined→NULL，toLogParams 落 NULL）。
+  // TTL 用实时 getter（getTempTtlMinutes）：反映运行时 InputNumber 改动，不用启动快照。
+  if (mode === 'temporary') {
+    const ttlMs = getTempTtlMinutes() * 60_000;
+    entry.expiresAt = new Date(Date.now() + ttlMs).toISOString();
   }
   enqueue(() => {
     insertLog(getDb(), entry);
@@ -136,5 +144,19 @@ export function cleanupOldLogs(): void {
     // 2000 FIFO 上限也兜得住；清一下更干净）。
     invalidateReaderCache();
     dbg('清理过期日志: 删除 %d 行 (retention=%d天)', n, retentionDays);
+  }
+}
+
+/**
+ * 清理已过期的临时日志（expires_at < now）：DELETE 三表（级联 log_bodies + FTS），再失效读缓存。
+ * 与 cleanupOldLogs 的关键区别：**不 VACUUM**——本函数每分钟跑（TEMP_LOG_CLEANUP_INTERVAL_MS），
+ * VACUUM 是全库写锁会卡代理写入；空间回收仍交给每 24h 的 cleanupOldLogs。
+ */
+export function cleanupExpiredLogs(): void {
+  const nowISO = new Date().toISOString();
+  const n = deleteExpiredLogs(getDb(), nowISO);
+  if (n > 0) {
+    invalidateReaderCache();
+    dbg('清理过期临时日志: 删除 %d 行', n);
   }
 }

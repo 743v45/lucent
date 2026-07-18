@@ -7,7 +7,7 @@
 
 import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, DB_PATH, LOG_RETENTION_DAYS } from './constants.js';
+import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, DB_PATH, LOG_RETENTION_DAYS, TEMP_LOG_TTL_MINUTES } from './constants.js';
 import { ENDPOINT_TYPES, isEndpointType, isValidProviderName, PRESET_NAMES } from './types.js';
 import type { EndpointType, Provider, BodyRewriteRule } from './types.js';
 import { parseFieldPath } from './body-rewriter.js';
@@ -15,6 +15,16 @@ import createDebug from 'debug';
 const log = createDebug('lucent:config');
 
 // ==================== 类型定义 ====================
+
+/** 日志记录模式：off=只过路不记 / temporary=临时落库（带 TTL，到期自动删）/ archive=存档（按保留期清理） */
+export type LogMode = 'off' | 'temporary' | 'archive';
+
+const LOG_MODES: ReadonlySet<LogMode> = new Set(['off', 'temporary', 'archive']);
+
+/** 类型守卫：字符串是否为合法 LogMode */
+function isLogMode(s: unknown): s is LogMode {
+  return typeof s === 'string' && (LOG_MODES as Set<string>).has(s);
+}
 
 /**
  * 全局代理配置
@@ -31,9 +41,13 @@ export interface ProxyConfig {
   /** 可选：全局请求 body 重写规则（opt-in，缺省视为无规则，代理保持透明） */
   bodyRewrites?: BodyRewriteRule[];
   /**
-   * 是否记录日志（true=落库，false=「只过路」只转发不记录）。
-   * 缺省视为 true（保持现状全量记录）。env LUCENT_LOG_RECORDING 覆盖。
+   * 日志记录模式（缺省视为 'archive'，保持现状全量记录）。env LUCENT_LOG_MODE 覆盖。
+   * 旧字段 logRecording 已废弃：读取时映射 true→archive / false→off（见 loadConfig）。
    */
+  logMode?: LogMode;
+  /** 临时模式 TTL（分钟）；仅 logMode=temporary 时写入的日志带此到期时间。env LUCENT_TEMP_LOG_TTL_MINUTES 覆盖。 */
+  tempLogTtlMinutes?: number;
+  /** @deprecated 已被 logMode 取代，仅为向后兼容旧 config.json 保留（loadConfig 映射后清除） */
   logRecording?: boolean;
 }
 
@@ -50,8 +64,10 @@ export interface ResolvedConfig {
   providers: Provider[];
   /** SQLite 数据库路径（env LUCENT_DB_PATH 覆盖） */
   dbPath: string;
-  /** 是否记录日志（env LUCENT_LOG_RECORDING 覆盖，缺省 true） */
-  logRecording: boolean;
+  /** 日志记录模式（env LUCENT_LOG_MODE 覆盖，缺省 'archive'） */
+  logMode: LogMode;
+  /** 临时模式 TTL 分钟（env LUCENT_TEMP_LOG_TTL_MINUTES 覆盖，缺省 TEMP_LOG_TTL_MINUTES） */
+  tempLogTtlMinutes: number;
 }
 
 // ==================== 默认配置 ====================
@@ -88,8 +104,10 @@ function buildDefaultConfig(): ProxyConfig {
         replacement: '',
       },
     ],
-    // 默认全量记录日志（现状）；关掉即「只过路」。env LUCENT_LOG_RECORDING 覆盖。
-    logRecording: true,
+    // 默认存档模式（全量记录、按保留期清理）。env LUCENT_LOG_MODE 覆盖。
+    logMode: 'archive',
+    // 临时模式默认 TTL（分钟）；仅 logMode=temporary 时生效。env LUCENT_TEMP_LOG_TTL_MINUTES 覆盖。
+    tempLogTtlMinutes: TEMP_LOG_TTL_MINUTES,
   };
 }
 
@@ -258,8 +276,17 @@ function validateConfig(cfg: unknown): asserts cfg is ProxyConfig {
   if (c.bodyRewrites !== undefined) {
     validateBodyRewrites(c.bodyRewrites);
   }
+  // logMode 三态白名单（缺省视为 'archive'，向后兼容老 config.json）
+  if (c.logMode !== undefined && !isLogMode(c.logMode)) {
+    throw new Error(`config.logMode must be one of off|temporary|archive, got: ${JSON.stringify(c.logMode)}`);
+  }
+  // tempLogTtlMinutes 正整数（缺省视为默认值）
+  if (c.tempLogTtlMinutes !== undefined && (typeof c.tempLogTtlMinutes !== 'number' || !Number.isInteger(c.tempLogTtlMinutes) || c.tempLogTtlMinutes < 1)) {
+    throw new Error('config.tempLogTtlMinutes must be a positive integer');
+  }
+  // 旧字段 logRecording（deprecated 读兼容）：允许存在，由 loadConfig 映射到 logMode
   if (c.logRecording !== undefined && typeof c.logRecording !== 'boolean') {
-    throw new Error('config.logRecording must be a boolean');
+    throw new Error('config.logRecording must be a boolean (deprecated, use logMode)');
   }
 }
 
@@ -289,6 +316,29 @@ function parseEnvBool(name: string, fallback: boolean): boolean {
 }
 
 /**
+ * 解析 logMode 有效值。优先级：
+ *   LUCENT_LOG_MODE > LUCENT_LOG_RECORDING(兼容) > config.logMode > config.logRecording(兼容) > 默认 'archive'
+ * 兼容映射：旧 LUCENT_LOG_RECORDING / config.logRecording 的 true→archive / false→off（无法表达 temporary）。
+ * 非法 env 值回退到下一优先级，不抛错（防拼错让进程起不来）。
+ */
+function resolveLogModeFromEnv(raw: ProxyConfig): LogMode {
+  // 1. LUCENT_LOG_MODE（三态主入口）
+  const envMode = process.env.LUCENT_LOG_MODE;
+  if (envMode !== undefined && envMode.trim() !== '') {
+    const s = envMode.trim().toLowerCase();
+    if (isLogMode(s)) return s;
+  }
+  // 2. LUCENT_LOG_RECORDING（兼容布尔）
+  if (process.env.LUCENT_LOG_RECORDING !== undefined && process.env.LUCENT_LOG_RECORDING.trim() !== '') {
+    return parseEnvBool('LUCENT_LOG_RECORDING', true) ? 'archive' : 'off';
+  }
+  // 3. config.logMode（loadConfig 已把旧 logRecording 归一化进来）
+  if (isLogMode(raw.logMode)) return raw.logMode;
+  // 4. 兜底
+  return 'archive';
+}
+
+/**
  * 解析完整配置：环境变量 > 配置文件 > 默认值
  */
 export function resolveEffectiveConfig(): ResolvedConfig {
@@ -300,36 +350,57 @@ export function resolveEffectiveConfig(): ResolvedConfig {
     logDir:              process.env.LUCENT_LOG_DIR           || raw.logDir             || LOG_DIR,
     dbPath:              process.env.LUCENT_DB_PATH            || raw.dbPath             || DB_PATH,
     logRetentionDays:    parseEnvNumber('LUCENT_LOG_RETENTION_DAYS', raw.logRetentionDays ?? LOG_RETENTION_DAYS),
-    logRecording:        parseEnvBool('LUCENT_LOG_RECORDING',  raw.logRecording ?? true),
+    logMode:             resolveLogModeFromEnv(raw),
+    tempLogTtlMinutes:   parseEnvNumber('LUCENT_TEMP_LOG_TTL_MINUTES', raw.tempLogTtlMinutes ?? TEMP_LOG_TTL_MINUTES),
     providers:           raw.providers,
   };
 }
 
 /**
- * 运行时读取「是否记录日志」的有效值（env 覆盖 > 配置文件 > 默认 true）。
+ * 运行时读取 logMode 有效值（env 覆盖 > 配置文件 > 默认 'archive'）。
  * 每次实时解析，反映 toggle 改动——热路径（writeLogEntry）门控用。
  */
-export function isLogRecording(): boolean {
-  return parseEnvBool('LUCENT_LOG_RECORDING', getConfig().logRecording ?? true);
+export function getLogMode(): LogMode {
+  return resolveLogModeFromEnv(getConfig());
 }
 
 /**
- * 环境变量 LUCENT_LOG_RECORDING 是否已设置（设置时 toggle 写入的 config 值不立即生效）。
+ * 运行时读取临时 TTL 有效值（分钟）：env LUCENT_TEMP_LOG_TTL_MINUTES > config.tempLogTtlMinutes > 默认 TEMP_LOG_TTL_MINUTES。
+ * 每次实时解析，反映 InputNumber 改动——热路径（writeLogEntry 临时注入 expiresAt）用。
+ * 非法/缺省值回退到下一级；env 锁定时 config 改动不生效（与 logMode 同语义）。
  */
-export function logRecordingEnvOverridden(): boolean {
-  return process.env.LUCENT_LOG_RECORDING !== undefined;
+export function getTempTtlMinutes(): number {
+  const envVal = parseEnvNumber('LUCENT_TEMP_LOG_TTL_MINUTES', NaN);
+  if (Number.isInteger(envVal) && envVal >= 1) return envVal;
+  const cfg = getConfig().tempLogTtlMinutes;
+  if (cfg !== undefined && Number.isInteger(cfg) && cfg >= 1) return cfg;
+  return TEMP_LOG_TTL_MINUTES;
 }
 
 /**
- * 设置「是否记录日志」并持久化到 config.json。
- * env 锁定时：config.logRecording 仍写入（保留用户意图，env 去掉后生效），
- * 但返回的 recording 是 env 决定的有效值，envLocked=true 供调用方提示用户。
+ * 环境变量是否锁定 logMode（LUCENT_LOG_MODE 或兼容的 LUCENT_LOG_RECORDING 任一已设置）。
+ * 设置时 toggle 写入的 config 值不立即生效，UI 应禁用切换。
  */
-export function setLogRecording(value: boolean): { recording: boolean; envLocked: boolean } {
+export function logModeEnvOverridden(): boolean {
+  return process.env.LUCENT_LOG_MODE !== undefined || process.env.LUCENT_LOG_RECORDING !== undefined;
+}
+
+/**
+ * 设置 logMode（可选同时更新临时 TTL）并持久化到 config.json。
+ * env 锁定时：config.logMode 仍写入（保留用户意图，env 去掉后生效），
+ * 但返回的 logMode 是 env 决定的有效值，envLocked=true 供调用方提示用户。
+ */
+export function setLogMode(mode: LogMode, tempTtlMinutes?: number): { logMode: LogMode; envLocked: boolean } {
+  if (!isLogMode(mode)) throw new Error(`Invalid logMode: ${JSON.stringify(mode)}`);
   const config = getConfig();
-  config.logRecording = value;
+  config.logMode = mode;
+  delete config.logRecording; // 归一化：落盘只保留 logMode，旧字段自然消亡
+  if (tempTtlMinutes !== undefined) {
+    if (!Number.isInteger(tempTtlMinutes) || tempTtlMinutes < 1) throw new Error('tempTtlMinutes must be a positive integer');
+    config.tempLogTtlMinutes = tempTtlMinutes;
+  }
   saveConfig(config);
-  return { recording: isLogRecording(), envLocked: logRecordingEnvOverridden() };
+  return { logMode: getLogMode(), envLocked: logModeEnvOverridden() };
 }
 
 /**
@@ -375,6 +446,11 @@ export function loadConfig(): ProxyConfig {
     const raw = readFileSync(CONFIG_PATH, 'utf-8');
     const parsed = JSON.parse(raw);
     validateConfig(parsed);
+    // 向后兼容：旧 config.json 只有 logRecording 没 logMode，映射 true→archive / false→off
+    if (parsed.logMode === undefined && parsed.logRecording !== undefined) {
+      parsed.logMode = parsed.logRecording ? 'archive' : 'off';
+      delete parsed.logRecording;
+    }
     cachedConfig = parsed;
     applyHostOverride(cachedConfig);
     return cachedConfig;

@@ -205,13 +205,13 @@ function getLogs(query) {
   return getJson(`${WEB}/api/logs${query ? `?${query}` : ''}`);
 }
 
-/** POST /api/recording { recording } → { success, recording, envLocked } */
-async function setRecording(recording) {
+/** POST /api/recording { logMode, tempTtlMinutes? } → { success, logMode, envLocked } */
+async function setLogMode(logMode, tempTtlMinutes) {
   try {
     const res = await fetch(`${WEB}/api/recording`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ recording }),
+      body: JSON.stringify(tempTtlMinutes != null ? { logMode, tempTtlMinutes } : { logMode }),
     });
     if (!res.ok) return null;
     return await res.json();
@@ -220,7 +220,7 @@ async function setRecording(recording) {
   }
 }
 
-/** /api/status → { ..., logRecording, logRecordingEnvLocked } */
+/** /api/status → { ..., logMode, logModeEnvLocked, tempLogTtlMinutes } */
 function getStatus() {
   return getJson(`${WEB}/api/status`);
 }
@@ -355,30 +355,33 @@ try {
       ok12 ? '' : withDelta.length + ' 条带 delta 字段');
   }
 
-  // ---- 场景 13-15: 记录开关 / 「只过路」(TAE-76) ----
+  // ---- 场景 13-16: 日志记录模式三态 (off / temporary / archive) ----
   console.log('');
 
-  // 场景 13: 默认 logRecording=true，/api/status 暴露该字段
+  // 场景 13: 默认 logMode='archive'，/api/status 暴露该字段
   {
     const st = await getStatus();
-    check('13. /api/status 默认 logRecording=true', st?.logRecording === true, `logRecording=${st?.logRecording}`);
+    check('13. /api/status 默认 logMode=archive', st?.logMode === 'archive', `logMode=${st?.logMode}`);
   }
 
-  // 场景 14（正向对照）: 记录开启时发请求 → SQLite 计数 +1（证明计数非空判，反向用例才可信）
+  // 场景 14（正向对照）: archive 模式发请求 → SQLite +1 且写入行 expires_at 为空（存档）
   {
     const before = (await getStats())?.totalEntries;
     await post(`${PROXY}/custom/foo/v1/messages`, ANTH_HEADERS, ANTH_REQ);
     await new Promise(r => setTimeout(r, 600));
     const after = (await getStats())?.totalEntries;
-    check('14. 记录开启 → 发请求后 SQLite 新增 1 行(正向对照)',
+    check('14. archive 模式发请求 → SQLite 新增 1 行(正向对照)',
       typeof before === 'number' && after === before + 1,
       `before=${before} after=${after}`);
+    const latest = (await getLogs('limit=1'))?.logs?.[0];
+    check('14b. archive 模式写入行 expires_at 为空(存档)',
+      latest && latest.expiresAt == null, `expiresAt=${latest?.expiresAt}`);
   }
 
-  // 场景 15（反向用例）: 切到「只过路」→ 发请求 → 转发照旧(上游收到) 且 SQLite 无新增行
+  // 场景 15（反向用例）: 切 off → 发请求 → 转发照旧(上游收到) 且 SQLite 无新增行
   // 失败（库里有新增）必须 FAIL、退出非 0——这正是 gate 失效的检出点。
   {
-    const recOff = await setRecording(false);
+    const recOff = await setLogMode('off');
     const stOff = await getStatus();
     const before = (await getStats())?.totalEntries;
     upstreamHits.length = 0;
@@ -388,16 +391,37 @@ try {
     const after = (await getStats())?.totalEntries;
     const grew = typeof before === 'number' && typeof after === 'number' ? after - before : null;
 
-    check('15a. 切「只过路」后 /api/status logRecording=false',
-      recOff?.recording === false && stOff?.logRecording === false,
-      `recording=${recOff?.recording} status=${stOff?.logRecording}`);
-    check('15b. 「只过路」转发链路不变 → 上游仍收到 /v1/messages',
+    check('15a. 切 off 后 /api/recording 与 /api/status 均为 logMode=off',
+      recOff?.logMode === 'off' && stOff?.logMode === 'off',
+      `setLogMode=${recOff?.logMode} status=${stOff?.logMode}`);
+    check('15b. off 转发链路不变 → 上游仍收到 /v1/messages',
       forwardedWhileOff === '/v1/messages', `上游收到: ${forwardedWhileOff}`);
-    check('15c. 「只过路」发请求后 SQLite 无新增行(反向用例, gate 失效必退出非 0)',
+    check('15c. off 发请求后 SQLite 无新增行(反向用例, gate 失效必退出非 0)',
       grew === 0, `before=${before} after=${after}（新增 ${grew} 行）`);
+  }
 
-    // 恢复记录，不留副作用
-    await setRecording(true);
+  // 场景 16: temporary 模式(TTL=1) → 发请求 → 新增行且 expires_at 非空（临时，到期由独立定时器清理）
+  {
+    const r = await setLogMode('temporary', 1);
+    check('16a. 切 temporary(TTL=1) → /api/recording 返回 logMode=temporary',
+      r?.logMode === 'temporary', `logMode=${r?.logMode}`);
+    const stTmp = await getStatus();
+    check('16b. temporary 模式 /api/status 暴露 tempLogTtlMinutes=1',
+      stTmp?.tempLogTtlMinutes === 1, `tempLogTtlMinutes=${stTmp?.tempLogTtlMinutes}`);
+    const before = (await getStats())?.totalEntries;
+    await post(`${PROXY}/custom/foo/v1/messages`, ANTH_HEADERS, ANTH_REQ);
+    await new Promise(r => setTimeout(r, 600));
+    const after = (await getStats())?.totalEntries;
+    check('16c. temporary 模式发请求 → SQLite 新增 1 行',
+      typeof before === 'number' && after === before + 1,
+      `before=${before} after=${after}`);
+    const latest = (await getLogs('limit=1'))?.logs?.[0];
+    check('16d. temporary 模式写入行 expires_at 非空(临时)',
+      latest && typeof latest.expiresAt === 'string' && latest.expiresAt.length > 0,
+      `expiresAt=${latest?.expiresAt}`);
+
+    // 恢复 archive，不留副作用
+    await setLogMode('archive');
   }
 
 } finally {

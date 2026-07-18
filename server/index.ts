@@ -19,6 +19,7 @@ import { startProxyServer } from './proxy.js';
 import { setupInterceptor, drainPendingSSETasks } from './interceptor.js';
 import { drainWriteQueue } from './services/log-writer.js';
 import { closeDb } from './services/db-instance.js';
+import { TEMP_LOG_CLEANUP_INTERVAL_MS } from './constants.js';
 import { isSseDebugEnabled } from './sse-extractor.js';
 import './endpoint-handlers.js'; // 注册端点类型处理器
 import type { ProxyStatus } from './types.js';
@@ -36,6 +37,8 @@ let proxyEnabled = false;
 let proxyServer: Awaited<ReturnType<typeof startProxyServer>> | null = null;
 // 保留期清理定时器（定期 DELETE 旧行 + VACUUM；shutdown 时清掉）
 let retentionTimer: NodeJS.Timeout | null = null;
+// 临时日志过期清理定时器（每分钟 DELETE expires_at<now 的行；只删不 VACUUM，shutdown 时清掉）
+let tempCleanupTimer: NodeJS.Timeout | null = null;
 
 // ==================== Express 应用 ====================
 
@@ -72,6 +75,7 @@ export async function startServer(): Promise<void> {
   LogWriter.init(resolvedConfig);
   LogReader.init(resolvedConfig);
   await LogWriter.cleanupOldLogs();
+  await LogWriter.cleanupExpiredLogs();
 
   // 定期保留期清理（决策④：DELETE 旧行 + VACUUM）。启动时已清一次；长驻进程靠这个定时
   // 兜底（每 24h）。unref：不阻止进程退出（shutdown 时显式 clearInterval）。
@@ -80,6 +84,13 @@ export async function startServer(): Promise<void> {
     try { LogWriter.cleanupOldLogs(); } catch (err) { dbg('定时保留期清理失败: %O', err); }
   }, RETENTION_INTERVAL_MS);
   retentionTimer.unref();
+
+  // 临时日志过期清理（每分钟 DELETE expires_at<now 的行）。与保留期清理独立、只 DELETE 不 VACUUM
+  // （VACUUM 全库写锁，每分钟跑会卡代理写入）；空间回收仍交给上面的保留期清理。
+  tempCleanupTimer = setInterval(() => {
+    try { LogWriter.cleanupExpiredLogs(); } catch (err) { dbg('定时临时日志清理失败: %O', err); }
+  }, TEMP_LOG_CLEANUP_INTERVAL_MS);
+  tempCleanupTimer.unref();
 
   // 启动代理服务器
   const proxyPort = resolvedConfig.proxyPort;
@@ -159,6 +170,8 @@ export async function shutdownServer(): Promise<void> {
 
   // 停掉保留期清理定时器
   if (retentionTimer) { clearInterval(retentionTimer); retentionTimer = null; }
+  // 停掉临时日志清理定时器
+  if (tempCleanupTimer) { clearInterval(tempCleanupTimer); tempCleanupTimer = null; }
 
   // 等待后台 SSE 任务完成，确保数据不丢失
   await drainPendingSSETasks();

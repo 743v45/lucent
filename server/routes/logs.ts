@@ -9,6 +9,7 @@
  * POST   /api/logs/export   — 导出日志
  * POST   /api/logs/import   — 导入日志
  * DELETE /api/logs          — 清空所有日志
+ * DELETE /api/logs/temporary — 清空临时日志（expires_at 非空）
  */
 
 import { Router } from 'express';
@@ -161,6 +162,18 @@ export function createLogsRouter(options: {
     } catch (error) {
       dbg('导入日志失败: %O', error);
       res.status(500).json({ error: 'Failed to import logs' });
+    }
+  });
+
+  // DELETE /api/logs/temporary — 立即清空所有临时日志（expires_at 非空，含未过期）
+  router.delete('/api/logs/temporary', (_req, res) => {
+    try {
+      const result = LogManager.purgeTemporaryLogs();
+      LogReader.invalidateCache();
+      res.json(result);
+    } catch (error) {
+      dbg('清空临时日志失败: %O', error);
+      res.status(500).json({ error: 'Failed to clear temporary logs' });
     }
   });
 

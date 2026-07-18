@@ -139,6 +139,7 @@ export function normalizeLogEntry(raw: any): LogEntry {
     providerName: raw.providerName,
     endpointType: raw.endpointType,
     threadId: raw.threadId,
+    expiresAt: raw.expiresAt,
   };
 }
 
@@ -303,6 +304,7 @@ export function reconstructEntry(row: LogRow, request: string, response: string)
     providerName: row.provider_name ?? undefined,
     endpointType: row.endpoint_type ?? undefined,
     threadId: row.thread_id ?? undefined,
+    expiresAt: row.expires_at ?? undefined,
     tokenUsage: hasUsage ? {
       input_tokens: row.input_tokens ?? 0,
       output_tokens: row.output_tokens ?? 0,
