@@ -6,12 +6,13 @@
  * listLogs 过滤+排序+分页、searchLogs 带过滤、retention 级联删除。
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
 import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   openDb, insertLog, migrateFromJsonl, listLogs, searchLogs, getLogById,
-  buildSearchText, deleteOldLogs, countLogs, getStats, clearAllLogs,
+  buildSearchText, deleteOldLogs, deleteExpiredLogs, deleteAllTemporaryLogs, countLogs, getStats, clearAllLogs,
   encodeCursor, decodeCursor, type DB,
 } from '../server/services/db.js';
 import { initDb, closeDb, getDb } from '../server/services/db-instance.js';
@@ -284,6 +285,74 @@ describe('deleteOldLogs — 级联清理', () => {
     const s = searchLogs(db, '代理拦截请求', { limit: 10, offset: 0 });
     expect(s.total).toBe(1);
     expect(s.logs[0].id).toBe('new');
+  });
+});
+
+describe('deleteExpiredLogs — 临时日志级联清理', () => {
+  it('删除已过期临时行并级联 log_bodies/FTS，未过期临时与存档（NULL）行不受影响', () => {
+    insertLog(db, makeEntry({ id: 'expired', timestamp: '2026-07-08T00:00:00.000Z', expiresAt: '2026-07-01T00:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'live', timestamp: '2026-07-08T00:00:00.000Z', expiresAt: '2099-12-31T00:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'archive', timestamp: '2026-07-08T00:00:00.000Z' })); // 无 expiresAt = 存档
+    expect(countLogs(db)).toBe(3);
+
+    const n = deleteExpiredLogs(db, '2026-07-08T00:00:00.000Z');
+    expect(n).toBe(1);
+    expect(countLogs(db)).toBe(2);
+    const bodies = db.prepare(`SELECT COUNT(*) AS c FROM log_bodies`).get() as { c: number };
+    expect(bodies.c).toBe(2);
+    const ids = db.prepare(`SELECT id FROM logs ORDER BY id`).all() as { id: string }[];
+    expect(ids.map(r => r.id)).toEqual(['archive', 'live']);
+  });
+
+  it('无临时日志（全存档）时返回 0，不误删', () => {
+    insertLog(db, makeEntry({ id: 'a1', timestamp: '2026-07-08T00:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'a2', timestamp: '2026-07-08T00:00:00.000Z' }));
+    const n = deleteExpiredLogs(db, '2099-12-31T00:00:00.000Z');
+    expect(n).toBe(0);
+    expect(countLogs(db)).toBe(2);
+  });
+});
+
+describe('deleteAllTemporaryLogs — 立即清空临时（含未过期）', () => {
+  it('删除所有 expires_at 非空行（含未过期），存档（NULL）保留', () => {
+    insertLog(db, makeEntry({ id: 'expired', timestamp: '2026-07-08T00:00:00.000Z', expiresAt: '2026-07-01T00:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'live', timestamp: '2026-07-08T00:00:00.000Z', expiresAt: '2099-12-31T00:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'archive', timestamp: '2026-07-08T00:00:00.000Z' }));
+    expect(countLogs(db)).toBe(3);
+
+    const n = deleteAllTemporaryLogs(db);
+    expect(n).toBe(2); // expired + live（含未过期）
+    expect(countLogs(db)).toBe(1); // 只剩 archive
+    const ids = db.prepare(`SELECT id FROM logs`).all() as { id: string }[];
+    expect(ids.map(r => r.id)).toEqual(['archive']);
+  });
+});
+
+describe('openDb — 老库迁移（无 expires_at 列）', () => {
+  it('老库 openDb 自动加 expires_at 列 + idx_logs_expires，老数据保留', () => {
+    // 1. 手建老库（schema 不含 expires_at，模拟升级前已存在的库）
+    const oldDbPath = join(dir, 'old.db');
+    const oldDb = new Database(oldDbPath);
+    oldDb.exec(`CREATE TABLE logs (
+      rowid INTEGER PRIMARY KEY, id TEXT NOT NULL UNIQUE, timestamp TEXT NOT NULL,
+      agent_type TEXT, client_type TEXT, provider_name TEXT, endpoint_type TEXT,
+      model TEXT, status INTEGER, duration INTEGER NOT NULL DEFAULT 0,
+      is_stream INTEGER NOT NULL DEFAULT 0, is_test INTEGER NOT NULL DEFAULT 0,
+      thread_id TEXT, error TEXT, input_tokens INTEGER, output_tokens INTEGER,
+      cache_read_tokens INTEGER, cache_creation_tokens INTEGER
+    )`);
+    oldDb.prepare(`INSERT INTO logs (id, timestamp) VALUES (?, ?)`).run('old1', '2026-07-01T00:00:00.000Z');
+    oldDb.close();
+
+    // 2. 升级后 openDb：回归点——旧实现在此因 SCHEMA 的 idx_logs_expires（列未建）报
+    //    "no such column: expires_at" 启动失败。修复后：ALTER 先加列，再建索引。
+    const db2 = openDb(oldDbPath);
+    const cols = db2.prepare('pragma table_info(logs)').all() as { name: string }[];
+    expect(cols.some(c => c.name === 'expires_at')).toBe(true);
+    const idxs = db2.prepare(`SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='logs'`).all() as { name: string }[];
+    expect(idxs.some(i => i.name === 'idx_logs_expires')).toBe(true);
+    expect(countLogs(db2)).toBe(1); // 老数据保留
+    db2.close();
   });
 });
 
