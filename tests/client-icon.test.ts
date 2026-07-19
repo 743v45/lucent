@@ -44,6 +44,26 @@ describe('identifyClient - 客户端识别', () => {
       expect(identifyClient({ 'user-agent': 'WINDSURF/1.0' })).toBe('windsurf');
     });
 
+    it('应该识别 ZCode 客户端（通过 User-Agent）', () => {
+      // 真实 ZCode UA（issue 提供）
+      expect(identifyClient({ 'user-agent': 'ZCode/3.3.0 ai-sdk/provider-utils/4.0.27 runtime/node.js/24' })).toBe('zcode');
+      // 大小写不敏感
+      expect(identifyClient({ 'user-agent': 'ZCODE/1.0' })).toBe('zcode');
+      expect(identifyClient({ 'user-agent': 'zcode/2.5.1' })).toBe('zcode');
+    });
+
+    it('应该通过 x-zcode-* 专属头识别 ZCode（防 UA 变化）', () => {
+      // 即使 UA 不含 zcode，携带 x-zcode-* 头也判 zcode
+      expect(identifyClient({
+        'user-agent': 'ai-sdk/provider-utils/4.0.27 runtime/node.js/24',
+        'x-zcode-app-version': '3.3.0',
+      })).toBe('zcode');
+      expect(identifyClient({
+        'user-agent': 'ai-sdk/provider-utils/4.0.27',
+        'x-zcode-agent': 'glm',
+      })).toBe('zcode');
+    });
+
     it('应该识别测试客户端', () => {
       expect(identifyClient({ 'user-agent': 'test-client/1.0' })).toBe('test-client');
       expect(identifyClient({ 'user-agent': 'lucent-test/1.0' })).toBe('test-client');
@@ -84,7 +104,7 @@ describe('identifyClient - 客户端识别', () => {
   });
 
   describe('识别优先级', () => {
-    it('originator > opencode > claude > codex > cursor > windsurf > test-client > unknown', () => {
+    it('originator > opencode > claude > codex > cursor > windsurf > zcode > test-client > unknown', () => {
       // originator 最高优先级
       expect(identifyClient({
         'user-agent': 'codex/1.0',
@@ -113,6 +133,8 @@ describe('identifyClient - 客户端识别', () => {
         { ua: 'CurSor/1.0', expected: 'cursor' },
         { ua: 'WINDSURF/1.0', expected: 'windsurf' },
         { ua: 'WindSurf/1.0', expected: 'windsurf' },
+        { ua: 'ZCODE/1.0', expected: 'zcode' },
+        { ua: 'ZcOdE/1.0', expected: 'zcode' },
         { ua: 'TEST-CLIENT/1.0', expected: 'test-client' },
         { ua: 'Lucent-TEST/1.0', expected: 'test-client' },
       ];
@@ -175,6 +197,7 @@ describe('ClientIcon 配置验证', () => {
     'codex',
     'cursor',
     'windsurf',
+    'zcode',
     'test-client',
     'unknown',
   ];
@@ -195,6 +218,7 @@ describe('ClientIcon 配置验证', () => {
       { type: 'codex', headers: { 'user-agent': 'codex/1.0' } },
       { type: 'cursor', headers: { 'user-agent': 'cursor/1.0' } },
       { type: 'windsurf', headers: { 'user-agent': 'windsurf/1.0' } },
+      { type: 'zcode', headers: { 'user-agent': 'ZCode/3.3.0 ai-sdk/provider-utils/4.0.27 runtime/node.js/24' } },
       { type: 'test-client', headers: { 'user-agent': 'test-client/1.0' } },
       { type: 'unknown', headers: { 'user-agent': 'unknown-app/1.0' } },
     ];

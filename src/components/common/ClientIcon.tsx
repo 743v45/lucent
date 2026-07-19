@@ -9,6 +9,8 @@ import type { ClientType } from '../../types';
 import ClaudeCodeColor from '@lobehub/icons/es/ClaudeCode/components/Color';
 import CodexColor from '@lobehub/icons/es/Codex/components/Color';
 import OpenCodeMono from '@lobehub/icons/es/OpenCode/components/Mono';
+// ZCode 无 @lobehub/icons 图标，用官方 SVG 资产（深色圆角方块 + 白色 Z，自带配色）
+import zcodeIconUrl from '../../assets/icons/zcode.svg';
 
 interface ClientIconProps {
   clientType?: ClientType;
@@ -34,6 +36,18 @@ export function ClientIcon({ clientType, size = 14, className = '' }: ClientIcon
       return <CodexColor size={size} className={className} />;
     case 'opencode':
       return <OpenCodeMono size={size} style={{ color: CLIENT_COLORS.opencode }} className={className} />;
+    case 'zcode':
+      // 官方 SVG 自带深色方块 + 白 Z 配色，明暗背景均可读；object-contain 保持比例
+      return (
+        <img
+          src={zcodeIconUrl}
+          alt="ZCode"
+          width={size}
+          height={size}
+          className={`inline-block object-contain ${className}`}
+          style={{ width: size, height: size }}
+        />
+      );
     case 'cursor':
     case 'windsurf':
     case 'test-client':
