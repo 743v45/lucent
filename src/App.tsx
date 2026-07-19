@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { message, Radio, InputNumber, Popover } from 'antd';
+import { message, Radio, InputNumber, Popover, Select } from 'antd';
 import { LogListPanel } from './components/dashboard/LogListPanel';
 import { DetailPanel } from './components/viewer/DetailPanel';
 import { SettingsContext } from './contexts/SettingsContext';
@@ -7,18 +7,22 @@ import { SettingsModal } from './components/settings/SettingsModal';
 import { BodyRewriteModal } from './components/settings/BodyRewriteModal';
 import { UsageGuide } from './components/common/UsageGuide';
 import { useLogs } from './hooks/useLogs';
+import { useAutoRefresh } from './hooks/useAutoRefresh';
 import { ArchiveBoxIcon, ArrowPathIcon, ChevronDownIcon, ClockIcon, Cog6ToothIcon, EyeSlashIcon, InformationCircleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
 import type { TabType, Provider, LogMode } from './types';
 import {
   URL_PARAM_LOG_ID,
   URL_PARAM_TAB,
   STORAGE_KEY_SIDEBAR_WIDTH,
+  STORAGE_KEY_REFRESH_INTERVAL,
+  REFRESH_INTERVAL_OPTIONS,
   SIDEBAR_DEFAULT_WIDTH,
   SIDEBAR_MIN_WIDTH,
   SIDEBAR_MAX_WIDTH,
   DEFAULT_THEME,
   DEFAULT_ACTIVE_TAB,
 } from './constants';
+import type { RefreshIntervalId } from './constants';
 import { getProxyStatus, setLogMode, setRetentionDays as setRetentionDaysApi } from './utils/api';
 
 const PROVIDER_FILTER_STORAGE_KEY = 'lucent.providerFilter';
@@ -83,6 +87,13 @@ function App(): JSX.Element {
     search: searchTerm,
     providerName: providerFilter,
     endpointType: endpointFilter,
+  });
+
+  // 定时自动刷新：interval='off' 不轮询；非 off 按间隔调 loadLogs；选择记忆到 localStorage
+  const { interval: refreshInterval, setRefreshInterval } = useAutoRefresh({
+    onRefresh: loadLogs,
+    skipIf: () => logsLoading,
+    storageKey: STORAGE_KEY_REFRESH_INTERVAL,
   });
 
   const handleProviderFilterChange = useCallback((name: string) => {
@@ -269,6 +280,18 @@ function App(): JSX.Element {
             >
               <ArrowPathIcon className="w-[18px] h-[18px]" />
             </button>
+            <Select<RefreshIntervalId>
+              data-testid="refresh-interval-select"
+              size="small"
+              variant="borderless"
+              virtual={false}
+              value={refreshInterval}
+              onChange={setRefreshInterval}
+              options={REFRESH_INTERVAL_OPTIONS}
+              className="w-[96px]"
+              title="自动刷新间隔"
+              aria-label="自动刷新间隔"
+            />
             {/* 日志记录模式：[📂 当前态 ▾] 一个 Popover——Radio 三态选模式 + 两时长常驻可改 + 清临时。
                 选模式归选模式、配置归配置，但同处一面；配置常驻，无需选中即可改。 */}
             <Popover

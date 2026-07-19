@@ -41,6 +41,8 @@ export const URL_PARAM_TAB = 'tab';
 
 // ==================== localStorage ====================
 export const STORAGE_KEY_SIDEBAR_WIDTH = 'logListWidth';
+// 定时自动刷新间隔选择（值见 RefreshIntervalId）
+export const STORAGE_KEY_REFRESH_INTERVAL = 'lucent.refreshInterval';
 // 详情面板 Body 全展开态（{ request, response }，JSON）——记忆，切日志不重置
 export const STORAGE_KEY_DETAIL_BODY_EXPANDED = 'lucent.detailBodyExpanded';
 // 详情面板 Headers 折叠态（{ request, response }，JSON）——记忆，切日志不重置
@@ -78,6 +80,39 @@ export const DEFAULT_ICON_SIZE = 18;
 
 // ==================== Root 元素 ====================
 export const ROOT_ELEMENT_ID = 'root';
+
+// ==================== 定时自动刷新 ====================
+export type RefreshIntervalId = 'off' | '5s' | '10s' | '1min' | '10min' | '1h';
+
+export const REFRESH_INTERVAL_OPTIONS: { value: RefreshIntervalId; label: string }[] = [
+  { value: 'off', label: '关闭' },
+  { value: '5s', label: '5秒' },
+  { value: '10s', label: '10秒' },
+  { value: '1min', label: '1分钟' },
+  { value: '10min', label: '10分钟' },
+  { value: '1h', label: '1小时' },
+];
+
+export const REFRESH_INTERVAL_MS: Record<RefreshIntervalId, number | null> = {
+  off: null,
+  '5s': 5_000,
+  '10s': 10_000,
+  '1min': 60_000,
+  '10min': 600_000,
+  '1h': 3_600_000,
+};
+
+const REFRESH_INTERVAL_VALID: ReadonlySet<string> = new Set(
+  REFRESH_INTERVAL_OPTIONS.map(o => o.value),
+);
+
+/** 从 localStorage 原始值解析 interval：非法/空用 defaultValue（默认 'off'）。纯函数，node 可单测。 */
+export function parseRefreshInterval(
+  raw: string | null,
+  defaultValue: RefreshIntervalId = 'off',
+): RefreshIntervalId {
+  return raw && REFRESH_INTERVAL_VALID.has(raw) ? (raw as RefreshIntervalId) : defaultValue;
+}
 
 // ==================== 默认端口 ====================
 export const DEFAULT_PROXY_PORT = 7048;
