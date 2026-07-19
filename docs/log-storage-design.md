@@ -20,7 +20,7 @@ Lucent 的日志存储经历了从 **JSONL 文件** 到 **SQLite + FTS5** 的迁
 
 保留期（决策④）：默认 **3 天**，env `LUCENT_LOG_RETENTION_DAYS` 可调。清理 = `DELETE` 旧行（级联 log_bodies + 手动删 FTS）+ `VACUUM` 回收空间。启动时清一次，之后每 24h 定时清一次（长驻进程兜底）。
 
-临时日志 TTL（与保留期清理并存，两者独立）：`logMode=temporary` 时写入的行带 `expires_at`，由独立定时器每 1 分钟扫一次 `DELETE`（`WHERE expires_at IS NOT NULL AND expires_at < now`，只 DELETE **不 VACUUM**，避免每分钟全库写锁卡代理）；存档行 `expires_at IS NULL` 不受影响。空间回收靠这里的 24h 保留期 VACUUM + WAL 增量页复用兜底。
+临时日志 TTL（与保留期清理并存，两者独立）：`logMode=temporary` 时写入的行带 `expires_at`，由独立定时器每 1 分钟扫一次 `DELETE`（`WHERE expires_at IS NOT NULL AND expires_at < now`，只 DELETE **不 VACUUM**，避免每分钟全库写锁卡代理）；存档行 `expires_at IS NULL` 不受影响。存活时长可选 **0 = 立即过期**（`expires_at ≈ now`，写入即被清理定时器删，取代原「立即清空临时」按钮）。空间回收靠这里的 24h 保留期 VACUUM + WAL 增量页复用兜底。
 
 导出：仍支持 **JSONL / Markdown** 两种格式（导出产物，不是 live 存储）。
 
@@ -52,7 +52,7 @@ SQLite 上线即**唯一存储**（无双写过渡期）。首次启动 `migrate
 | env | 默认 | 说明 |
 |---|---|---|
 | `LUCENT_DB_PATH` | `~/.lucent/lucent.db` | SQLite 库路径 |
-| `LUCENT_LOG_RETENTION_DAYS` | `3` | 保留期天数，清理早于此的行 |
+| `LUCENT_LOG_RETENTION_DAYS` | `3` | 保留期天数，清理早于此的行；UI 可配（顶栏 Popover 保留期 `InputNumber`，`POST /api/retention`），env 锁定时 UI 改动不生效（仍写 config 保留意图） |
 | `LUCENT_LOG_MODE` | `archive` | 日志模式三态：`off`（只过路不记）/ `temporary`（临时落库带 TTL）/ `archive`（存档，按保留期清理）；兼容旧 `LUCENT_LOG_RECORDING`（true→archive / false→off） |
 | `LUCENT_TEMP_LOG_TTL_MINUTES` | `30` | 临时模式 TTL（分钟），仅 logMode=temporary 时写入的日志带此到期时间 |
 

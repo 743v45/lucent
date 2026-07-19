@@ -50,6 +50,9 @@ Lucent 现有日志开关是二态 `logRecording: boolean`（[server/config.ts](
 | API / 前端旧字段 | 一刀切 `logMode`，不保留别名 | 单人项目无外部消费者 |
 | 删除安全 | `WHERE expires_at IS NOT NULL AND expires_at < ?` | 存档数据（NULL）绝不误删 |
 | 前端不堆积 | 软上限 500 + 渲染时过滤已过期 + loadLogs 服务端已删 | 无幽灵条目 |
+| 去「立即清空临时」🗑 | 删 `DELETE /api/logs/temporary` / `purgeTemporaryLogs` / `deleteAllTemporaryLogs` / `api.clearTemporaryLogs`（无消费者），UI 去 🗑 按钮；用 **TTL=0（立即过期）** 表达「记完即清」 | 手动清空无人用；TTL=0 复用既有每分钟清理定时器，少一条 API + 少一个按钮，UI 更简洁 |
+| TTL 允许 0 | `getTempTtlMinutes()` / `validateConfig` 按 `>= 0`（0=立即过期，`expires_at ≈ now`） | 配合上一条取代手动清空；写入即被清理定时器删 |
+| 保留期 UI 可配 | 顶栏 Popover 保留期 `InputNumber` + `getRetentionDays()` 实时 getter（env > config > 默认 3）+ `POST /api/retention`；`cleanupOldLogs` 改用 getter | 保留期原仅 env 可改；改用实时 getter 顺带修了读启动快照 `resolvedConfig` 导致运行时改保留期不即时生效的 bug，与 `getLogMode()` / `getTempTtlMinutes()` 语义一致 |
 
 ## 4. 数据模型
 
@@ -102,7 +105,7 @@ getLogMode() === 'archive'    → entry.expiresAt 不设（undefined → NULL）
 2. **渲染过滤**：[src/hooks/useLogs.ts](../../../src/hooks/useLogs.ts) 渲染前丢掉 `expires_at < now` 的条目——即便删除滞后最多 60s，前端也不显示已过期项。
 3. **软上限 500**：`useLogs` 列表最多保留 500 条，超出按时间序丢旧的，防长跑堆积吃内存。
 
-顶栏（[src/App.tsx](../../../src/App.tsx)）：antd `Segmented` 三态（只过路 / 临时 / 存档）替换单 `EyeSlashIcon` 二态；**临时态内联 `InputNumber`** 改 TTL（分钟，≥1）。`logModeEnvLocked=true` 时 Segmented 禁用 + tooltip 提示被 env 锁定。`LogListPanel`（[src/components/dashboard/LogListPanel.tsx](../../../src/components/dashboard/LogListPanel.tsx)）给临时条目加视觉标记（时钟角标 / dim）区分存档。
+顶栏（[src/App.tsx](../../../src/App.tsx)）：一个 `[当前态 ▾]` 单按钮（按当前态显示 过路 / 临时 / 存档 + 对应图标），点开 antd `Popover`，内含纵向 `Radio` 三态（过路 / 临时 / 存档，「只过路」改名「过路」）选模式 + 每行右侧带配置——**临时行右：存活时长 `InputNumber`（分钟，`min=0`，0=立即过期，0–1440）；存档行右：保留期 `InputNumber`（天，1–3650）**。两时长常驻可改、无需选中对应模式；标签列 `w-16` 右对齐 + `InputNumber` `w-[78px]` 对齐。**切模式即时提交**（`POST /api/recording`）；**改时长仅本地 state，关闭 Popover 时比较打开时的初始值、有变化才统一提交**（存活时长→`/api/recording` 带 `tempTtlMinutes`；保留期→`POST /api/retention`）并弹 toast（`存活时长已保存为 N 分` / `保留期已保存为 N 天`；TTL=0 时提示「立即过期」）。已去掉原「立即清空临时」🗑 按钮——要「记完即清」改设存活时长=0。`logModeEnvLocked=true` 时 Radio + InputNumber 禁用 + 提示被环境变量锁定。`LogListPanel`（[src/components/dashboard/LogListPanel.tsx](../../../src/components/dashboard/LogListPanel.tsx)）给临时条目加视觉标记（时钟角标 / dim）区分存档。
 
 ## 8. 验收标准
 
@@ -116,9 +119,12 @@ getLogMode() === 'archive'    → entry.expiresAt 不设（undefined → NULL）
 | 8.6 | `tempCleanupTimer` 每 60s 跑 + 启动清一次；到期临时行最多滞后 60s 消失 | [scripts/verify-e2e.mjs](../../../scripts/verify-e2e.mjs) 临时场景：设短 TTL → 等清理 → 计数减回 |
 | 8.7 | off 模式：发请求转发照旧（上游收到）且 SQLite 无新增行；temporary：+1 带 TTL；archive：+1 无 TTL | verify-e2e.mjs 三态场景（含正向对照） |
 | 8.8 | 切换模式不清已有数据：temporary 下写几条 → 切 archive → 旧临时条目仍按各自 TTL 过期、不被立即删 | 手测 / e2e |
-| 8.9 | env 锁定（LUCENT_LOG_MODE 设）时 UI Segmented 禁用 + tooltip 提示；POST 仍落盘 config 但有效值不变 | 手设 env 跑 UI |
+| 8.9 | env 锁定（LUCENT_LOG_MODE 设）时 UI Popover 内 Radio + InputNumber 禁用 + 提示被环境变量锁定；POST 仍落盘 config 但有效值不变 | 手设 env 跑 UI |
 | 8.10 | 前端列表无幽灵：到期条目渲染时不显示；长跑列表 ≤ 500 条 | useLogs 单测 + 手测 |
 | 8.11 | `docs/log-storage-design.md` 的「30 天」改「3 天」、补 expires_at / LUCENT_LOG_MODE / LUCENT_TEMP_LOG_TTL_MINUTES、补临时 vs 保留期清理说明 | 看文档 |
+| 8.12 | TTL 允许 0（`getTempTtlMinutes()` / `validateConfig` 按 `>= 0`）；temporary 模式 TTL=0 时写入的 `expires_at ≈ now`，下次清理定时器（≤`TEMP_LOG_CLEANUP_INTERVAL_MS`）删除；UI 存活时长 `InputNumber` `min=0` | 设 env `LUCENT_TEMP_LOG_TTL_MINUTES=0`（或 config `tempLogTtlMinutes: 0`），temporary 发请求后查库 + 等清理 |
+| 8.13 | 存档保留期 UI 可配 + 实时生效：顶栏 Popover 保留期 `InputNumber` → `POST /api/retention`；`getRetentionDays()` 实时（env > config > 默认 3）；运行时改保留期后下次 `cleanupOldLogs` 用新值（MUST NOT 读启动快照）；`GET /api/status` 暴露 `retentionDays` | [tests/](../../../tests/) config 单测 + 手测 |
+| 8.14 | 去「立即清空临时」：`DELETE /api/logs/temporary` 已删（404），UI 无 🗑 按钮；原 `purgeTemporaryLogs` / `deleteAllTemporaryLogs` / `api.clearTemporaryLogs` 全项目无残留引用 | grep 全项目（`src/` / `server/` / `tests/`）+ 手测接口 |
 
 ## 9. 不做的事（YAGNI）
 

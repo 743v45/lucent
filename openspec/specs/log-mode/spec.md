@@ -24,16 +24,22 @@ TBD - created by archiving change 2026-07-19-temp-log-mode. Update Purpose after
 - **WHEN** 一个请求完成并写入日志
 - **THEN** `logs.expires_at` MUST 为一个 ISO 时间戳（非 NULL）
 
-### Requirement: temporary 模式的 expires_at 必须用实时 TTL 注入
-`writeLogEntry` 在 `temporary` 模式注入 `entry.expiresAt = ISO(now + ttlMinutes)`，其中 `ttlMinutes` 由运行时 live getter `getTempTtlMinutes()` 决定（env `LUCENT_TEMP_LOG_TTL_MINUTES` > `config.tempLogTtlMinutes` > 默认 30）。MUST NOT 使用 server 启动时的 `resolvedConfig` 快照——用户运行时改 TTL（InputNumber）必须立即反映到后续写入。
+### Requirement: temporary 模式的 expires_at 必须用实时 TTL 注入，TTL 允许 0（立即过期）
+`writeLogEntry`（[server/services/log-writer.ts](../../../server/services/log-writer.ts)）在 `temporary` 模式注入 `entry.expiresAt = ISO(now + ttlMinutes)`，其中 `ttlMinutes` 由运行时 live getter `getTempTtlMinutes()`（[server/config.ts](../../../server/config.ts)）决定（env `LUCENT_TEMP_LOG_TTL_MINUTES` > `config.tempLogTtlMinutes` > 默认 30）。`ttlMinutes` SHALL 为非负整数（`>= 0`，`validateConfig` 与 `getTempTtlMinutes` 均按 `>= 0` 校验/解析）：`0` 表示立即过期——注入的 `expires_at ≈ now`，写入后由独立清理定时器（每 `TEMP_LOG_CLEANUP_INTERVAL_MS`，默认 60s）删除，等同「记完即清」。MUST NOT 使用 server 启动时的 `resolvedConfig` 快照——用户运行时改 TTL（顶栏 Popover 存活时长 InputNumber）必须立即反映到后续写入。
 
-**Rationale:** `logMode` 走 `getLogMode()` 实时，若 TTL 读启动快照则两者不一致——用户前端改 TTL 后写入仍用旧值。e2e 回归断言（改 TTL→临时发请求→`expires_at` 距 now ≈ 新 TTL 分钟）专门守这条。
+**Rationale:** `logMode` 走 `getLogMode()` 实时，若 TTL 读启动快照则两者不一致——用户前端改 TTL 后写入仍用旧值。TTL 允许 0 取代了原先的「立即清空临时日志」按钮（`DELETE /api/logs/temporary` / `purgeTemporaryLogs` / `deleteAllTemporaryLogs` / `api.clearTemporaryLogs` 已全部删除，无消费者）：用户要「记完即清」时设 TTL=0，由既有清理定时器消化，无需新增一条手动删除路径。e2e 回归断言（改 TTL→临时发请求→`expires_at` 距 now ≈ 新 TTL 分钟）专门守这条。
 
 #### Scenario: 运行时改 TTL 后写入反映新值
 - **GIVEN** `logMode === 'temporary'`，启动时 TTL=30
 - **WHEN** 运行时 `setLogMode('temporary', 7)` 后发一个请求
 - **THEN** 新日志的 `expires_at` 距 `now` 约 7 分钟（容差 ±2 分钟）
 - **AND** MUST NOT 是约 30 分钟（旧快照值）
+
+#### Scenario: TTL=0 写入立即过期
+- **GIVEN** `logMode === 'temporary'`，`getTempTtlMinutes()` 返回 0（env `LUCENT_TEMP_LOG_TTL_MINUTES=0` 或 config `tempLogTtlMinutes: 0`）
+- **WHEN** 一个请求完成并写入日志
+- **THEN** 新日志的 `expires_at` 距 `now` 约 0 分钟（`expires_at ≈ now`）
+- **AND** 下一次清理定时器扫描（最多滞后 `TEMP_LOG_CLEANUP_INTERVAL_MS`）时该行被删除
 
 ### Requirement: 临时日志由独立定时器按 expires_at 清理，存档行不受影响
 系统 MUST 运行一个独立于保留期清理（每 24h）的定时器，按 `TEMP_LOG_CLEANUP_INTERVAL_MS`（默认 60s）扫描并 `DELETE FROM logs WHERE expires_at IS NOT NULL AND expires_at < now`（事务内级联 `log_bodies` + 手动删 `logs_fts`）。WHERE 子句 MUST 带 `expires_at IS NOT NULL`，保证存档行（NULL）绝不被误删。该清理 MUST NOT 执行 `VACUUM`（全库写锁，每分钟跑会卡代理写入）；空间回收交给 24h 保留期清理的 VACUUM + WAL 增量页复用。
@@ -79,16 +85,22 @@ TBD - created by archiving change 2026-07-19-temp-log-mode. Update Purpose after
 - **THEN** 该行被清理定时器删除（`expires_at` 未被改成 NULL）
 - **AND** 新写入的行 `expires_at` 为 NULL
 
-### Requirement: 立即清空临时删除所有 expires_at 非空行（含未过期），存档保留
-`DELETE /api/logs/temporary` MUST 删除所有 `expires_at IS NOT NULL` 的行（含尚未到期的临时行），存档行（NULL）保留。删除走与 `deleteExpiredLogs` 相同的事务级联结构（`logs_fts` + `logs` + 级联 `log_bodies`），MUST NOT VACUUM。返回 `{ deleted: <n> }`。
+### Requirement: 存档保留期可配且实时生效
+存档保留期（天）SHALL 由运行时 live getter `getRetentionDays()`（[server/config.ts](../../../server/config.ts)）决定：优先级 env `LUCENT_LOG_RETENTION_DAYS` > `config.logRetentionDays` > 默认 `LOG_RETENTION_DAYS`（3）。保留期清理 `cleanupOldLogs`（[server/services/log-writer.ts](../../../server/services/log-writer.ts)）MUST 每次执行时调 `getRetentionDays()` 取有效值，MUST NOT 读 server 启动时 `resolvedConfig` 快照——用户运行时改保留期（顶栏 Popover 保留期 InputNumber）后，下一次清理 MUST 立即用新值。`GET /api/status` MUST 暴露 `retentionDays`（有效值）；`POST /api/retention { days }` SHALL 校验 `days` 为正整数，调 `setRetentionDays` 持久化到 config.json，返回 `{ success, retentionDays, envLocked }`。env 锁定时 config 仍写入（保留意图），但返回的有效值由 env 决定、`envLocked=true`。
 
-**Rationale:** 调试场景用户想立即清掉所有临时日志、不等 TTL 到期。与「清过期」区分：清过期只删 `expires_at < now`，立即清空删 `expires_at IS NOT NULL`。
+**Rationale:** 保留期原写死仅 env 可改，UI 无法调；现顶栏 Popover 暴露 InputNumber，运行时可改。`cleanupOldLogs` 若读启动快照则改完保留期不即时生效（要重启），与 `getLogMode()` / `getTempTtlMinutes()` 的实时语义一致化——三个热路径 getter 统一不缓存。`setRetentionDays` 镜像 `setLogMode` 的 env 锁定语义。
 
-#### Scenario: 立即清空删所有临时含未过期、存档保留
-- **GIVEN** 库内有：过期临时、未到期临时、存档各一行
-- **WHEN** `DELETE /api/logs/temporary`
-- **THEN** 返回 `deleted: 2`（两条临时，含未到期）
-- **AND** 库内只剩存档行
+#### Scenario: 运行时改保留期后下次清理用新值
+- **GIVEN** 启动时保留期 3 天，`cleanupOldLogs` 曾用 3 天 cutoff 清理
+- **WHEN** 运行时 `POST /api/retention { days: 1 }` 后触发下一次 `cleanupOldLogs`
+- **THEN** cutoff 为 `now - 1 天`（用新值），早于 1 天的行被删
+- **AND** MUST NOT 仍用启动时的 3 天快照
+
+#### Scenario: env 锁定保留期时 config 写入但有效值由 env 决定
+- **GIVEN** env `LUCENT_LOG_RETENTION_DAYS=7` 已设置
+- **WHEN** `POST /api/retention { days: 1 }`
+- **THEN** 响应 `{ success: true, retentionDays: 7, envLocked: true }`
+- **AND** `config.logRetentionDays=1` 已落盘（保留意图），但 `getRetentionDays()` 仍返回 7
 
 ### Requirement: 前端不得堆积过期或超量临时条目
 `useLogs` MUST 对 `logs` state 设软上限（`LOGS_SOFT_CAP = 500`）：`loadMore` / `addLog` 追加后若超限裁剪到最前（最新）N 条。导出给视图的列表 MUST 过滤掉 `expiresAt` 已过期（`Date.parse(expiresAt) <= Date.now()`）的条目，且每 60s 重新评估一次（避免过期项变幽灵）。配合服务端 `loadLogs` 已删不再下发，三层兜底保证浏览器无幽灵条目。
@@ -106,13 +118,13 @@ TBD - created by archiving change 2026-07-19-temp-log-mode. Update Purpose after
 - **THEN** 该条目不渲染（从可见列表移除）
 
 ### Requirement: /api/status 与 /api/recording 三态契约
-`GET /api/status` MUST 暴露 `logMode`（有效值）、`logModeEnvLocked`（env 是否锁定）、`tempLogTtlMinutes`（有效 TTL）。`POST /api/recording` body 接收 `{ logMode: 'off'|'temporary'|'archive', tempTtlMinutes?: number }`，校验 logMode 白名单 + tempTtlMinutes（若给）为正整数，调 `setLogMode` 持久化，返回 `{ success, logMode, envLocked }`。env 锁定时 config 仍写入（保留意图），但返回的有效值由 env 决定、`envLocked=true`。
+`GET /api/status`（[server/routes/status.ts](../../../server/routes/status.ts)）MUST 暴露 `logMode`（有效值）、`logModeEnvLocked`（env 是否锁定）、`tempLogTtlMinutes`（有效 TTL）、`retentionDays`（有效保留期天数）。`POST /api/recording` body 接收 `{ logMode: 'off'|'temporary'|'archive', tempTtlMinutes?: number }`，校验 logMode 白名单 + tempTtlMinutes（若给）为正整数，调 `setLogMode` 持久化，返回 `{ success, logMode, envLocked }`。`POST /api/retention { days }` 校验 `days` 为正整数，调 `setRetentionDays` 持久化，返回 `{ success, retentionDays, envLocked }`（详见「存档保留期可配」Requirement）。env 锁定时 config 仍写入（保留意图），但返回的有效值由 env 决定、`envLocked=true`。
 
-**Rationale:** 顶栏 Segmented + TTL InputNumber 需要读 status 渲染、写 recording 切换。env 锁定语义让 UI 禁用切换并提示，避免用户以为开关坏了。
+**Rationale:** 顶栏 Popover 的 Radio 三态 + 存活时长 / 保留期 InputNumber 需要读 status 渲染、写 recording / retention 切换。env 锁定语义让 UI 禁用切换并提示，避免用户以为开关坏了。
 
-#### Scenario: status 暴露三态有效值
+#### Scenario: status 暴露三态有效值与保留期
 - **WHEN** `GET /api/status`（无 env 锁定）
-- **THEN** 响应含 `logMode`（off/temporary/archive 之一）、`logModeEnvLocked: false`、`tempLogTtlMinutes`（正整数）
+- **THEN** 响应含 `logMode`（off/temporary/archive 之一）、`logModeEnvLocked: false`、`tempLogTtlMinutes`（非负整数）、`retentionDays`（正整数）
 
 #### Scenario: recording 切换并持久化
 - **WHEN** `POST /api/recording { logMode: 'temporary', tempTtlMinutes: 10 }`
