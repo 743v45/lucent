@@ -583,24 +583,6 @@ export function deleteExpiredLogs(db: DB, nowISO: string): number {
   return n;
 }
 
-/**
- * 删除所有临时日志（expires_at 非空，含未过期）。
- * 供「立即清空临时」用（区别于 deleteExpiredLogs 只删已过期）。结构与 deleteOldLogs 一致。
- */
-export function deleteAllTemporaryLogs(db: DB): number {
-  const tx = db.transaction(() => {
-    const rowids = db.prepare(`SELECT rowid FROM logs WHERE expires_at IS NOT NULL`).all() as { rowid: number }[];
-    if (rowids.length === 0) return 0;
-    const idList = rowids.map(r => r.rowid).join(',');
-    db.prepare(`DELETE FROM logs_fts WHERE rowid IN (${idList})`).run();
-    db.prepare(`DELETE FROM logs WHERE rowid IN (${idList})`).run(); // ON DELETE CASCADE 清 log_bodies
-    return rowids.length;
-  });
-  const n = tx();
-  dbg('清空所有临时日志: 删除 %d 行', n);
-  return n;
-}
-
 /** 重建碎片空间（低频调用，如每日清理后） */
 export function vacuum(db: DB): void {
   db.exec('VACUUM');

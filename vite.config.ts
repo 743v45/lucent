@@ -4,6 +4,10 @@ import tailwindcss from '@tailwindcss/vite';
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  optimizeDeps: {
+    // 预构建重依赖，加速 dev 冷启（@lobehub/icons 按需 import 不列，整包预构建反而慢）
+    include: ['react', 'react-dom', 'antd', '@ant-design/icons', '@heroicons/react/24/outline', 'react-markdown', 'remark-gfm'],
+  },
   base: './',
   server: {
     // 验收脚本用 VITE_PORT 指定随机端口；默认 5173 strictPort

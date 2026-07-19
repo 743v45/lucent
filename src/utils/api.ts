@@ -43,6 +43,7 @@ export async function getProxyStatus(): Promise<{
   logMode?: import('../types').LogMode;
   logModeEnvLocked?: boolean;
   tempLogTtlMinutes?: number;
+  retentionDays?: number;
 }> {
   return request('/status');
 }
@@ -58,6 +59,18 @@ export async function setLogMode(
   return request('/recording', {
     method: 'POST',
     body: JSON.stringify({ logMode, tempTtlMinutes }),
+  });
+}
+
+/**
+ * 设置存档保留期（天，持久化）。返回有效值 retentionDays 与是否被 env 锁定。
+ */
+export async function setRetentionDays(
+  days: number,
+): Promise<{ success: boolean; retentionDays: number; envLocked: boolean }> {
+  return request('/retention', {
+    method: 'POST',
+    body: JSON.stringify({ days }),
   });
 }
 
@@ -206,13 +219,6 @@ export async function clearAllLogs(): Promise<{
   deleted: number;
 }> {
   return request('/logs', { method: 'DELETE' });
-}
-
-/**
- * 立即清空所有临时日志（expires_at 非空行，含未过期）。返回删除条数。
- */
-export async function clearTemporaryLogs(): Promise<{ deleted: number }> {
-  return request('/logs/temporary', { method: 'DELETE' });
 }
 
 /**

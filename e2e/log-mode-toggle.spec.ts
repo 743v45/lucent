@@ -1,14 +1,12 @@
 /**
- * 日志记录模式三态开关 UI spec（off / temporary / archive + TTL）
+ * 日志记录模式 UI spec（[📂 当前态 ▾] 一个 Popover：Radio 三态选模式 + 两时长常驻可改 + 清临时）
  *
- * 复用 e2e/fixtures.ts 隔离栈（真实后端 + vite dev + mock 上游）。覆盖：
- *   - 默认 archive：Segmented 选中「存档」，写入行 expiresAt 为空
- *   - 切 off：发请求不落库（beta 计数不变），Segmented 选中「只过路」
- *   - 切 temporary：TTL InputNumber 出现，写入行 expiresAt 非空
- *   - 改 TTL InputNumber → /api/status tempLogTtlMinutes 持久化更新
- *   - env 锁定：logModeEnvLocked=true 时 Segmented 内 input 禁用
+ * - 顶栏一个按钮（显示当前态），点开 Popover
+ * - Popover 内：纵向 Radio 三态（选模式）+ 分隔线 + 两时长常驻（临时存活时长 / 存档保留期，无需选中即可改）+ 清临时
+ * - 选模式（Radio）即时提交；改时长（InputNumber）仅本地，**关闭 Popover 时**统一提交
  *
- * 隔离：worker 共享后端，用专属 provider=beta + 前后计数对比，不假定空库。
+ * 覆盖：存档默认 / off 不落库 / 临时 expiresAt 非空 / 改 TTL 关闭后写入反映新值 / env 锁定 /
+ * 立即清空临时 / 仅存档过滤。
  */
 import { test, expect, type LucentStack } from './fixtures';
 import type { Page } from '@playwright/test';
@@ -16,7 +14,6 @@ import type { Page } from '@playwright/test';
 const OAI_HEADERS = { authorization: 'Bearer sk-mock-ui-e2e' };
 const PROVIDER = 'beta';
 
-/** 发一条 openai-chat 请求穿过代理，落到 beta 名下。 */
 async function sendChat(lucent: LucentStack, content: string): Promise<void> {
   lucent.upstream.setMode('chat-json');
   await lucent.postThroughProxy(`/${PROVIDER}/v1/chat/completions`, OAI_HEADERS, {
@@ -26,61 +23,67 @@ async function sendChat(lucent: LucentStack, content: string): Promise<void> {
   });
 }
 
-/** beta 已落库条数（只有本文件造 beta，故计数确定）。 */
 async function betaCount(lucent: LucentStack): Promise<number> {
   return (await lucent.readLogEntries()).filter((l) => l.providerName === PROVIDER).length;
 }
 
-/** beta 最新一条（/api/logs 按 timestamp DESC，首条最新）。 */
 async function latestBeta(lucent: LucentStack): Promise<Record<string, unknown> | undefined> {
   return (await lucent.readLogEntries()).find((l) => l.providerName === PROVIDER);
 }
 
-/** 经 /api/recording 设置模式（走 vite 代理到后端）。 */
 async function setMode(page: Page, webBaseUrl: string, mode: 'off' | 'temporary' | 'archive'): Promise<void> {
   await page.request.post(`${webBaseUrl}/api/recording`, { data: { logMode: mode } });
 }
 
-/** 点 Segmented 某档（按 label 文本匹配 ant-segmented-item）。 */
-async function pickMode(page: Page, label: string): Promise<void> {
-  await page.getByTestId('log-mode-toggle').locator('.ant-segmented-item', { hasText: label }).click();
+/** 点顶栏 [📂] 按钮开 Popover。 */
+async function openPopover(page: Page): Promise<void> {
+  await page.getByTestId('log-mode-btn').click();
 }
 
-/** Segmented 当前选中档的文本。 */
-async function selectedModeText(page: Page): Promise<string> {
-  const el = page.getByTestId('log-mode-toggle').locator('.ant-segmented-item-selected');
-  return (await el.textContent()) ?? '';
+/** 开 Popover 并点某态的 Radio。Popover 保持开（点 content 内不关）。 */
+async function pickMode(page: Page, mode: 'off' | 'temporary' | 'archive'): Promise<void> {
+  await openPopover(page);
+  await page.getByTestId(`mode-${mode}`).click();
 }
 
-test.describe('日志记录模式三态开关', () => {
+/** 关闭 Popover（触发 onOpenChange(false) → 统一提交时长）。 */
+async function closePopover(page: Page): Promise<void> {
+  await page.keyboard.press('Escape');
+}
+
+async function modeBtnText(page: Page): Promise<string> {
+  return (await page.getByTestId('log-mode-btn').textContent()) ?? '';
+}
+
+test.describe('日志记录模式（[📂] Popover：Radio 选 + 两时长常驻配置）', () => {
   test.beforeEach(async ({ page, lucent }) => {
     await setMode(page, lucent.webBaseUrl, 'archive');
     await page.goto(lucent.webBaseUrl);
-    await expect(page.getByTestId('log-mode-toggle')).toBeVisible();
+    await expect(page.getByTestId('log-mode-btn')).toBeVisible();
   });
 
-  test('存档：Segmented 选中「存档」，写入行 expiresAt 为空', async ({ page, lucent }) => {
-    expect(await selectedModeText(page)).toContain('存档');
+  test('存档：默认态，写入 expiresAt 空', async ({ page, lucent }) => {
+    expect(await modeBtnText(page)).toContain('存档');
     const before = await betaCount(lucent);
     await sendChat(lucent, 'LMT-ARCHIVE');
     await expect.poll(() => betaCount(lucent), { timeout: 5000 }).toBe(before + 1);
-    const latest = await latestBeta(lucent);
-    expect(latest?.expiresAt).toBeFalsy(); // 存档：无到期时间
+    expect((await latestBeta(lucent))?.expiresAt).toBeFalsy();
   });
 
-  test('切 off：发请求不落库（beta 计数不变），选中「只过路」', async ({ page, lucent }) => {
-    await pickMode(page, '只过路');
-    expect(await selectedModeText(page)).toContain('只过路');
+  test('切 off：发请求不落库', async ({ page, lucent }) => {
+    await pickMode(page, 'off');
+    expect(await modeBtnText(page)).toContain('过路');
     const before = await betaCount(lucent);
     await sendChat(lucent, 'LMT-OFF');
-    await page.waitForTimeout(800); // 等异步写入队列（off 应无新增）
+    await page.waitForTimeout(800);
     expect(await betaCount(lucent)).toBe(before);
   });
 
-  test('切 temporary：TTL InputNumber 出现，写入行 expiresAt 非空', async ({ page, lucent }) => {
-    await pickMode(page, '临时');
-    expect(await selectedModeText(page)).toContain('临时');
+  test('切 temporary：两时长常驻可见，写入 expiresAt 非空', async ({ page, lucent }) => {
+    await pickMode(page, 'temporary');
+    expect(await modeBtnText(page)).toContain('临时');
     await expect(page.getByTestId('temp-ttl-input')).toBeVisible();
+    await expect(page.getByTestId('retention-input')).toBeVisible(); // 常驻，不管当前模式
     const before = await betaCount(lucent);
     await sendChat(lucent, 'LMT-TEMP');
     await expect.poll(() => betaCount(lucent), { timeout: 5000 }).toBe(before + 1);
@@ -89,62 +92,47 @@ test.describe('日志记录模式三态开关', () => {
     expect((latest?.expiresAt as string).length).toBeGreaterThan(0);
   });
 
-  test('改 TTL InputNumber → status 持久化 + 写入 expiresAt 反映新 TTL', async ({ page, lucent }) => {
-    await pickMode(page, '临时');
-    // antd InputNumber 把 data-testid 透传到 input 自身，用 role=spinbutton 定位（页面唯一）
-    const input = page.getByRole('spinbutton');
+  test('改 TTL 关闭 Popover 后 → status 持久化 + 写入 expiresAt 反映新 TTL', async ({ page, lucent }) => {
+    await pickMode(page, 'temporary');
+    const input = page.getByTestId('temp-ttl-input');
     await expect(input).toBeVisible();
     await input.fill('7');
-    await input.press('Tab'); // blur 触发 onChange 持久化
+    // 改时长不立即提交——必须关闭 Popover 才提交
+    const st0 = await page.request.get(`${lucent.webBaseUrl}/api/status`).then((r) => r.json()) as { tempLogTtlMinutes?: number };
+    expect(st0.tempLogTtlMinutes).not.toBe(7);
+    await closePopover(page); // 关闭 → 统一提交
     await expect.poll(
       async () => (await page.request.get(`${lucent.webBaseUrl}/api/status`).then((r) => r.json()) as { tempLogTtlMinutes?: number }).tempLogTtlMinutes,
       { timeout: 5000 },
     ).toBe(7);
-    // 回归断言：改 TTL=7 后写入的临时日志 expiresAt 应 ≈7 分钟（而非默认 30）。
-    // writeLogEntry 必须用实时 getter，不能用启动快照 resolvedConfig——否则此处 FAIL。
     await sendChat(lucent, 'LMT-TTL7');
     await expect.poll(() => betaCount(lucent), { timeout: 5000 }).toBeGreaterThanOrEqual(1);
     const expiresAt = (await latestBeta(lucent))?.expiresAt as string | undefined;
     expect(expiresAt).toBeTruthy();
     const deltaMin = (Date.parse(expiresAt!) - Date.now()) / 60000;
-    expect(deltaMin).toBeGreaterThanOrEqual(5); // 容差下界（异步写入延迟）
-    expect(deltaMin).toBeLessThanOrEqual(9); // 30 分钟会明显超出 → 抓到 resolvedConfig 快照 bug
+    expect(deltaMin).toBeGreaterThanOrEqual(5);
+    expect(deltaMin).toBeLessThanOrEqual(9);
   });
 
-  test('env 锁定：logModeEnvLocked=true 时 Segmented input 禁用', async ({ page, lucent }) => {
-    // mock /api/status 返回锁定态（仅测 UI 渲染，不改真后端模式）
+  test('env 锁定：顶栏按钮 disabled', async ({ page }) => {
     await page.route('**/api/status', async (route) => {
       const real = await route.fetch();
       const json = await real.json();
       await route.fulfill({ json: { ...json, logModeEnvLocked: true } });
     });
     await page.reload();
-    await expect(page.getByTestId('log-mode-toggle').locator('input').first()).toBeDisabled();
-  });
-
-  test('立即清空临时：删所有 expiresAt 非空行（存档保留）', async ({ page, lucent }) => {
-    await pickMode(page, '临时');
-    await sendChat(lucent, 'LMT-PURGE');
-    await expect.poll(
-      async () => (await lucent.readLogEntries()).filter((l) => l.providerName === PROVIDER && l.expiresAt).length,
-      { timeout: 5000 },
-    ).toBeGreaterThanOrEqual(1);
-    await page.getByTestId('purge-temporary-btn').click();
-    await expect.poll(
-      async () => (await lucent.readLogEntries()).filter((l) => l.providerName === PROVIDER && l.expiresAt).length,
-      { timeout: 5000 },
-    ).toBe(0);
+    await expect(page.getByTestId('log-mode-btn')).toBeDisabled();
   });
 
   test('仅存档过滤：切换后前端隐藏临时行', async ({ page, lucent }) => {
-    await sendChat(lucent, 'LMT-ARCHIVE-FILTER'); // 存档（beforeEach 已 archive）
-    await pickMode(page, '临时');
-    await sendChat(lucent, 'LMT-TEMP-FILTER'); // 临时
+    await sendChat(lucent, 'LMT-ARCHIVE-FILTER');
+    await pickMode(page, 'temporary');
+    await sendChat(lucent, 'LMT-TEMP-FILTER');
     await expect.poll(
       async () => (await lucent.readLogEntries()).filter((l) => l.providerName === PROVIDER && l.expiresAt).length,
       { timeout: 5000 },
     ).toBeGreaterThanOrEqual(1);
-    await page.reload(); // 前端无自动刷新，手动拉一次新数据
+    await page.reload();
     await expect(page.getByTestId('archive-only-switch')).toBeVisible();
     const tempRows = page.locator('[data-testid="log-row"]').filter({ hasText: '临时' });
     await expect.poll(async () => tempRows.count(), { timeout: 5000 }).toBeGreaterThanOrEqual(1);

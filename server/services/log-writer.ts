@@ -11,7 +11,7 @@
 import { insertLog, deleteOldLogs, deleteExpiredLogs, vacuum } from './db.js';
 import { initDb, getDb } from './db-instance.js';
 import { invalidateCache as invalidateReaderCache } from './log-reader.js';
-import { getLogMode, getTempTtlMinutes } from '../config.js';
+import { getLogMode, getTempTtlMinutes, getRetentionDays } from '../config.js';
 import type { RawLogEntry } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
 import createDebug from 'debug';
@@ -134,7 +134,7 @@ export async function drainWriteQueue(): Promise<void> {
  * 决策④：保留期默认 3 天，env LUCENT_LOG_RETENTION_DAYS 可调。
  */
 export function cleanupOldLogs(): void {
-  const retentionDays = resolvedConfig.logRetentionDays;
+  const retentionDays = getRetentionDays();
   const cutoffMs = Date.now() - retentionDays * 24 * 60 * 60 * 1000;
   const cutoffISO = new Date(cutoffMs).toISOString();
   const n = deleteOldLogs(getDb(), cutoffISO);

@@ -33,6 +33,7 @@ export function createStatusRouter(options: {
       logMode: Config.getLogMode(),
       logModeEnvLocked: Config.logModeEnvOverridden(),
       tempLogTtlMinutes: Config.getTempTtlMinutes(),
+      retentionDays: Config.getRetentionDays(),
     });
   });
 
@@ -50,6 +51,17 @@ export function createStatusRouter(options: {
     }
     const result = Config.setLogMode(logMode, tempTtlMinutes);
     res.json({ success: true, logMode: result.logMode, envLocked: result.envLocked });
+  });
+
+  // POST /api/retention — 设置存档保留期（天，持久化到 config.json）
+  router.post('/api/retention', (req, res) => {
+    const days = req.body?.days;
+    if (!Number.isInteger(days) || days < 1) {
+      res.status(400).json({ error: 'days must be a positive integer' });
+      return;
+    }
+    const result = Config.setRetentionDays(days);
+    res.json({ success: true, retentionDays: result.retentionDays, envLocked: result.envLocked });
   });
 
   // POST /api/enable

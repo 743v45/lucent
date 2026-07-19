@@ -281,8 +281,12 @@ function validateConfig(cfg: unknown): asserts cfg is ProxyConfig {
     throw new Error(`config.logMode must be one of off|temporary|archive, got: ${JSON.stringify(c.logMode)}`);
   }
   // tempLogTtlMinutes 正整数（缺省视为默认值）
-  if (c.tempLogTtlMinutes !== undefined && (typeof c.tempLogTtlMinutes !== 'number' || !Number.isInteger(c.tempLogTtlMinutes) || c.tempLogTtlMinutes < 1)) {
-    throw new Error('config.tempLogTtlMinutes must be a positive integer');
+  if (c.tempLogTtlMinutes !== undefined && (typeof c.tempLogTtlMinutes !== 'number' || !Number.isInteger(c.tempLogTtlMinutes) || c.tempLogTtlMinutes < 0)) {
+    throw new Error('config.tempLogTtlMinutes must be a non-negative integer');
+  }
+  // logRetentionDays 正整数（缺省视为默认值）
+  if (c.logRetentionDays !== undefined && (typeof c.logRetentionDays !== 'number' || !Number.isInteger(c.logRetentionDays) || c.logRetentionDays < 1)) {
+    throw new Error('config.logRetentionDays must be a positive integer');
   }
   // 旧字段 logRecording（deprecated 读兼容）：允许存在，由 loadConfig 映射到 logMode
   if (c.logRecording !== undefined && typeof c.logRecording !== 'boolean') {
@@ -371,10 +375,22 @@ export function getLogMode(): LogMode {
  */
 export function getTempTtlMinutes(): number {
   const envVal = parseEnvNumber('LUCENT_TEMP_LOG_TTL_MINUTES', NaN);
-  if (Number.isInteger(envVal) && envVal >= 1) return envVal;
+  if (Number.isInteger(envVal) && envVal >= 0) return envVal;
   const cfg = getConfig().tempLogTtlMinutes;
-  if (cfg !== undefined && Number.isInteger(cfg) && cfg >= 1) return cfg;
+  if (cfg !== undefined && Number.isInteger(cfg) && cfg >= 0) return cfg;
   return TEMP_LOG_TTL_MINUTES;
+}
+
+/**
+ * 运行时读取存档保留期有效值（天）：env LUCENT_LOG_RETENTION_DAYS > config.logRetentionDays > 默认 LOG_RETENTION_DAYS。
+ * 每次实时解析，反映 UI 改动——cleanupOldLogs 热路径用（不得读启动快照）。
+ */
+export function getRetentionDays(): number {
+  const envVal = parseEnvNumber('LUCENT_LOG_RETENTION_DAYS', NaN);
+  if (Number.isInteger(envVal) && envVal >= 1) return envVal;
+  const cfg = getConfig().logRetentionDays;
+  if (cfg !== undefined && Number.isInteger(cfg) && cfg >= 1) return cfg;
+  return LOG_RETENTION_DAYS;
 }
 
 /**
@@ -401,6 +417,18 @@ export function setLogMode(mode: LogMode, tempTtlMinutes?: number): { logMode: L
   }
   saveConfig(config);
   return { logMode: getLogMode(), envLocked: logModeEnvOverridden() };
+}
+
+/**
+ * 设置存档保留期（天）并持久化到 config.json。env 锁定时 config 仍写入（保留意图），
+ * 但有效值由 env 决定、envLocked=true。
+ */
+export function setRetentionDays(days: number): { retentionDays: number; envLocked: boolean } {
+  if (!Number.isInteger(days) || days < 1) throw new Error('retentionDays must be a positive integer');
+  const config = getConfig();
+  config.logRetentionDays = days;
+  saveConfig(config);
+  return { retentionDays: getRetentionDays(), envLocked: process.env.LUCENT_LOG_RETENTION_DAYS !== undefined };
 }
 
 /**
