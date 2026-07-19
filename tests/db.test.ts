@@ -231,6 +231,14 @@ describe('listLogs', () => {
     expect(page2.logs.length).toBe(1);
     expect(page1.logs[0].id).not.toBe(page2.logs[0].id);
   });
+  it('过滤 threadId（会话视图组内全量，main+sub 同 threadId）', () => {
+    insertLog(db, makeEntry({ id: 't1', timestamp: '2026-07-08T01:30:00.000Z', threadId: 'thread_x', agentType: 'main' }));
+    insertLog(db, makeEntry({ id: 't2', timestamp: '2026-07-08T02:30:00.000Z', threadId: 'thread_x', agentType: 'sub' }));
+    insertLog(db, makeEntry({ id: 't3', timestamp: '2026-07-08T03:30:00.000Z', threadId: 'thread_y', agentType: 'main' }));
+    const { logs, total } = listLogs(db, { limit: 10, offset: 0, filter: { threadId: 'thread_x' } });
+    expect(total).toBe(2);
+    expect(logs.map(l => l.id).sort()).toEqual(['t1', 't2']);
+  });
 });
 
 // ==================== searchLogs (FTS trigram) ====================

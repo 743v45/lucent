@@ -58,6 +58,7 @@ export interface ListFilter {
   endpointType?: string;
   startDate?: string;
   endDate?: string;
+  threadId?: string;
 }
 
 // ==================== 建库 / Schema ====================
@@ -370,6 +371,7 @@ function applyFilter(filter: ListFilter, where: string[], params: unknown[]): vo
   if (filter.endpointType) { where.push('endpoint_type = ?'); params.push(filter.endpointType); }
   if (filter.startDate) { where.push('timestamp >= ?'); params.push(filter.startDate); }
   if (filter.endDate) { where.push('timestamp <= ?'); params.push(filter.endDate); }
+  if (filter.threadId) { where.push('thread_id = ?'); params.push(filter.threadId); }
 }
 
 /** 列表/检索统一返回：行 + 总数（「N 条」展示用）+ 下一页 keyset 游标 + 是否还有更多 */

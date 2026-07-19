@@ -160,6 +160,20 @@ export function useLogs(opts: UseLogsOptions) {
     [logs, nowTick],
   );
 
+  // 按 threadId 后端全量拉一个会话（会话视图组内全量加载用）；走与 visibleLogs 一致的 expiresAt 过滤。
+  // 分页续拉直到 hasMore=false，保证单会话全量（不受 PAGE_SIZE/LOGS_SOFT_CAP 限制）。
+  const loadThread = useCallback(async (threadId: string): Promise<LogEntry[]> => {
+    const all: LogEntry[] = [];
+    let cursor: string | undefined;
+    do {
+      const data = await getLogs({ threadId, limit: 500, cursor });
+      all.push(...(data.logs || []).map(formatLog));
+      cursor = data.nextCursor ?? undefined;
+      if (!data.hasMore) break;
+    } while (cursor);
+    return all.filter(l => !l.expiresAt || Date.parse(l.expiresAt) > Date.now());
+  }, []);
+
   return {
     logs: visibleLogs,
     loading,
@@ -171,5 +185,6 @@ export function useLogs(opts: UseLogsOptions) {
     loadMore,
     addLog,
     setLogs,
+    loadThread,
   };
 }

@@ -182,9 +182,12 @@ function buildRequestEntry(
   const safeHeaders = sanitizeHeaders(headers);
   const agentType = classifyAgent(body);
   const isMain = agentType === 'main';
+  const nowISO = new Date().toISOString();
+  // main：内容寻址算 threadId；sub：落最近活跃 main 的 threadId（时间邻近，非内容寻址——
+  // sub 的 body 是独立子任务 prompt，无父对话前缀/父引用，只能靠运行期 lineage 归属）。
   const threadId = isMain
-    ? globalSessionTracker.identify(body, urlStr, new Date().toISOString())
-    : undefined;
+    ? globalSessionTracker.identify(body, urlStr, nowISO)
+    : globalSessionTracker.findRecentThread(nowISO);
   const model = (body as any)?.model || 'unknown';
   const clientType = identifyClient(headers);
   const isTest = isTestRequest(body);
@@ -199,7 +202,7 @@ function buildRequestEntry(
 
   return {
     id: requestId,
-    timestamp: new Date().toISOString(),
+    timestamp: nowISO,
     project: '',
     url: urlStr,
     method: options?.method || 'GET',

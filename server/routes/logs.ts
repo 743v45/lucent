@@ -70,6 +70,7 @@ export function createLogsRouter(options: {
         startDate: req.query.startDate as string,
         endDate: req.query.endDate as string,
         search: req.query.search as string,
+        threadId: req.query.threadId as string | undefined,
       };
 
       const result = await LogReader.readLogs(query);

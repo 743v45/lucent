@@ -105,6 +105,25 @@ export class SessionTracker {
     return threadId;
   }
 
+  /**
+   * 返回 lastTimestamp ≤ atOrBeforeISO 的最近一个 main lineage 的 threadId（供 sub 请求归属）。
+   * 扫描所有 lineage（含同锚点分叉），取 lastTimestamp 最大者；无匹配返回 undefined。
+   * 运行期内存状态，重启即丢——sub 在 lineage 重建前暂无 threadId。
+   */
+  findRecentThread(atOrBeforeISO: string): string | undefined {
+    const cutoff = new Date(atOrBeforeISO).getTime();
+    let best: SessionLineage | undefined;
+    for (const lineages of this.sessions.values()) {
+      for (const l of lineages) {
+        const t = new Date(l.lastTimestamp).getTime();
+        if (t <= cutoff && (!best || t > new Date(best.lastTimestamp).getTime())) {
+          best = l;
+        }
+      }
+    }
+    return best?.threadId;
+  }
+
   /** MVP no-op：delta 格式历史 entry 无完整 messages，重建会算错锚点；
    *  threadId 内容寻址已保证分组正确，活跃会话链自然重建。 */
   rebuildFromLogs(_entries: unknown[]): void {

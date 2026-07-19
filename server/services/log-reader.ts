@@ -331,6 +331,7 @@ export async function readLogs(query: LogsQuery = {}): Promise<LogsResult> {
     startDate,
     endDate,
     search,
+    threadId,
   } = query;
 
   // clamp limit：防止恶意超大 limit 打爆内存
@@ -344,6 +345,7 @@ export async function readLogs(query: LogsQuery = {}): Promise<LogsResult> {
       ...(endpointType && endpointType !== 'all' ? { endpointType } : {}),
       ...(startDate ? { startDate } : {}),
       ...(endDate ? { endDate } : {}),
+      ...(threadId ? { threadId } : {}),
     };
     // 前端走 keyset（cursor），不传 offset——传 offset 会让 listLogs 落到 OFFSET 旧模式、
     // 首页 nextCursor=null，断掉 keyset 链。OFFSET 仅 bench/旧调用直连 listLogs 时用。

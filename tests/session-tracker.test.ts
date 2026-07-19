@@ -111,3 +111,48 @@ describe('SessionTracker.identify', () => {
     expect(id).toMatch(/^thread_/);
   });
 });
+
+describe('SessionTracker.findRecentThread', () => {
+  // 用真实 URL 让 extractContext 正常解析、identify 真正建立 lineage（url='u' 会让 extractContext 返回 null）
+  const U = 'https://api.anthropic.com/v1/messages';
+  it('返回 lastTimestamp ≤ cutoff 的最近 main threadId', () => {
+    const t = new SessionTracker();
+    const id1 = t.identify({ messages: [{ role: 'user', content: '会话一' }] }, U, '2026-01-01T00:00:00Z');
+    const id2 = t.identify({ messages: [{ role: 'user', content: '会话二' }] }, U, '2026-01-02T00:00:00Z');
+    expect(id1).toMatch(/^thread_/);
+    expect(id2).toMatch(/^thread_/);
+    // sub 在 2026-01-03，应归属最近 main（id2 @ 2026-01-02）
+    expect(t.findRecentThread('2026-01-03T00:00:00Z')).toBe(id2);
+  });
+
+  it('cutoff 早于所有 main lineage → undefined', () => {
+    const t = new SessionTracker();
+    t.identify({ messages: [{ role: 'user', content: '会话一' }] }, U, '2026-01-02T00:00:00Z');
+    expect(t.findRecentThread('2026-01-01T00:00:00Z')).toBeUndefined();
+  });
+
+  it('无任何 lineage → undefined', () => {
+    expect(new SessionTracker().findRecentThread('2026-01-03T00:00:00Z')).toBeUndefined();
+  });
+
+  it('多个候选取 lastTimestamp 最大者', () => {
+    const t = new SessionTracker();
+    const id1 = t.identify({ messages: [{ role: 'user', content: '会话一' }] }, U, '2026-01-01T00:00:00Z');
+    const id2 = t.identify({ messages: [{ role: 'user', content: '会话二' }] }, U, '2026-01-02T00:00:00Z');
+    expect(t.findRecentThread('2026-01-05T00:00:00Z')).toBe(id2);
+    expect(t.findRecentThread('2026-01-05T00:00:00Z')).not.toBe(id1);
+  });
+
+  it('同锚点分叉 lineage 也参与（取 lastTimestamp 最大）', () => {
+    const t = new SessionTracker();
+    const id1 = t.identify(
+      { messages: [{ role: 'user', content: '同开场' }, { role: 'assistant', content: 'A' }] },
+      U, '2026-01-01T00:00:00Z');
+    const id2 = t.identify(
+      { messages: [{ role: 'user', content: '同开场' }, { role: 'assistant', content: 'B' }] },
+      U, '2026-01-03T00:00:00Z');
+    expect(id1).toMatch(/^thread_/);
+    expect(id2).toBe(`${id1}-2`);
+    expect(t.findRecentThread('2026-01-04T00:00:00Z')).toBe(id2);
+  });
+});

@@ -79,7 +79,7 @@ function App(): JSX.Element {
     return () => clearTimeout(t);
   }, [searchInput]);
 
-  const { logs, loading: logsLoading, loadingMore, hasMore, total, loadLogs, loadMore } = useLogs({
+  const { logs, loading: logsLoading, loadingMore, hasMore, total, loadLogs, loadMore, loadThread } = useLogs({
     search: searchTerm,
     providerName: providerFilter,
     endpointType: endpointFilter,
@@ -368,6 +368,7 @@ function App(): JSX.Element {
             onSearchChange={setSearchInput}
             conversationView={conversationView}
             onConversationViewChange={(v) => setConversationView(v)}
+            loadThread={loadThread}
           />
           {/* 拖拽分割栏 */}
           <div

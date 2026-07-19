@@ -86,6 +86,7 @@ export async function getLogs(params?: {
   search?: string;
   providerName?: string;
   endpointType?: string;
+  threadId?: string;
 }): Promise<{
   total: number;
   nextCursor: string | null;
@@ -138,6 +139,7 @@ export async function getLogs(params?: {
   if (params?.search) qs.set('search', params.search);
   if (params?.providerName && params.providerName !== 'all') qs.set('providerName', params.providerName);
   if (params?.endpointType && params.endpointType !== 'all') qs.set('endpointType', params.endpointType);
+  if (params?.threadId) qs.set('threadId', params.threadId);
   const query = qs.toString();
   return request(`/logs${query ? `?${query}` : ''}`);
 }

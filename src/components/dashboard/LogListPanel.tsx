@@ -5,7 +5,7 @@ import type { LogEntry, AgentType, Provider, EndpointType } from '../../types';
 import { ENDPOINT_LABELS, ENDPOINT_TYPES } from '../../types';
 import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, getStatusColor } from '../../constants';
 import { resolveResponseType } from '../../utils/response-type';
-import { groupByThread } from '../../utils/group-by-thread';
+import { groupByThread, type ThreadGroup } from '../../utils/group-by-thread';
 import { ClientIcon } from '../common/ClientIcon';
 import { ProviderIcon } from '../common/ProviderIcon';
 import { ProtocolIcon } from '../common/ProtocolIcon';
@@ -33,6 +33,8 @@ interface LogListPanelProps {
   onSearchChange?: (value: string) => void;
   conversationView: 'timeline' | 'session';
   onConversationViewChange: (v: 'timeline' | 'session') => void;
+  /** 按 threadId 后端全量加载一个会话（会话视图组内全量用） */
+  loadThread: (threadId: string) => Promise<LogEntry[]>;
 }
 
 /** 截断模型名，保留关键信息 */
@@ -206,11 +208,70 @@ function LogRow({
   );
 }
 
-/** 会话视图：按 threadId 分组，可折叠展开 */
-function SessionListView({ logs, selectedId, onSelectLog, getAgentTypeTag, shortenModel, shortenUrl, formatDuration }: {
+/** 单个会话组：展开时按 threadId 后端懒加载该会话全量（默认展开 → 首屏加载所有可见会话） */
+function ThreadGroupView({ group, collapsed, onToggle, selectedId, onSelectLog, loadThread, getAgentTypeTag, shortenModel, shortenUrl, formatDuration }: {
+  group: ThreadGroup;
+  collapsed: boolean;
+  onToggle: () => void;
+  selectedId: string | null;
+  onSelectLog: (id: string) => void;
+  loadThread: (threadId: string) => Promise<LogEntry[]>;
+  getAgentTypeTag: (a: AgentType) => { tag: JSX.Element; color: string };
+  shortenModel: (m: string) => string;
+  shortenUrl: (u: string) => string;
+  formatDuration: (ms: number) => string;
+}) {
+  const [fullLogs, setFullLogs] = useState<LogEntry[] | null>(null);
+  const [status, setStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const loadedRef = useRef(false);
+
+  // 展开时懒加载该组全量（仅一次）；折叠态不加载
+  useEffect(() => {
+    if (collapsed || loadedRef.current) return;
+    loadedRef.current = true;
+    setStatus('loading');
+    loadThread(group.threadId)
+      .then((logs) => { setFullLogs(logs); setStatus('idle'); })
+      .catch(() => setStatus('error'));
+  }, [collapsed, group.threadId, loadThread]);
+
+  // 全量已加载用它；否则（loading/error/未加载）回退到分页凑出的 main+sub
+  const rows = (fullLogs ?? [...group.mainLogs, ...group.subLogs])
+    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+  return (
+    <div className="mb-2">
+      <button onClick={onToggle}
+        data-testid="session-group"
+        data-threadid={group.threadId}
+        data-count={group.mainLogs.length + group.subLogs.length}
+        className="w-full flex items-center gap-2 p-2 rounded-lg bg-bg-surface border border-border-subtle hover:border-border-primary text-left">
+        <ChevronIcon expanded={!collapsed} />
+        <span className="truncate flex-1 min-w-0 text-[13px] font-[510] text-text-secondary">{group.title}</span>
+        <span className="shrink-0 text-xs text-text-quaternary">{group.mainLogs.length + group.subLogs.length} 请求</span>
+        <span className="shrink-0 text-xs text-text-quaternary tabular-nums">{group.totalTokens} tok</span>
+      </button>
+      {!collapsed && (
+        <div className="mt-1">
+          {status === 'loading' && <div className="text-xs text-text-quaternary px-3 py-1">加载完整会话…</div>}
+          {status === 'error' && <div className="text-xs text-text-quaternary px-3 py-1">加载失败，显示已加载部分</div>}
+          {rows.map((log) => (
+            <LogRow key={log.id} log={log} isSelected={selectedId === log.id} onSelect={onSelectLog}
+              getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
+              shortenUrl={shortenUrl} formatDuration={formatDuration} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 会话视图：按 threadId 分组，每组展开时按 threadId 后端全量加载 */
+function SessionListView({ logs, selectedId, onSelectLog, loadThread, getAgentTypeTag, shortenModel, shortenUrl, formatDuration }: {
   logs: LogEntry[];
   selectedId: string | null;
   onSelectLog: (id: string) => void;
+  loadThread: (threadId: string) => Promise<LogEntry[]>;
   getAgentTypeTag: (a: AgentType) => { tag: JSX.Element; color: string };
   shortenModel: (m: string) => string;
   shortenUrl: (u: string) => string;
@@ -218,34 +279,15 @@ function SessionListView({ logs, selectedId, onSelectLog, getAgentTypeTag, short
 }) {
   const { groups, ungrouped } = useMemo(() => groupByThread(logs), [logs]);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
-  const toggle = (id: string) => setCollapsed(p => ({ ...p, [id]: !p[id] }));
+  const toggle = (id: string) => setCollapsed((p) => ({ ...p, [id]: !p[id] }));
 
   return (
     <>
       {groups.map((g) => (
-        <div key={g.threadId} className="mb-2">
-          <button onClick={() => toggle(g.threadId)}
-            data-testid="session-group"
-            data-threadid={g.threadId}
-            data-count={g.mainLogs.length + g.subLogs.length}
-            className="w-full flex items-center gap-2 p-2 rounded-lg bg-bg-surface border border-border-subtle hover:border-border-primary text-left">
-            <ChevronIcon expanded={!collapsed[g.threadId]} />
-            <span className="truncate flex-1 min-w-0 text-[13px] font-[510] text-text-secondary">{g.title}</span>
-            <span className="shrink-0 text-xs text-text-quaternary">{g.mainLogs.length + g.subLogs.length} 请求</span>
-            <span className="shrink-0 text-xs text-text-quaternary tabular-nums">{g.totalTokens} tok</span>
-          </button>
-          {!collapsed[g.threadId] && (
-            <div className="mt-1">
-              {[...g.mainLogs, ...g.subLogs]
-                .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-                .map((log) => (
-                  <LogRow key={log.id} log={log} isSelected={selectedId === log.id} onSelect={onSelectLog}
-                    getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
-                    shortenUrl={shortenUrl} formatDuration={formatDuration} />
-                ))}
-            </div>
-          )}
-        </div>
+        <ThreadGroupView key={g.threadId} group={g} collapsed={!!collapsed[g.threadId]}
+          onToggle={() => toggle(g.threadId)} selectedId={selectedId} onSelectLog={onSelectLog}
+          loadThread={loadThread} getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
+          shortenUrl={shortenUrl} formatDuration={formatDuration} />
       ))}
       {ungrouped.length > 0 && (
         <div className="mt-2">
@@ -284,6 +326,7 @@ export function LogListPanel({
   onSearchChange,
   conversationView,
   onConversationViewChange,
+  loadThread,
 }: LogListPanelProps): JSX.Element {
   // MainAgent: 金色加灰 #C9A227, SubAgent: 橙色加灰 #B87A4A
   const getAgentTypeTag = (agentType: AgentType): { tag: JSX.Element; color: string } => {
@@ -481,6 +524,7 @@ export function LogListPanel({
             ))
           ) : (
             <SessionListView logs={displayLogs} selectedId={selectedId} onSelectLog={onSelectLog}
+              loadThread={loadThread}
               getAgentTypeTag={getAgentTypeTag} shortenModel={shortenModel}
               shortenUrl={shortenUrl} formatDuration={formatDuration} />
           )}

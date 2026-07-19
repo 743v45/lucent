@@ -308,6 +308,8 @@ export interface LogsQuery {
   startDate?: string;
   endDate?: string;
   search?: string;
+  /** 按会话线索过滤（会话视图组内全量加载用）；命中 idx_logs_thread */
+  threadId?: string;
 }
 
 /** readLogs 返回：列表 + 命中总数 + 下一页游标 + 是否还有更多 */
