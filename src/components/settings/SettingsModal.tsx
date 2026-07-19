@@ -40,6 +40,79 @@ function isValidUrl(v: string | null): boolean {
   catch { return false; }
 }
 
+/** 自动保存防抖间隔：每个 provider 独立计时，连续编辑合并为最后一次 blur 之后的一次 PUT */
+const AUTOSAVE_DEBOUNCE_MS = 400;
+
+export interface ProviderAutoSaverOptions {
+  /** 防抖延迟（ms），默认 AUTOSAVE_DEBOUNCE_MS */
+  delay?: number;
+  /** 读取某个 provider 当前的 endpoints 快照（PUT 触发时才调用，天然拿到最新值） */
+  getData: (name: string) => { endpoints: Record<EndpointType, string | null> } | undefined;
+  /** PUT 成功回调（用返回的 Provider 更新本地 providers 列表） */
+  onSaved: (name: string, updated: Provider) => void;
+  /** PUT 失败回调 */
+  onError: (name: string, err: unknown) => void;
+  /** 即时 URL 校验失败回调（不调度 PUT） */
+  onInvalid: (name: string, endpointType: EndpointType) => void;
+}
+
+export interface ProviderAutoSaver {
+  /** 失焦时触发：先做即时 URL 校验，再按 provider 防抖调度 PUT */
+  schedule: (name: string) => void;
+  /** 清空所有 provider 的 pending 定时器（组件卸载时调用，避免泄漏 / 卸载后 setState） */
+  cancelAll: () => void;
+}
+
+/**
+ * 创建按 provider 防抖的自动保存器（修复 Bug #8 last-write-wins 静默回滚）。
+ *
+ * handleAutoSave 在 onBlur 时把整份 endpoints 快照整体 PUT；用户连续编辑同一 provider
+ * 的多个 endpoint 会触发多次 blur → 多次并发 PUT，服务端整体替换 endpoints，后发的新值
+ * 可能被先发的旧值覆盖，导致上游 URL 被静默回滚。
+ *
+ * 本保存器把同一 provider 在 delay（默认 400ms）内的多次 blur 合并为最后一次之后的一次 PUT，
+ * 且 getData 在 PUT 触发时才读取，拿到的是最新值——从根上消除并发覆盖。
+ */
+export function createProviderAutoSaver(opts: ProviderAutoSaverOptions): ProviderAutoSaver {
+  const delay = opts.delay ?? AUTOSAVE_DEBOUNCE_MS;
+  // 每个 provider 一个 pending timer
+  const timers = new Map<string, ReturnType<typeof setTimeout>>();
+
+  const doSave = async (name: string) => {
+    const data = opts.getData(name);
+    if (!data) return;
+    try {
+      const updated = await updateProvider(name, { endpoints: data.endpoints });
+      opts.onSaved(name, updated);
+    } catch (e) {
+      opts.onError(name, e);
+    }
+  };
+
+  return {
+    schedule(name: string) {
+      // 即时 URL 校验（不参与防抖，失焦立刻反馈）
+      const data = opts.getData(name);
+      if (!data) return;
+      const invalidEt = ENDPOINT_TYPES.find(et => !isValidUrl(data.endpoints[et]));
+      if (invalidEt) {
+        opts.onInvalid(name, invalidEt);
+        return;
+      }
+      // 按 provider 防抖：清掉该 provider 之前的 pending，重新计时
+      clearTimeout(timers.get(name));
+      timers.set(name, setTimeout(() => {
+        timers.delete(name);
+        void doSave(name);
+      }, delay));
+    },
+    cancelAll() {
+      for (const t of timers.values()) clearTimeout(t);
+      timers.clear();
+    },
+  };
+}
+
 export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [providers, setProviders] = useState<Provider[]>([]);
   const [expanded, setExpanded] = useState<string | null>(null);
@@ -61,6 +134,18 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   // ref 始终指向最新 formData，避免 handleAutoSave 闭包读取旧值
   const formDataRef = useRef(formData);
   formDataRef.current = formData;
+
+  // 按 provider 防抖的自动保存器（修复连续编辑时并发 PUT 整体覆盖 endpoints 的回滚 bug）。
+  // 用 useState 惰性初始化保证整个组件生命周期只创建一次，内部 timers Map 随之常驻。
+  // getData/onSaved 都是按 ref 或 setState 函数式更新读取最新值，无闭包陈旧问题。
+  const [autoSaver] = useState(() => createProviderAutoSaver({
+    getData: (name) => formDataRef.current[name],
+    onSaved: (name, updated) => setProviders(prev => prev.map(p => (p.name === name ? updated : p))),
+    onError: (_name, err) => message.error((err as Error).message || '保存失败'),
+    onInvalid: (_name, et) => message.warning(`${ENDPOINT_LABELS[et]} URL 格式无效，未保存`),
+  }));
+  // 组件卸载时清掉所有 pending 定时器，避免泄漏 / 卸载后 setState
+  useEffect(() => () => autoSaver.cancelAll(), [autoSaver]);
 
   const proxyPort = DEFAULT_PROXY_PORT; // TODO: 从 status API 获取动态值
 
@@ -236,22 +321,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
   };
 
-  /** 自动保存（失焦时触发，静默） */
-  const handleAutoSave = async (name: string) => {
-    const data = formDataRef.current[name];
-    if (!data) return;
-    // URL 有无效值时不保存，给用户提示
-    const invalidEt = ENDPOINT_TYPES.find(et => !isValidUrl(data.endpoints[et]));
-    if (invalidEt) {
-      message.warning(`${ENDPOINT_LABELS[invalidEt]} URL 格式无效，未保存`);
-      return;
-    }
-    try {
-      const updated = await updateProvider(name, { endpoints: data.endpoints });
-      setProviders(prev => prev.map(p => (p.name === name ? updated : p)));
-    } catch (e) {
-      message.error((e as Error).message || '保存失败');
-    }
+  /** 自动保存（失焦时触发，按 provider 防抖，静默） */
+  const handleAutoSave = (name: string) => {
+    autoSaver.schedule(name);
   };
 
   const handleTest = async (name: string, endpointType: EndpointType) => {

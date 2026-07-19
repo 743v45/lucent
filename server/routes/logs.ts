@@ -13,13 +13,18 @@
 
 import { Router } from 'express';
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join, resolve, sep } from 'node:path';
 import * as LogReader from '../services/log-reader.js';
 import * as LogManager from '../log-manager.js';
-import { registerSseClient, unregisterSseClient } from '../sse-bus.js';
+import { registerSseClient, writeSse, destroySseClient, getSseClientCount, MAX_SSE_CLIENTS } from '../sse-bus.js';
 import type { LogsQuery } from '../types.js';
 import createDebug from 'debug';
 const dbg = createDebug('lucent:routes:logs');
+
+/** 校验 target（已 resolve）落在 logDir（已 resolve）内（含等于 logDir 本身），防路径穿越 */
+function isInsideDir(target: string, logDir: string): boolean {
+  return target === logDir || target.startsWith(logDir + sep);
+}
 
 export function createLogsRouter(options: {
   resolvedConfig: { logDir: string; heartbeatIntervalMs: number };
@@ -29,6 +34,13 @@ export function createLogsRouter(options: {
 
   // GET /api/logs/stream — SSE 推送新日志（实时接通：LogWriter 落库后经 sse-bus 广播 event:log）
   router.get('/api/logs/stream', (req, res) => {
+    // 连接数上限：防慢客户端堆积 + DoS（超限回 503）
+    if (getSseClientCount() >= MAX_SSE_CLIENTS) {
+      dbg('SSE 连接拒绝（超上限 %d）', MAX_SSE_CLIENTS);
+      res.status(503).json({ error: 'Too many SSE clients' });
+      return;
+    }
+
     // 设置 SSE headers
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -38,20 +50,26 @@ export function createLogsRouter(options: {
     });
 
     // 发送 connected 事件 + 注册到广播集合
-    res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`);
+    // 经 writeSse：坏连接 write 抛错被捕获，不冒泡为 uncaughtException（否则触发整进程重启）
+    if (!writeSse(res, `event: connected\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`)) {
+      destroySseClient(res);
+      return;
+    }
     registerSseClient(res);
-    dbg('SSE 客户端连接');
+    dbg('SSE 客户端连接 (total=%d)', getSseClientCount());
 
-    // 心跳保活
+    // 心跳保活：同样经 writeSse；写失败即清理（清心跳 + 注销 + destroy）
     const heartbeatInterval = options.resolvedConfig.heartbeatIntervalMs || 30000;
     const heartbeat = setInterval(() => {
-      res.write(`: heartbeat\n\n`);
+      if (!writeSse(res, `: heartbeat\n\n`)) {
+        destroySseClient(res, heartbeat);
+      }
     }, heartbeatInterval);
 
-    // 客户端断开时清理心跳 + 注销广播
+    // 统一清理：连接异常 / 客户端断开都走 destroySseClient（幂等，三处复用）
+    res.on('error', () => destroySseClient(res, heartbeat));
     req.on('close', () => {
-      clearInterval(heartbeat);
-      unregisterSseClient(res);
+      destroySseClient(res, heartbeat);
       dbg('SSE 客户端断开');
     });
   });
@@ -138,8 +156,22 @@ export function createLogsRouter(options: {
   // POST /api/logs/export
   router.post('/api/logs/export', (req, res) => {
     try {
-      const { format = 'jsonl', includeMeta = false } = req.body;
-      const exportPath = join(options.resolvedConfig.logDir, `export_${Date.now()}.${format}`);
+      const { includeMeta = false } = req.body ?? {};
+      const format = req.body?.format ?? 'jsonl';
+      // format 白名单：仅允许 jsonl / markdown，杜绝拼接注入（如 'jsonl/../../../foo'）
+      if (format !== 'jsonl' && format !== 'markdown') {
+        res.status(400).json({ error: 'Invalid format, must be jsonl or markdown' });
+        return;
+      }
+      const logDir = resolve(options.resolvedConfig.logDir);
+      // basename 净化：剥离任何路径分隔符（防御层，配合白名单）
+      const safeName = basename(`export_${Date.now()}.${format}`);
+      const exportPath = resolve(logDir, safeName);
+      // 校验输出路径落在 logDir 内（防御层，防穿越）
+      if (!isInsideDir(exportPath, logDir)) {
+        res.status(400).json({ error: 'Invalid export path' });
+        return;
+      }
       const result = LogManager.exportLogs(exportPath, { format, includeMeta });
       res.json(result);
     } catch (error) {
@@ -151,12 +183,19 @@ export function createLogsRouter(options: {
   // POST /api/logs/import
   router.post('/api/logs/import', (req, res) => {
     try {
-      const { filePath, merge = true, validate = true } = req.body;
-      if (!filePath) {
+      const { filePath, merge = true, validate = true } = req.body ?? {};
+      if (!filePath || typeof filePath !== 'string') {
         res.status(400).json({ error: 'File path is required' });
         return;
       }
-      const result = LogManager.importLogs(filePath, { merge, validate });
+      const logDir = resolve(options.resolvedConfig.logDir);
+      const resolvedPath = resolve(filePath);
+      // 限 logDir 内：杜绝读取任意文件（如 /etc/passwd、../../secret）
+      if (!isInsideDir(resolvedPath, logDir)) {
+        res.status(400).json({ error: 'Import path must be inside logDir' });
+        return;
+      }
+      const result = LogManager.importLogs(resolvedPath, { merge, validate });
       res.json(result);
     } catch (error) {
       dbg('导入日志失败: %O', error);

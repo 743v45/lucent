@@ -72,6 +72,7 @@
     "@vitejs/plugin-react": "^4.5.2",
     "@vitest/ui": "^4.1.8",
     "eslint": "^9.18.0",
+    "react-test-renderer": "^19.2.7",
     "tailwindcss": "^4.3.0",
     "typescript": "^5.7.2",
     "vite": "^6.3.5",

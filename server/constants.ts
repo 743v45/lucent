@@ -34,6 +34,18 @@ export const DB_PATH = join(CONFIG_DIR, 'lucent.db');
 /** 代理转发的请求体最大体积（50MB）—— LLM API 请求通常在 KB~MB 级别，此限制防止 OOM */
 export const MAX_REQUEST_BODY_SIZE = 50 * 1024 * 1024;
 
+// ==================== 上游超时护栏 ====================
+/**
+ * 上游响应头超时（毫秒）：fetch 等待响应头超过此值则 abort 上游请求。
+ * 防止上游 stall 时主链路无限挂起、客户端空等。默认 120s。
+ */
+export const HEADER_TIMEOUT_MS = 120_000;
+/**
+ * 上游流式 idle 超时（毫秒）：流式透传期间上游超过此值无新数据则 abort。
+ * 防止上游 SSE 中途 stall（连接未断但不再产数据）。默认 60s。
+ */
+export const STREAM_IDLE_TIMEOUT_MS = 60_000;
+
 // ==================== 日志配置 ====================
 // 存储已切 SQLite（见 docs/log-storage-design.md），不再有按文件大小轮转；
 // MAX_LOG_FILE_SIZE / MAX_LOG_FILES / MAX_LOG_FILES_TO_READ 等 JSONL 轮转常量已退役。

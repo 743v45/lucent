@@ -9,7 +9,7 @@
  */
 
 import { writeFileSync, readFileSync, statSync, mkdirSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, resolve, sep } from 'node:path';
 import type { LogEntry } from './types.js';
 import { resolveEffectiveConfig } from './config.js';
 import { listLogs, fetchBodies, getStats, clearAllLogs as dbClearAll, deleteOldLogs, vacuum, insertLogsBatch } from './services/db.js';
@@ -36,6 +36,18 @@ function cfg() {
 /** 获取有效的日志目录（导出产物落这里） */
 function getEffectiveLogDir(): string {
   return cfg().logDir;
+}
+
+/**
+ * 校验路径落在有效 logDir 内，否则抛错（实现级防御层）。
+ * 路由层已做白名单 + 净化，此处兜底：无论调用方是谁都拒绝穿越，杜绝写/读到 logDir 外。
+ */
+function assertInsideLogDir(target: string): void {
+  const effDir = resolve(getEffectiveLogDir());
+  const resolved = resolve(target);
+  if (resolved !== effDir && !resolved.startsWith(effDir + sep)) {
+    throw new Error(`path outside logDir: ${target}`);
+  }
 }
 
 // ==================== 统计 ====================
@@ -98,6 +110,8 @@ export function exportLogs(
   options: LogExportOptions = { format: 'jsonl' },
 ): { success: boolean; count: number; path: string } {
   try {
+    // 防御层：输出路径必须在 logDir 内（防穿越，路由层已挡，此处兜底）
+    assertInsideLogDir(outputPath);
     const logs = loadAllLogs();
     // 确保输出目录存在
     mkdirSync(dirname(outputPath), { recursive: true });
@@ -138,6 +152,8 @@ export function importLogs(
   let errors = 0;
 
   try {
+    // 防御层：输入路径必须在 logDir 内（防穿越，杜绝读取任意文件如 /etc/passwd）
+    assertInsideLogDir(inputPath);
     const db = getDb();
     const content = readFileSync(inputPath, 'utf-8');
     // 兼容纯换行分隔与旧 '\n---\n' 分隔

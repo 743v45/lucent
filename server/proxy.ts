@@ -20,6 +20,8 @@ import {
   PROXY_TRACE_HEADER,
   REQ_START_HEADER,
   MAX_REQUEST_BODY_SIZE,
+  HEADER_TIMEOUT_MS,
+  STREAM_IDLE_TIMEOUT_MS,
 } from './constants.js';
 import createDebug from 'debug';
 const log = createDebug('lucent:proxy');
@@ -80,13 +82,19 @@ function stripContentLengthHeader(headers: Record<string, string>): Record<strin
 // ==================== 错误响应 ====================
 
 function sendJsonError(res: any, status: number, error: string): void {
-  // 响应头可能已被上游流式分支写出发送，二次 writeHead 会抛 ERR_HTTP_HEADERS_SENT
-  if (res.headersSent) {
-    res.destroy();
+  // 响应头可能已被上游流式分支写出发送，或客户端已断开（res destroy），
+  // 二次 write 会抛 ERR_HTTP_HEADERS_SENT / 写已关闭 socket；统一兜底。
+  if (res.headersSent || res.writableEnded || res.destroyed) {
+    if (!res.destroyed) res.destroy();
     return;
   }
-  res.writeHead(status, { 'content-type': 'application/json' });
-  res.end(JSON.stringify({ error }));
+  try {
+    res.writeHead(status, { 'content-type': 'application/json' });
+    res.end(JSON.stringify({ error }));
+  } catch {
+    // 客户端断开等导致写失败：忽略，连接已无法使用
+    try { res.destroy(); } catch { /* ignore */ }
+  }
 }
 
 /**
@@ -248,7 +256,42 @@ export async function startProxyServer(options?: { port?: number; host?: string 
           fetchOptions.body = outBody as BodyInit;
         }
 
-        const response = await fetch(fullUrl, fetchOptions);
+        // 上游超时护栏：为每次转发构造 AbortController，
+        // - 响应头超时（HEADER_TIMEOUT_MS）：fetch 等待响应头过久 → abort，防上游 stall 空挂主链路
+        // - 流式 idle 超时（STREAM_IDLE_TIMEOUT_MS）：透传期间上游久无新数据 → abort
+        // - 客户端断开：res close 时 abort，取消未完成的上游 fetch，避免上游按 token 计费的配额被空烧
+        const controller = new AbortController();
+        fetchOptions.signal = controller.signal;
+
+        // 上游完成（fetch resolved + 流式透传结束）后置 true；之后的 res close 属正常结束，不再 abort
+        let upstreamDone = false;
+        // 客户端断开传播：响应未完成时 res close → 取消上游 fetch
+        res.on('close', () => {
+          if (!upstreamDone) controller.abort();
+        });
+
+        // 响应头超时定时器（fetch 返回后立即 clear）
+        const headerTimer = setTimeout(() => {
+          log('⏱️ 上游响应头超时 %dms，abort', HEADER_TIMEOUT_MS);
+          controller.abort();
+        }, HEADER_TIMEOUT_MS);
+
+        let response: Response;
+        try {
+          response = await fetch(fullUrl, fetchOptions);
+        } catch (err) {
+          clearTimeout(headerTimer);
+          // AbortError（超时或客户端断开引起）→ 504；其它网络错误 → 502
+          if ((err as Error)?.name === 'AbortError') {
+            log('上游 fetch abort（超时/客户端断开）: %s', (err as Error).message);
+            sendJsonError(res, 504, 'Upstream Timeout');
+          } else {
+            log('代理错误（fetch）: %O', err);
+            sendJsonError(res, 502, 'Proxy Error');
+          }
+          return;
+        }
+        clearTimeout(headerTimer);
 
         // 10. 处理响应头
         const responseHeaders: Record<string, string> = {};
@@ -264,6 +307,8 @@ export async function startProxyServer(options?: { port?: number; host?: string 
 
         // 11. 处理错误响应
         if (!response.ok) {
+          // 错误响应体有界（≤64KB），读取+发送期间不再 abort（与原行为一致）
+          upstreamDone = true;
           try {
             // 限制错误体读取量，防止超大错误响应撑爆内存
             const MAX_ERROR_BODY = 64 * 1024; // 64KB
@@ -282,7 +327,7 @@ export async function startProxyServer(options?: { port?: number; host?: string 
 
         // 12. 流式传输响应
         if (response.body) {
-          const { Readable, pipeline } = await import('node:stream');
+          const { Readable, pipeline, Transform } = await import('node:stream');
           // @ts-expect-error — Readable.fromWeb 类型在当前 @types/node 下不完全
           const nodeStream = Readable.fromWeb(response.body);
           // 非 EPIPE 错误（如上游读取异常）记录日志，便于排查
@@ -291,20 +336,48 @@ export async function startProxyServer(options?: { port?: number; host?: string 
               log('上游流错误: %s', err.message);
             }
           });
-          // 客户端中途断开时主动销毁上游流，让断开传播到上游，
-          // 避免后台 tee 提取任务悬挂
+
+          // 流式 idle 超时：透传期间上游超过 STREAM_IDLE_TIMEOUT_MS 无新数据 → abort（防上游中途 stall）。
+          // 用 Transform tap 观测每个 chunk 重置定时器——不消费数据、不改流为 flowing 模式，
+          // backpressure 由 pipeline(nodeStream→tap→res) 统一保证。
+          const fireIdleAbort = (): void => {
+            log('⏱️ 上游流式 idle 超时 %dms，abort', STREAM_IDLE_TIMEOUT_MS);
+            controller.abort();
+          };
+          let idleTimer: NodeJS.Timeout | null = setTimeout(fireIdleAbort, STREAM_IDLE_TIMEOUT_MS);
+          const idleTap = new Transform({
+            transform(chunk, _encoding, callback) {
+              if (idleTimer !== null) clearTimeout(idleTimer);
+              idleTimer = setTimeout(fireIdleAbort, STREAM_IDLE_TIMEOUT_MS);
+              callback(null, chunk);
+            },
+          });
+
+          // 客户端中途断开：停 idle timer + 销毁上游流（让断开传播到上游，避免后台 tee 提取悬挂）；
+          // controller.abort 由外层早期 res.on('close') 统一触发（流式期间 upstreamDone 仍为 false）
           res.on('close', () => {
+            if (idleTimer !== null) {
+              clearTimeout(idleTimer);
+              idleTimer = null;
+            }
             if (!res.writableEnded) {
               nodeStream.destroy();
             }
           });
-          pipeline(nodeStream, res, (err) => {
+          pipeline(nodeStream, idleTap, res, (err) => {
+            // 流式结束（正常或错误）：停 idle timer，标记上游完成（后续 res close 不再 abort）
+            if (idleTimer !== null) {
+              clearTimeout(idleTimer);
+              idleTimer = null;
+            }
+            upstreamDone = true;
             if (err && (err as NodeJS.ErrnoException).code !== 'EPIPE') {
               log('Stream 错误: %s', err.message);
             }
           });
         } else {
           res.end();
+          upstreamDone = true;
         }
       } catch (err) {
         log('代理错误: %O', err);

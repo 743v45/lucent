@@ -77,6 +77,8 @@ export function useLogs(opts: UseLogsOptions) {
   const reqIdRef = useRef(0);
   // unmount 防护：异步请求返回晚于卸载时阻断 setState
   const mountedRef = useRef(true);
+  // loadMore 重入锁：读 ref 即时值，避免闭包里的 loadingMore 陈旧导致 TOCTOU 并发
+  const loadingMoreRef = useRef(false);
 
   // 首页加载（search/过滤变化或手动刷新时调用，替换列表）
   const loadLogs = useCallback(async () => {
@@ -107,11 +109,15 @@ export function useLogs(opts: UseLogsOptions) {
 
   // 加载更多（往下翻时调用，追加下一页）
   const loadMore = useCallback(async () => {
-    if (loadingMore || !hasMore) return;
+    // 守卫走 ref：闭包里的 loadingMore 是陈旧值，连续两次调用（第二次在第一次
+    // setLoadingMore 提交前）都会放行 → 同一 cursor 发两次请求 + append 不去重 → 整页复制。
+    // 改读 loadingMoreRef 即时收口；reqId 自增做请求隔离（与 loadLogs 一致）。
+    if (loadingMoreRef.current || !hasMore) return;
     // 首页刚加载、还没拿到 nextCursor 时不动；keyset 必须有游标才能续页
     const cursor = cursorRef.current;
     if (!cursor) return;
-    const reqId = reqIdRef.current;
+    const reqId = ++reqIdRef.current;
+    loadingMoreRef.current = true;
     try {
       setLoadingMore(true);
       const data = await getLogs({
@@ -124,18 +130,27 @@ export function useLogs(opts: UseLogsOptions) {
       if (!mountedRef.current || reqId !== reqIdRef.current) return;
       const formatted = (data.logs || []).map(formatLog);
       setLogs(prev => {
-        const combined = [...prev, ...formatted];
-        return combined.length > LOGS_SOFT_CAP ? combined.slice(0, LOGS_SOFT_CAP) : combined;
+        // 按 id 去重：并发/重试场景下 prev 可能已含 formatted 的 id（对比 addLog 的 .some(id) 去重）
+        const existing = new Set(prev.map(l => l.id));
+        const combined = [...prev, ...formatted.filter(l => !existing.has(l.id))];
+        // 软上限收口：累计超 cap 时裁到 cap，且分页同步收口（按钮如实消失）；
+        // 否则服务端 hasMore=true 会让按钮常驻、点击无效、翻不到更老的日志。
+        if (combined.length > LOGS_SOFT_CAP) {
+          setHasMore(false);
+          return combined.slice(0, LOGS_SOFT_CAP);
+        }
+        setHasMore(data.hasMore);
+        return combined;
       });
       cursorRef.current = data.nextCursor;
-      setHasMore(data.hasMore);
       setTotal(data.total);
     } catch (err) {
       console.error('Failed to load more logs:', err);
     } finally {
       if (mountedRef.current && reqId === reqIdRef.current) setLoadingMore(false);
+      loadingMoreRef.current = false;
     }
-  }, [loadingMore, hasMore, search, providerName, endpointType]);
+  }, [hasMore, search, providerName, endpointType]);
 
   // 添加新日志（SSE 推送等）— 带 ID 去重 + 软上限裁剪。useCallback 稳定引用供 SSE useEffect 依赖。
   const addLog = useCallback((log: LogEntry) => {

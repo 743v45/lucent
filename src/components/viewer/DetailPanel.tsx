@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useMemo } from 'react';
+import { useState, useCallback, useEffect, useMemo, memo } from 'react';
 import type { LogEntry, TabType, SSERawBody, SSERawLine, KVCacheBlock, ContextMessage, ContentBlock } from '../../types';
 import { ENDPOINT_LABELS } from '../../types';
 import { COPIED_FEEDBACK_DURATION_MS, TOKEN_FORMAT_THRESHOLD_MILLION, TOKEN_FORMAT_THRESHOLD_KILO, JSON_COLLAPSED_EXPAND_LEVEL, CACHE_HIT_RATE_GOOD_THRESHOLD, CACHE_HIT_RATE_BAD_THRESHOLD, STORAGE_KEY_DETAIL_BODY_EXPANDED, STORAGE_KEY_DETAIL_HEADERS_EXPANDED, getStatusColor } from '../../constants';
@@ -157,14 +157,25 @@ function resolveTokenUsage(log: LogEntry) {
   return undefined;
 }
 
-function InlineTokenStats({ log }: { log: LogEntry }) {
-  const tokenUsage = resolveTokenUsage(log);
+// resolveTokenUsage 的返回类型：SSE / JSON / tokenUsage 三路归一的结果（可能 undefined）。
+type TokenUsage = ReturnType<typeof resolveTokenUsage>;
+
+// 头部常驻组件（位于 key={log.id} 重建边界之外），父级每次重渲染都会波及它。
+// 1) tokenUsage 由父级 useMemo 解析后传入——避免每次重渲染都 O(n) 重解析整条 SSE 流；
+// 2) 包 memo：tokenUsage / kvCache 引用稳定（同一份 log）时跳过重渲染。
+const InlineTokenStats = memo(function InlineTokenStats({
+  tokenUsage,
+  kvCache,
+}: {
+  tokenUsage: TokenUsage;
+  kvCache: LogEntry['kvCache'];
+}) {
   const inputTokens = tokenUsage?.input_tokens;
   const outputTokens = tokenUsage?.output_tokens;
   const cacheCreate = tokenUsage?.cache_creation_tokens;
   const cacheRead = tokenUsage?.cache_read_tokens;
-  const hitRate = log.kvCache?.hitRate ?? 0;
-  const hasHitRate = log.kvCache?.hitRate != null && log.kvCache.hitRate > 0;
+  const hitRate = kvCache?.hitRate ?? 0;
+  const hasHitRate = kvCache?.hitRate != null && kvCache.hitRate > 0;
 
   return (
     <div className="shrink-0 flex items-stretch rounded-lg border border-border-subtle bg-bg-surface/50 overflow-hidden">
@@ -210,7 +221,7 @@ function InlineTokenStats({ log }: { log: LogEntry }) {
       </div>
     </div>
   );
-}
+});
 
 // ==================== DetailPanel ====================
 
@@ -272,6 +283,12 @@ export function DetailPanel({ log, activeTab, onTabChange, searchTerm }: DetailP
     navigator.clipboard.writeText(text);
   }, []);
 
+  // SSE token 解析昂贵（resolveTokenUsage 对每条 SSE line 做 JSON.parse，O(n)）。
+  // 顶层 useMemo：同一份 log 只解析一次，头部 InlineTokenStats 与 MetaTab 共用同一结果，
+  // 切 tab / 展开收起 / 防抖落地 / 自动刷新等无关重渲染不再触发重复 parse。
+  // log 为 null 时返回 undefined（下方 if (!log) 会提前 return，不会用到）。
+  const tokenUsage = useMemo(() => (log ? resolveTokenUsage(log) : undefined), [log]);
+
   if (!log) {
     return (
       <div className="flex-1 min-w-0 flex items-center justify-center h-full bg-bg-panel" data-testid="detail-empty">
@@ -310,7 +327,7 @@ export function DetailPanel({ log, activeTab, onTabChange, searchTerm }: DetailP
       case 'context':
         return <ContextTab log={log} searchTerm={searchTerm} />;
       case 'meta':
-        return <MetaTab log={log} />;
+        return <MetaTab log={log} tokenUsage={tokenUsage} />;
     }
   };
 
@@ -364,7 +381,7 @@ export function DetailPanel({ log, activeTab, onTabChange, searchTerm }: DetailP
           </div>
         </div>
         {/* 右侧：Token/Cache 内嵌卡片 */}
-        <InlineTokenStats log={log} />
+        <InlineTokenStats tokenUsage={tokenUsage} kvCache={log.kvCache} />
       </div>
 
       {/* Tab 卡片 - 包含导航栏 + 内容 */}
@@ -1405,11 +1422,12 @@ function MarkdownContent({ content, highlight }: { content: string; highlight?: 
 
 interface MetaTabProps {
   log: LogEntry;
+  tokenUsage: TokenUsage;
 }
 
-function MetaTab({ log }: MetaTabProps): JSX.Element {
-  // 与头部 InlineTokenStats 统一：优先 SSE 实时提取，再回退 response.body.usage，最后 tokenUsage
-  const tokenUsage = resolveTokenUsage(log);
+function MetaTab({ log, tokenUsage }: MetaTabProps): JSX.Element {
+  // tokenUsage 由父级 useMemo 统一解析（SSE 流只 parse 一次），与头部 InlineTokenStats 共用，
+  // 不再在此重复调 resolveTokenUsage。
   return (
     <div className="p-4">
       <div className="bg-bg-surface/50 rounded-lg border border-border-subtle p-3">
