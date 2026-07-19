@@ -12,7 +12,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   openDb, insertLog, migrateFromJsonl, listLogs, searchLogs, getLogById,
-  buildSearchText, deleteOldLogs, deleteExpiredLogs, deleteAllTemporaryLogs, countLogs, getStats, clearAllLogs,
+  buildSearchText, deleteOldLogs, deleteExpiredLogs, countTemporaryLogs, countLogs, getStats, clearAllLogs,
   encodeCursor, decodeCursor, type DB,
 } from '../server/services/db.js';
 import { initDb, closeDb, getDb } from '../server/services/db-instance.js';
@@ -313,18 +313,27 @@ describe('deleteExpiredLogs — 临时日志级联清理', () => {
   });
 });
 
-describe('deleteAllTemporaryLogs — 立即清空临时（含未过期）', () => {
-  it('删除所有 expires_at 非空行（含未过期），存档（NULL）保留', () => {
+describe('countTemporaryLogs — 统计临时行（含未到期存量）', () => {
+  it('只计 expires_at 非空行（过期+未到期都算），存档（NULL）不计', () => {
     insertLog(db, makeEntry({ id: 'expired', timestamp: '2026-07-08T00:00:00.000Z', expiresAt: '2026-07-01T00:00:00.000Z' }));
     insertLog(db, makeEntry({ id: 'live', timestamp: '2026-07-08T00:00:00.000Z', expiresAt: '2099-12-31T00:00:00.000Z' }));
-    insertLog(db, makeEntry({ id: 'archive', timestamp: '2026-07-08T00:00:00.000Z' }));
-    expect(countLogs(db)).toBe(3);
+    insertLog(db, makeEntry({ id: 'archive1', timestamp: '2026-07-08T00:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'archive2', timestamp: '2026-07-08T00:00:00.000Z' }));
+    expect(countTemporaryLogs(db)).toBe(2); // expired + live（含未到期），2 个存档不计
+  });
 
-    const n = deleteAllTemporaryLogs(db);
-    expect(n).toBe(2); // expired + live（含未过期）
-    expect(countLogs(db)).toBe(1); // 只剩 archive
-    const ids = db.prepare(`SELECT id FROM logs`).all() as { id: string }[];
-    expect(ids.map(r => r.id)).toEqual(['archive']);
+  it('全存档库返回 0', () => {
+    insertLog(db, makeEntry({ id: 'a1', timestamp: '2026-07-08T00:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'a2', timestamp: '2026-07-08T00:00:00.000Z' }));
+    expect(countTemporaryLogs(db)).toBe(0);
+  });
+
+  it('deleteExpiredLogs 只删过期行，未到期存量仍计入（自停判定据此续跑）', () => {
+    insertLog(db, makeEntry({ id: 'expired', timestamp: '2026-07-08T00:00:00.000Z', expiresAt: '2026-07-01T00:00:00.000Z' }));
+    insertLog(db, makeEntry({ id: 'live', timestamp: '2026-07-08T00:00:00.000Z', expiresAt: '2099-12-31T00:00:00.000Z' }));
+    expect(countTemporaryLogs(db)).toBe(2);
+    deleteExpiredLogs(db, '2026-07-08T00:00:00.000Z'); // 删 expired
+    expect(countTemporaryLogs(db)).toBe(1); // live 未到期仍计入 → 定时器不该自停
   });
 });
 

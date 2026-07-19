@@ -149,7 +149,7 @@ export function cleanupOldLogs(): void {
 
 /**
  * 清理已过期的临时日志（expires_at < now）：DELETE 三表（级联 log_bodies + FTS），再失效读缓存。
- * 与 cleanupOldLogs 的关键区别：**不 VACUUM**——本函数每分钟跑（TEMP_LOG_CLEANUP_INTERVAL_MS），
+ * 与 cleanupOldLogs 的关键区别：**不 VACUUM**——本函数周期跑（TEMP_LOG_CLEANUP_INTERVAL_MS，默认 3 分钟），
  * VACUUM 是全库写锁会卡代理写入；空间回收仍交给每 24h 的 cleanupOldLogs。
  */
 export function cleanupExpiredLogs(): void {

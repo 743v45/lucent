@@ -19,7 +19,7 @@ import { startProxyServer } from './proxy.js';
 import { setupInterceptor, drainPendingSSETasks } from './interceptor.js';
 import { drainWriteQueue } from './services/log-writer.js';
 import { closeDb } from './services/db-instance.js';
-import { TEMP_LOG_CLEANUP_INTERVAL_MS } from './constants.js';
+import { startTempCleanupTimer, stopTempCleanupTimer } from './services/temp-cleanup-scheduler.js';
 import { isSseDebugEnabled } from './sse-extractor.js';
 import './endpoint-handlers.js'; // 注册端点类型处理器
 import type { ProxyStatus } from './types.js';
@@ -37,8 +37,7 @@ let proxyEnabled = false;
 let proxyServer: Awaited<ReturnType<typeof startProxyServer>> | null = null;
 // 保留期清理定时器（定期 DELETE 旧行 + VACUUM；shutdown 时清掉）
 let retentionTimer: NodeJS.Timeout | null = null;
-// 临时日志过期清理定时器（每分钟 DELETE expires_at<now 的行；只删不 VACUUM，shutdown 时清掉）
-let tempCleanupTimer: NodeJS.Timeout | null = null;
+// 临时日志清理定时器已封装到 temp-cleanup-scheduler（按 logMode 自适应启停），无 module-level 变量
 
 // ==================== Express 应用 ====================
 
@@ -75,7 +74,6 @@ export async function startServer(): Promise<void> {
   LogWriter.init(resolvedConfig);
   LogReader.init(resolvedConfig);
   await LogWriter.cleanupOldLogs();
-  await LogWriter.cleanupExpiredLogs();
 
   // 定期保留期清理（决策④：DELETE 旧行 + VACUUM）。启动时已清一次；长驻进程靠这个定时
   // 兜底（每 24h）。unref：不阻止进程退出（shutdown 时显式 clearInterval）。
@@ -85,12 +83,9 @@ export async function startServer(): Promise<void> {
   }, RETENTION_INTERVAL_MS);
   retentionTimer.unref();
 
-  // 临时日志过期清理（每分钟 DELETE expires_at<now 的行）。与保留期清理独立、只 DELETE 不 VACUUM
-  // （VACUUM 全库写锁，每分钟跑会卡代理写入）；空间回收仍交给上面的保留期清理。
-  tempCleanupTimer = setInterval(() => {
-    try { LogWriter.cleanupExpiredLogs(); } catch (err) { dbg('定时临时日志清理失败: %O', err); }
-  }, TEMP_LOG_CLEANUP_INTERVAL_MS);
-  tempCleanupTimer.unref();
+  // 临时日志过期清理定时器（按 logMode 自适应启停）：启动清一次 + 周期清理；
+  // temporary 常驻 / off·archive 存量清完自停 / 切回 temporary 由 /api/recording 重启。
+  startTempCleanupTimer();
 
   // 启动代理服务器
   const proxyPort = resolvedConfig.proxyPort;
@@ -170,8 +165,8 @@ export async function shutdownServer(): Promise<void> {
 
   // 停掉保留期清理定时器
   if (retentionTimer) { clearInterval(retentionTimer); retentionTimer = null; }
-  // 停掉临时日志清理定时器
-  if (tempCleanupTimer) { clearInterval(tempCleanupTimer); tempCleanupTimer = null; }
+  // 停掉临时日志清理定时器（temp-cleanup-scheduler）
+  stopTempCleanupTimer();
 
   // 等待后台 SSE 任务完成，确保数据不丢失
   await drainPendingSSETasks();

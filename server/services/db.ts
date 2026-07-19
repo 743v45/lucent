@@ -592,3 +592,8 @@ export function vacuum(db: DB): void {
 export function countLogs(db: DB): number {
   return (db.prepare(`SELECT COUNT(*) AS c FROM logs`).get() as { c: number }).c;
 }
+
+/** 临时日志行数（expires_at 非空，含未到期存量）；命中部分索引 idx_logs_expires，供清理定时器自停判定 */
+export function countTemporaryLogs(db: DB): number {
+  return (db.prepare(`SELECT COUNT(*) AS c FROM logs WHERE expires_at IS NOT NULL`).get() as { c: number }).c;
+}

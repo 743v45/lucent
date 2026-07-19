@@ -10,6 +10,7 @@
 
 import { Router } from 'express';
 import * as Config from '../config.js';
+import { startTempCleanupTimer } from '../services/temp-cleanup-scheduler.js';
 
 export function createStatusRouter(options: {
   proxyEnabled: { value: boolean };
@@ -50,6 +51,10 @@ export function createStatusRouter(options: {
       return;
     }
     const result = Config.setLogMode(logMode, tempTtlMinutes);
+    // 切到/保持在 temporary：确保清理定时器在跑（幂等；off/archive 下它可能已自停）。
+    if (result.logMode === 'temporary') {
+      startTempCleanupTimer();
+    }
     res.json({ success: true, logMode: result.logMode, envLocked: result.envLocked });
   });
 

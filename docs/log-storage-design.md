@@ -10,7 +10,7 @@ Lucent 的日志存储经历了从 **JSONL 文件** 到 **SQLite + FTS5** 的迁
 
 | 表 | 内容 | 用途 |
 |---|---|---|
-| `logs` | 可索引小字段（id、timestamp、agent_type、provider_name、endpoint_type、model、status、thread_id、duration、tokenUsage 拆列、error、expires_at…） | 列表 / 排序 / 过滤 / 分页，按 timestamp DESC, id DESC 建索引；`expires_at`：NULL=存档（不过期，归保留期清理），ISO 时间戳=临时日志到期（logMode=temporary 写入，独立每分钟清理） |
+| `logs` | 可索引小字段（id、timestamp、agent_type、provider_name、endpoint_type、model、status、thread_id、duration、tokenUsage 拆列、error、expires_at…） | 列表 / 排序 / 过滤 / 分页，按 timestamp DESC, id DESC 建索引；`expires_at`：NULL=存档（不过期，归保留期清理），ISO 时间戳=临时日志到期（logMode=temporary 写入，独立定时器清理，按 logMode 自适应启停、默认 3 分钟） |
 | `log_bodies` | 大内容（request/response 原文 JSON + search_text） | 仅详情视图与检索时读取，列表查询不碰 |
 | `logs_fts` | FTS5 虚拟表，trigram 分词，索引 search_text | 全文检索（中英文通吃、子串语义） |
 
@@ -20,7 +20,7 @@ Lucent 的日志存储经历了从 **JSONL 文件** 到 **SQLite + FTS5** 的迁
 
 保留期（决策④）：默认 **3 天**，env `LUCENT_LOG_RETENTION_DAYS` 可调。清理 = `DELETE` 旧行（级联 log_bodies + 手动删 FTS）+ `VACUUM` 回收空间。启动时清一次，之后每 24h 定时清一次（长驻进程兜底）。
 
-临时日志 TTL（与保留期清理并存，两者独立）：`logMode=temporary` 时写入的行带 `expires_at`，由独立定时器每 1 分钟扫一次 `DELETE`（`WHERE expires_at IS NOT NULL AND expires_at < now`，只 DELETE **不 VACUUM**，避免每分钟全库写锁卡代理）；存档行 `expires_at IS NULL` 不受影响。存活时长可选 **0 = 立即过期**（`expires_at ≈ now`，写入即被清理定时器删，取代原「立即清空临时」按钮）。空间回收靠这里的 24h 保留期 VACUUM + WAL 增量页复用兜底。
+临时日志 TTL（与保留期清理并存，两者独立）：`logMode=temporary` 时写入的行带 `expires_at`，由独立定时器每 3 分钟扫一次 `DELETE`（`WHERE expires_at IS NOT NULL AND expires_at < now`，只 DELETE **不 VACUUM**，避免全库写锁卡代理）；按 logMode 自适应启停——`temporary` 常驻、`off`/`archive` 清完成残存存量后自停（判定 `countTemporaryLogs===0`，不用「删 0 行」以免未到期存量残留）、切回 `temporary` 由 `/api/recording` 重启。存档行 `expires_at IS NULL` 不受影响。存活时长可选 **0 = 立即过期**（`expires_at ≈ now`，写入即被清理定时器删，取代原「立即清空临时」按钮）。空间回收靠这里的 24h 保留期 VACUUM + WAL 增量页复用兜底。
 
 导出：仍支持 **JSONL / Markdown** 两种格式（导出产物，不是 live 存储）。
 

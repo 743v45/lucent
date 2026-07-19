@@ -40,8 +40,8 @@ export const MAX_REQUEST_BODY_SIZE = 50 * 1024 * 1024;
 export const LOG_RETENTION_DAYS = 3;                // 日志自动清理天数（env LUCENT_LOG_RETENTION_DAYS 可覆盖）
 /** 临时日志默认存活时长（分钟）；logMode=temporary 时写入的日志带此 TTL，到期由独立定时器清理。env LUCENT_TEMP_LOG_TTL_MINUTES 可覆盖 */
 export const TEMP_LOG_TTL_MINUTES = 30;
-/** 临时日志过期清理扫描间隔（毫秒）；独立于保留期清理（24h），只 DELETE 不 VACUUM，避免每分钟全库锁 */
-export const TEMP_LOG_CLEANUP_INTERVAL_MS = 60_000;
+/** 临时日志过期清理扫描间隔（毫秒）；独立于保留期清理（24h），只 DELETE 不 VACUUM，避免频繁全库锁。定时器按 logMode 自适应启停（见 temp-cleanup-scheduler），非 temporary 模式存量清完即停 */
+export const TEMP_LOG_CLEANUP_INTERVAL_MS = 180_000;
 export const DEFAULT_LOG_QUERY_LIMIT = 100;         // 日志查询默认返回条数
 
 /**
