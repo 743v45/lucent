@@ -5,7 +5,6 @@ export interface ThreadGroup {
   title: string;
   mainLogs: LogEntry[];
   subLogs: LogEntry[];
-  totalTokens: number;
   startTime: string;
   endTime: string;
 }
@@ -19,6 +18,44 @@ export interface GroupResult {
 function tokenSum(log: LogEntry): number {
   const u = log.tokenUsage;
   return (u?.input_tokens ?? 0) + (u?.output_tokens ?? 0);
+}
+
+/** 末条 main 请求的 messages 数（会话当前对话消息总条数；messages 非数组或缺省 → 0） */
+function lastMainMessageCount(logs: LogEntry[]): number {
+  const mains = logs.filter(l => l.agentType === 'main');
+  if (mains.length === 0) return 0;
+  const last = mains[mains.length - 1];
+  const msgs = (last.request?.body as { messages?: unknown })?.messages;
+  return Array.isArray(msgs) ? msgs.length : 0;
+}
+
+export interface ThreadSummary {
+  requestCount: number;
+  messageCount: number;
+  tokenTotal: number;
+}
+
+/**
+ * 合并全量加载结果（fullLogs）与当前分页增量（freshLogs）。
+ * fullLogs 提供历史全量；freshLogs（自动刷新拉到的分页）提供最新增量。
+ * 按 id 去重、按 timestamp 升序；fullLogs 为 null 时直接用 freshLogs。
+ */
+export function mergeThreadLogs(fullLogs: LogEntry[] | null, freshLogs: LogEntry[]): LogEntry[] {
+  const base = fullLogs ?? freshLogs;
+  const seen = new Set(base.map(l => l.id));
+  const fresh = freshLogs.filter(l => !seen.has(l.id));
+  return [...base, ...fresh].sort(
+    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
+  );
+}
+
+/** 汇总一个会话的行集：请求数 / 末条 main 消息数 / token 总和 */
+export function summarizeThreadLogs(logs: LogEntry[]): ThreadSummary {
+  return {
+    requestCount: logs.length,
+    messageCount: lastMainMessageCount(logs),
+    tokenTotal: logs.reduce((sum, l) => sum + tokenSum(l), 0),
+  };
 }
 
 /** 取首条 user 文本作为会话标题（截断 40 字符） */
@@ -86,13 +123,11 @@ export function groupByThread(logs: LogEntry[]): GroupResult {
   const groups: ThreadGroup[] = [];
   for (const [threadId, mainLogs] of byThread) {
     const subs = subAssign.get(threadId) ?? [];
-    const totalTokens = [...mainLogs, ...subs].reduce((sum, l) => sum + tokenSum(l), 0);
     groups.push({
       threadId,
       title: deriveTitle(mainLogs),
       mainLogs,
       subLogs: subs,
-      totalTokens,
       startTime: mainLogs[0]?.timestamp ?? '',
       endTime: mainLogs[mainLogs.length - 1]?.timestamp ?? '',
     });

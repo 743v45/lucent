@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { groupByThread } from '../src/utils/group-by-thread.js';
+import { groupByThread, mergeThreadLogs, summarizeThreadLogs } from '../src/utils/group-by-thread.js';
 import type { LogEntry } from '../src/types.js';
 
 function mkLog(partial: Partial<LogEntry>): LogEntry {
@@ -54,8 +54,37 @@ describe('groupByThread', () => {
     ];
     const { groups } = groupByThread(logs);
     const a = groups[0];
-    expect(a.totalTokens).toBe(400);
     expect(a.startTime).toBe('2026-01-01T00:00:00Z');
     expect(a.endTime).toBe('2026-01-01T00:10:00Z');
+  });
+
+  it('summarizeThreadLogs: 请求数 / 末条 main 消息数 / token', () => {
+    const logs = [
+      mkLog({ id: '1', threadId: 'thread_a', timestamp: '2026-01-01T00:00:00Z', agentType: 'main',
+        tokenUsage: { input_tokens: 100, output_tokens: 50 },
+        request: { method: 'POST', url: 'u', headers: {}, body: { model: 'm',
+          messages: [{ role: 'user', content: 'a' }] } } }),
+      mkLog({ id: '2', threadId: 'thread_a', timestamp: '2026-01-01T00:00:01Z', agentType: 'main',
+        tokenUsage: { input_tokens: 200, output_tokens: 50 },
+        request: { method: 'POST', url: 'u', headers: {}, body: { model: 'm',
+          messages: [{ role: 'user', content: 'a' }, { role: 'assistant', content: 'b' }, { role: 'user', content: 'c' }] } } }),
+    ];
+    const { groups } = groupByThread(logs);
+    const s = summarizeThreadLogs([...groups[0].mainLogs, ...groups[0].subLogs]);
+    expect(s.requestCount).toBe(2);
+    expect(s.messageCount).toBe(3); // 末条 main(id=2) 的 messages.length
+    expect(s.tokenTotal).toBe(400); // (100+50)+(200+50)
+  });
+
+  it('mergeThreadLogs: 全量底 + 分页增量去重升序', () => {
+    const mk = (id: string, ts: string): LogEntry => mkLog({ id, threadId: 't', timestamp: ts });
+    const full = [mk('old2', '2026-01-01T00:00:10Z'), mk('old1', '2026-01-01T00:00:00Z')];
+    const fresh = [mk('new1', '2026-01-01T00:00:20Z'), mk('old2', '2026-01-01T00:00:10Z')]; // old2 与 full 重复
+    expect(mergeThreadLogs(full, fresh).map(l => l.id)).toEqual(['old1', 'old2', 'new1']);
+  });
+
+  it('mergeThreadLogs: fullLogs=null 直接用 freshLogs', () => {
+    const fresh = [mkLog({ id: 'a', threadId: 't', timestamp: '2026-01-01T00:00:00Z' })];
+    expect(mergeThreadLogs(null, fresh).map(l => l.id)).toEqual(['a']);
   });
 });

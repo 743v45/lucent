@@ -9,9 +9,9 @@
 
 ## 1. 背景与目标
 
-当前日志列表靠手动点顶栏 [refresh-btn](../../src/App.tsx#L263) 刷新（调用 [useLogs.loadLogs](../../src/hooks/useLogs.ts#L80)：拉首页 + 重置游标 + 替换列表）。实时推送端点 `/api/logs/stream` 目前是骨架、未接通（见 [server/routes/logs.ts:29](../../server/routes/logs.ts#L29) 的 TODO），前端只能手动刷新。
+当前日志列表靠手动点顶栏 [refresh-btn](../../src/App.tsx#L263) 刷新（调用 [useLogs.loadLogs](../../src/hooks/useLogs.ts#L80)：拉首页 + 重置游标 + 替换列表）。SSE 端点 `/api/logs/stream` 已接通实时推送（[sse-bus](../../server/sse-bus.ts) + [LogWriter](../../server/services/log-writer.ts) 落库后广播，前端 EventSource 收到自动进列表）。
 
-在 SSE 接通前，提供一个**轮询式定时刷新**作为务实过渡：用户设定间隔后，列表按间隔自动拉取最新日志，无需手动点。
+即便 SSE 已接通，**轮询式定时刷新**仍有价值——作为全量对齐兜底（SSE 是增量推送，刷新是全量重拉首页；切 filter 后对齐、纠正可能的推送丢失）。用户设定间隔后，列表按间隔自动拉取最新首页，无需手动点。
 
 ## 2. 范围（YAGNI）
 
@@ -20,7 +20,7 @@
 - 设置记忆到 localStorage。
 
 **不做**（避免投机）：
-- 不接通 SSE / WebSocket（那是独立的大改，见 `server/routes/logs.ts:29` TODO）。
+- 不在本设计内接通 SSE / WebSocket（SSE 实时推送已由独立改动接通，见 [sse-bus](../../server/sse-bus.ts)；本设计的定时刷新与其互补：增量推送 + 全量对齐兜底）。
 - 不做"增量追加、保持滚动位置"——定时刷新语义就是"回到最新首页"（复用 `loadLogs` 固有行为）。
 - 不改手动刷新按钮、不改后端。
 

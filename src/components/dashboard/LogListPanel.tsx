@@ -5,7 +5,7 @@ import type { LogEntry, AgentType, Provider, EndpointType } from '../../types';
 import { ENDPOINT_LABELS, ENDPOINT_TYPES } from '../../types';
 import { URL_SEARCH_PREVIEW_LENGTH, URL_FALLBACK_PREVIEW_LENGTH, DATE_HOVER_DELAY_MS, MS_TO_S_THRESHOLD, getStatusColor } from '../../constants';
 import { resolveResponseType } from '../../utils/response-type';
-import { groupByThread, type ThreadGroup } from '../../utils/group-by-thread';
+import { groupByThread, mergeThreadLogs, summarizeThreadLogs, type ThreadGroup } from '../../utils/group-by-thread';
 import { ClientIcon } from '../common/ClientIcon';
 import { ProviderIcon } from '../common/ProviderIcon';
 import { ProtocolIcon } from '../common/ProtocolIcon';
@@ -235,21 +235,26 @@ function ThreadGroupView({ group, collapsed, onToggle, selectedId, onSelectLog, 
       .catch(() => setStatus('error'));
   }, [collapsed, group.threadId, loadThread]);
 
-  // 全量已加载用它；否则（loading/error/未加载）回退到分页凑出的 main+sub
-  const rows = (fullLogs ?? [...group.mainLogs, ...group.subLogs])
-    .sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+  // 合并全量（fullLogs）与分页增量（group main+sub）：fullLogs 作历史全量底，
+  // group 提供自动刷新拉到的最新增量；去重升序。已展开组在自动刷新后由此看到新请求。
+  const rows = useMemo(
+    () => mergeThreadLogs(fullLogs, [...group.mainLogs, ...group.subLogs]),
+    [fullLogs, group.mainLogs, group.subLogs],
+  );
+  const summary = useMemo(() => summarizeThreadLogs(rows), [rows]);
 
   return (
     <div className="mb-2">
       <button onClick={onToggle}
         data-testid="session-group"
         data-threadid={group.threadId}
-        data-count={group.mainLogs.length + group.subLogs.length}
+        data-count={summary.requestCount}
         className="w-full flex items-center gap-2 p-2 rounded-lg bg-bg-surface border border-border-subtle hover:border-border-primary text-left">
         <ChevronIcon expanded={!collapsed} />
         <span className="truncate flex-1 min-w-0 text-[13px] font-[510] text-text-secondary">{group.title}</span>
-        <span className="shrink-0 text-xs text-text-quaternary">{group.mainLogs.length + group.subLogs.length} 请求</span>
-        <span className="shrink-0 text-xs text-text-quaternary tabular-nums">{group.totalTokens} tok</span>
+        <span className="shrink-0 text-xs text-text-quaternary">{summary.requestCount} 请求</span>
+        <span className="shrink-0 text-xs text-text-quaternary tabular-nums">{summary.messageCount} 消息</span>
+        <span className="shrink-0 text-xs text-text-quaternary tabular-nums">{summary.tokenTotal} tok</span>
       </button>
       {!collapsed && (
         <div className="mt-1">

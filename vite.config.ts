@@ -13,6 +13,9 @@ export default defineConfig({
     // 验收脚本用 VITE_PORT 指定随机端口；默认 5173 strictPort
     port: parseInt(process.env.VITE_PORT || '5173', 10),
     strictPort: !process.env.VITE_PORT,
+    // 关闭 dev 压缩：默认 compression 会缓冲 SSE 流式响应（/api/logs/stream），
+    // 导致前端 EventSource 收不到事件。生产用 build 产物，不走 vite dev，不受影响。
+    compression: false,
     proxy: {
       '/api': {
         // 验收脚本用 LUCENT_WEB_PORT 指向后端随机端口；默认 7049
@@ -20,6 +23,13 @@ export default defineConfig({
           ? `http://localhost:${process.env.LUCENT_WEB_PORT}`
           : 'http://localhost:7049',
         changeOrigin: true,
+        // SSE 流式：强制 identity 编码，避免 http-proxy 对压缩响应缓冲，导致 /api/logs/stream
+        // 的事件被攒在 proxy 缓冲区里不转发（前端 EventSource 一直 CONNECTING）。
+        configure: (proxy) => {
+          proxy.on('proxyReq', (proxyReq) => {
+            proxyReq.setHeader('accept-encoding', 'identity');
+          });
+        },
       },
     },
   },

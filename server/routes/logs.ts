@@ -16,6 +16,7 @@ import { existsSync, readdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import * as LogReader from '../services/log-reader.js';
 import * as LogManager from '../log-manager.js';
+import { registerSseClient, unregisterSseClient } from '../sse-bus.js';
 import type { LogsQuery } from '../types.js';
 import createDebug from 'debug';
 const dbg = createDebug('lucent:routes:logs');
@@ -26,11 +27,8 @@ export function createLogsRouter(options: {
 }): Router {
   const router = Router();
 
-  // GET /api/logs/stream — SSE 推送
-  // TODO: 实时推送未接通。当前 sseClients 集合已移除（无广播方/无前端 EventSource 消费者），
-  // 仅保留 SSE 端点骨架（connected 事件 + 心跳保活）以维持对外契约。接入广播时需重新引入
-  // 客户端集合并在 LogWriter 写入后向各客户端 res.write() 推送日志事件。
-  router.get('/api/logs/stream', (_req, res) => {
+  // GET /api/logs/stream — SSE 推送新日志（实时接通：LogWriter 落库后经 sse-bus 广播 event:log）
+  router.get('/api/logs/stream', (req, res) => {
     // 设置 SSE headers
     res.writeHead(200, {
       'Content-Type': 'text/event-stream',
@@ -39,10 +37,10 @@ export function createLogsRouter(options: {
       'X-Accel-Buffering': 'no',
     });
 
-    // 发送 connected 事件
+    // 发送 connected 事件 + 注册到广播集合
     res.write(`event: connected\ndata: ${JSON.stringify({ timestamp: new Date().toISOString() })}\n\n`);
-
-    dbg('SSE 客户端连接（实时推送未接通，仅保活）');
+    registerSseClient(res);
+    dbg('SSE 客户端连接');
 
     // 心跳保活
     const heartbeatInterval = options.resolvedConfig.heartbeatIntervalMs || 30000;
@@ -50,9 +48,10 @@ export function createLogsRouter(options: {
       res.write(`: heartbeat\n\n`);
     }, heartbeatInterval);
 
-    // 客户端断开时清理
-    _req.on('close', () => {
+    // 客户端断开时清理心跳 + 注销广播
+    req.on('close', () => {
       clearInterval(heartbeat);
+      unregisterSseClient(res);
       dbg('SSE 客户端断开');
     });
   });

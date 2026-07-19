@@ -10,7 +10,8 @@
 
 import { insertLog, deleteOldLogs, deleteExpiredLogs, vacuum } from './db.js';
 import { initDb, getDb } from './db-instance.js';
-import { invalidateCache as invalidateReaderCache } from './log-reader.js';
+import { invalidateCache as invalidateReaderCache, normalizeLogEntry } from './log-reader.js';
+import { broadcastLog } from '../sse-bus.js';
 import { getLogMode, getTempTtlMinutes, getRetentionDays } from '../config.js';
 import type { RawLogEntry } from '../types.js';
 import type { ResolvedConfig } from '../config.js';
@@ -105,6 +106,12 @@ export function writeLogEntry(entry: RawLogEntry): void {
   }
   enqueue(() => {
     insertLog(getDb(), entry);
+    // 落库后向已连接 SSE 客户端广播（normalizeLogEntry 是 readLogs 同源转换，前端 formatLog 直接复用）
+    try {
+      broadcastLog(normalizeLogEntry(entry));
+    } catch (err) {
+      dbg('SSE 广播失败 id=%s: %O', entry.id, err);
+    }
   });
 }
 

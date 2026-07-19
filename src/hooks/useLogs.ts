@@ -7,11 +7,48 @@
  */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getLogs } from '../utils/api';
+import { makeSemaphore } from '../utils/concurrency';
+import { API_BASE_PATH } from '../constants';
 import type { LogEntry } from '../types';
 
 const PAGE_SIZE = 50;
 /** logs state 软上限：loadMore/addLog 追加后裁剪到最前（最新）N 条，防浏览器无限堆积 */
 const LOGS_SOFT_CAP = 500;
+
+/** 转换 API 数据格式（模块级纯函数，供 loadLogs/loadThread/SSE 共享） */
+const formatLog = (log: any): LogEntry => ({
+  id: log.id,
+  timestamp: log.timestamp,
+  request: {
+    ...log.request,
+    body: {
+      ...log.request.body,
+      messages: (log.request.body.messages || []).map((msg: any) => ({
+        role: msg.role,
+        content: typeof msg.content === 'string' ? msg.content : (msg.content || []),
+      })),
+    },
+  },
+  response: log.response as LogEntry['response'],
+  agentType: log.agentType as LogEntry['agentType'],
+  apiType: log.apiType as LogEntry['apiType'],
+  clientType: log.clientType as LogEntry['clientType'],
+  duration: log.duration,
+  ttftFirstTokenMs: log.ttftFirstTokenMs,
+  ttftThinkingMs: log.ttftThinkingMs,
+  ttftAnswerMs: log.ttftAnswerMs,
+  tokensPerSecond: log.tokensPerSecond,
+  metadata: log.metadata as LogEntry['metadata'],
+  tokenUsage: log.tokenUsage as LogEntry['tokenUsage'],
+  kvCache: log.kvCache as LogEntry['kvCache'],
+  context: log.context as LogEntry['context'],
+  error: log.error,
+  isTest: log.isTest,
+  providerName: log.providerName,
+  endpointType: log.endpointType as LogEntry['endpointType'],
+  threadId: log.threadId,
+  expiresAt: log.expiresAt,
+});
 
 export interface UseLogsOptions {
   search: string;
@@ -40,41 +77,6 @@ export function useLogs(opts: UseLogsOptions) {
   const reqIdRef = useRef(0);
   // unmount 防护：异步请求返回晚于卸载时阻断 setState
   const mountedRef = useRef(true);
-
-  // 转换 API 数据格式
-  const formatLog = (log: any): LogEntry => ({
-    id: log.id,
-    timestamp: log.timestamp,
-    request: {
-      ...log.request,
-      body: {
-        ...log.request.body,
-        messages: (log.request.body.messages || []).map((msg: any) => ({
-          role: msg.role,
-          content: typeof msg.content === 'string' ? msg.content : (msg.content || []),
-        })),
-      },
-    },
-    response: log.response as LogEntry['response'],
-    agentType: log.agentType as LogEntry['agentType'],
-    apiType: log.apiType as LogEntry['apiType'],
-    clientType: log.clientType as LogEntry['clientType'],
-    duration: log.duration,
-    ttftFirstTokenMs: log.ttftFirstTokenMs,
-    ttftThinkingMs: log.ttftThinkingMs,
-    ttftAnswerMs: log.ttftAnswerMs,
-    tokensPerSecond: log.tokensPerSecond,
-    metadata: log.metadata as LogEntry['metadata'],
-    tokenUsage: log.tokenUsage as LogEntry['tokenUsage'],
-    kvCache: log.kvCache as LogEntry['kvCache'],
-    context: log.context as LogEntry['context'],
-    error: log.error,
-    isTest: log.isTest,
-    providerName: log.providerName,
-    endpointType: log.endpointType as LogEntry['endpointType'],
-    threadId: log.threadId,
-    expiresAt: log.expiresAt,
-  });
 
   // 首页加载（search/过滤变化或手动刷新时调用，替换列表）
   const loadLogs = useCallback(async () => {
@@ -135,14 +137,35 @@ export function useLogs(opts: UseLogsOptions) {
     }
   }, [loadingMore, hasMore, search, providerName, endpointType]);
 
-  // 添加新日志（SSE 推送等）— 带 ID 去重
-  const addLog = (log: LogEntry) => {
+  // 添加新日志（SSE 推送等）— 带 ID 去重 + 软上限裁剪。useCallback 稳定引用供 SSE useEffect 依赖。
+  const addLog = useCallback((log: LogEntry) => {
     setLogs(prev => {
       if (prev.some(item => item.id === log.id)) return prev;
       const combined = [log, ...prev];
       return combined.length > LOGS_SOFT_CAP ? combined.slice(0, LOGS_SOFT_CAP) : combined;
     });
-  };
+  }, []);
+
+  // SSE 实时推送：新日志自动进列表。filter 变化经 ref 同步，不重建连接。
+  // 过滤一致性：不合当前 provider/endpoint 的丢弃；搜索态不自动加（避免污染 FTS 检索结果，靠刷新重搜）。
+  const filterRef = useRef({ providerName, endpointType, search });
+  filterRef.current = { providerName, endpointType, search };
+  useEffect(() => {
+    const es = new EventSource(`${API_BASE_PATH}/logs/stream`);
+    es.addEventListener('log', (e) => {
+      try {
+        const log = formatLog(JSON.parse((e as MessageEvent).data));
+        const { providerName: p, endpointType: et, search: s } = filterRef.current;
+        if (p !== 'all' && log.providerName !== p) return;
+        if (et !== 'all' && log.endpointType !== et) return;
+        if (s.trim()) return;
+        addLog(log);
+      } catch (err) {
+        console.error('SSE log 解析失败:', err);
+      }
+    });
+    return () => es.close();
+  }, [addLog]);
 
   // search / 过滤变化 → 重新加载首页（loadLogs 是 useCallback，依赖这些值）
   useEffect(() => {
@@ -160,19 +183,30 @@ export function useLogs(opts: UseLogsOptions) {
     [logs, nowTick],
   );
 
-  // 按 threadId 后端全量拉一个会话（会话视图组内全量加载用）；走与 visibleLogs 一致的 expiresAt 过滤。
-  // 分页续拉直到 hasMore=false，保证单会话全量（不受 PAGE_SIZE/LOGS_SOFT_CAP 限制）。
+  // 会话视图首屏多组同时按 threadId 全量加载时，限制并发拉取数，其余排队，避免瞬时 N 个全量分页请求。
+  const loadSem = useMemo(() => makeSemaphore(3), []);
+  // 按 threadId 后端全量拉一个会话（会话视图组内全量加载用）；透传当前 search/provider/endpoint
+  // 筛选，使组内全量与列表筛选口径一致。分页续拉直到 hasMore=false；走与 visibleLogs 一致的 expiresAt 过滤。
   const loadThread = useCallback(async (threadId: string): Promise<LogEntry[]> => {
-    const all: LogEntry[] = [];
-    let cursor: string | undefined;
-    do {
-      const data = await getLogs({ threadId, limit: 500, cursor });
-      all.push(...(data.logs || []).map(formatLog));
-      cursor = data.nextCursor ?? undefined;
-      if (!data.hasMore) break;
-    } while (cursor);
-    return all.filter(l => !l.expiresAt || Date.parse(l.expiresAt) > Date.now());
-  }, []);
+    return loadSem(async () => {
+      const all: LogEntry[] = [];
+      let cursor: string | undefined;
+      do {
+        const data = await getLogs({
+          threadId,
+          limit: 500,
+          cursor,
+          search: search.trim() || undefined,
+          providerName,
+          endpointType,
+        });
+        all.push(...(data.logs || []).map(formatLog));
+        cursor = data.nextCursor ?? undefined;
+        if (!data.hasMore) break;
+      } while (cursor);
+      return all.filter(l => !l.expiresAt || Date.parse(l.expiresAt) > Date.now());
+    });
+  }, [search, providerName, endpointType, loadSem]);
 
   return {
     logs: visibleLogs,

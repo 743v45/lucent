@@ -4,14 +4,13 @@
  * 覆盖 src/App.tsx 顶栏 + 全局交互的 4 个面（照抄 seed.spec.ts 结构，复用
  * e2e/fixtures.ts 的 lucent 隔离栈，不重造）：
  *
- *  - 刷新按钮：loadLogs 重新拉日志，新请求经刷新后才进列表。
+ *  - 刷新按钮：loadLogs 重新拉日志（SSE 接通后刷新仍作为全量对齐兜底，新请求平时靠推送自动进列表）。
  *  - URL 同步：选中日志 + 切 tab 写入 URL（log/tab 参数），reload 仍恢复到同一日志同一 tab；
  *    默认 tab 不带 tab 参数。
  *  - 侧栏拖拽调宽：真实鼠标事件拖 sidebar-splitter → 宽度随 clientX 变化 + min/max 钳制
  *    + 松手存 localStorage + reload 恢复。
- *  - 实时推送（当前未接通）：连发第二条请求，列表不会自动出现（前端无 EventSource/轮询，
- *    server/routes/logs.ts 的 /api/logs/stream 仅骨架保活，TODO 标注「实时推送未接通」）。
- *    本条锁住当前真实行为：要刷新才出现。等推送真正接通时此断言会失败，提示更新 spec。
+ *  - 实时推送（SSE 已接通）：连发第二条请求，日志落库后经 sse-bus 广播，前端 EventSource
+ *    收到自动进列表，无需手动刷新。不合当前 provider/endpoint 筛选的会被前端丢弃。
  *
  * testid 仅按交互最小必要补：refresh-btn / sidebar-splitter / log-list-panel，其余复用现有契约。
  */
@@ -80,7 +79,7 @@ async function dragSplitterTo(page: import('@playwright/test').Page, targetX: nu
 }
 
 test.describe('顶栏与全局交互：刷新 / URL 同步 / 侧栏拖拽 / 实时推送', () => {
-  test('刷新按钮：点 refresh-btn 重新拉日志，新请求经刷新后才进列表', async ({ page, lucent }) => {
+  test('刷新按钮：点 refresh-btn 重新拉首页对齐，已有日志不丢', async ({ page, lucent }) => {
     // 第一条先就位，UI 加载它
     const id1 = await postNewLog(lucent);
     await page.goto(lucent.webBaseUrl);
@@ -88,19 +87,14 @@ test.describe('顶栏与全局交互：刷新 / URL 同步 / 侧栏拖拽 / 实�
       timeout: 10_000,
     });
 
-    // 第二条发出去并落库，但不刷新页面
+    // id2 落库（SSE 接通后会自动进列表）；refresh-btn 作为全量对齐兜底——点后重新拉首页，id1/id2 都在
     const id2 = await postNewLog(lucent);
-    // 给列表一个窗口自行更新（若有任何轮询/推送）——确认 id2 还没进列表
-    await page.waitForTimeout(1500);
-    await expect(
-      page.locator(`[data-testid="log-row"][data-logid="${id2}"]`),
-      '刷新前第二条不应已在列表',
-    ).toHaveCount(0);
-
-    // 点刷新 → 重新 loadLogs → 第二条出现
     const refresh = page.getByTestId('refresh-btn');
     await expect(refresh).toBeEnabled();
     await refresh.click();
+    await expect(page.locator(`[data-testid="log-row"][data-logid="${id1}"]`)).toBeVisible({
+      timeout: 10_000,
+    });
     await expect(page.locator(`[data-testid="log-row"][data-logid="${id2}"]`)).toBeVisible({
       timeout: 10_000,
     });
@@ -190,30 +184,21 @@ test.describe('顶栏与全局交互：刷新 / URL 同步 / 侧栏拖拽 / 实�
     await expect.poll(() => panelWidth(page), { timeout: 5000 }).toBeCloseTo(520, 0);
   });
 
-  test('实时推送（当前未接通）：连发第二条请求，列表不会自动出现，需刷新', async ({ page, lucent }) => {
-    // 第一条：UI 已加载它
+  test('实时推送（SSE 已接通）：连发第二条请求，日志落库后自动进列表，无需刷新', async ({ page, lucent }) => {
+    // 第一条：UI 已加载它（goto 后 EventSource 也随之建立连接）
     const id1 = await postNewLog(lucent);
     await page.goto(lucent.webBaseUrl);
     await expect(page.locator(`[data-testid="log-row"][data-logid="${id1}"]`)).toBeVisible({
       timeout: 10_000,
     });
+    // 等 EventSource 完成握手（connected）后再发第二条，避免广播早于客户端注册而丢失
+    await page.waitForTimeout(1000);
 
-    // 第二条：发出去并落库
+    // 第二条：发出去并落库 → LogWriter 经 sse-bus 广播 → 前端 EventSource 收到自动进列表
     const id2 = await postNewLog(lucent);
-
-    // 等一个明确窗口（足以超过任何轮询/推送周期）——第二条不应自动进列表。
-    // 依据：前端无 EventSource/setInterval（src 全量 grep 无），server/routes/logs.ts
-    // /api/logs/stream 仅 SSE 骨架（connected + 心跳），其注释明确「实时推送未接通」。
-    await page.waitForTimeout(2500);
     await expect(
       page.locator(`[data-testid="log-row"][data-logid="${id2}"]`),
-      '实时推送未接通：第二条不应自动出现在列表',
-    ).toHaveCount(0);
-
-    // 刷新后才出现 —— 列表更新靠 refresh，不靠推送（与上一条「刷新」用例印证同一机制）
-    await page.getByTestId('refresh-btn').click();
-    await expect(page.locator(`[data-testid="log-row"][data-logid="${id2}"]`)).toBeVisible({
-      timeout: 10_000,
-    });
+      'SSE 已接通：第二条应自动出现在列表（无需刷新）',
+    ).toBeVisible({ timeout: 10_000 });
   });
 });

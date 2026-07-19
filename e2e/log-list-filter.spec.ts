@@ -11,10 +11,9 @@
  *   - 加载更多（>PAGE_SIZE 分页）
  *   - 加载态（首屏拉取期间「加载中」）
  *
- * ⚠️ 不覆盖「自动滚动」：TAE-48 查明 useAutoScrollToBottom 是死代码、/api/logs/stream
- * SSE 推送「未接通」（server/routes/logs.ts 路由自述），且列表「最新在上」，新日志需
- * 手动刷新才出现——该功能不存在，lead 已起 TAE-64（只清死代码、不实现）。按本 issue
- * 「以功能改完后的实际行为为准」的要求，不写臆造断言。
+ * ⚠️ 不覆盖「自动滚动」：TAE-48 查明 useAutoScrollToBottom 是死代码。列表「最新在上」，
+ * 新日志经 SSE 推送自动进列表顶部、本就可见，无需滚动到底——该滚动功能不存在，lead 已起
+ * TAE-64（只清死代码）。按本 issue「以功能改完后的实际行为为准」的要求，不写臆造断言。
  *
  * 隔离注意：fixture 是 worker 级（workers:1），兄弟 spec 的日志会在同一后端累积。
  * 故计数敏感的断言一律用「专属 provider=beta」（只有本文件造 beta 日志）+ /api/logs
