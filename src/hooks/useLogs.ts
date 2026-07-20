@@ -7,6 +7,7 @@
  */
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { getLogs } from '../utils/api';
+import type { ApiLog } from '../utils/api';
 import { makeSemaphore } from '../utils/concurrency';
 import { API_BASE_PATH } from '../constants';
 import type { LogEntry } from '../types';
@@ -14,38 +15,42 @@ import type { LogEntry } from '../types';
 const PAGE_SIZE = 50;
 /** logs state 软上限：loadMore/addLog 追加后裁剪到最前（最新）N 条，防浏览器无限堆积 */
 const LOGS_SOFT_CAP = 500;
+/** loadThread 分页续拉硬上限：后端 bug 返回 hasMore=true 但 nextCursor 不变时防失控 */
+const THREAD_PAGE_MAX = 200;
+/** SSE 连续失败次数达到阈值后主动 close（熔断，避免无限重连耗资源） */
+const SSE_MAX_FAILURES = 5;
 
 /** 转换 API 数据格式（模块级纯函数，供 loadLogs/loadThread/SSE 共享） */
-const formatLog = (log: any): LogEntry => ({
+const formatLog = (log: ApiLog): LogEntry => ({
   id: log.id,
   timestamp: log.timestamp,
   request: {
     ...log.request,
     body: {
       ...log.request.body,
-      messages: (log.request.body.messages || []).map((msg: any) => ({
+      messages: (log.request.body.messages || []).map((msg) => ({
         role: msg.role,
         content: typeof msg.content === 'string' ? msg.content : (msg.content || []),
       })),
     },
   },
-  response: log.response as LogEntry['response'],
-  agentType: log.agentType as LogEntry['agentType'],
-  apiType: log.apiType as LogEntry['apiType'],
-  clientType: log.clientType as LogEntry['clientType'],
+  response: log.response,
+  agentType: log.agentType,
+  apiType: log.apiType,
+  clientType: log.clientType,
   duration: log.duration,
   ttftFirstTokenMs: log.ttftFirstTokenMs,
   ttftThinkingMs: log.ttftThinkingMs,
   ttftAnswerMs: log.ttftAnswerMs,
   tokensPerSecond: log.tokensPerSecond,
-  metadata: log.metadata as LogEntry['metadata'],
-  tokenUsage: log.tokenUsage as LogEntry['tokenUsage'],
-  kvCache: log.kvCache as LogEntry['kvCache'],
-  context: log.context as LogEntry['context'],
+  metadata: log.metadata,
+  tokenUsage: log.tokenUsage,
+  kvCache: log.kvCache,
+  context: log.context,
   error: log.error,
   isTest: log.isTest,
   providerName: log.providerName,
-  endpointType: log.endpointType as LogEntry['endpointType'],
+  endpointType: log.endpointType,
   threadId: log.threadId,
   expiresAt: log.expiresAt,
 });
@@ -71,6 +76,8 @@ export function useLogs(opts: UseLogsOptions) {
   const [hasMore, setHasMore] = useState(true);
   const [total, setTotal] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  // SSE 连接是否丢失（后端重启/网络中断）。收到 log 事件时复位，连续失败 N 次后熔断关闭。
+  const [connectionLost, setConnectionLost] = useState(false);
   // 下一页 keyset 游标（首页为 null）
   const cursorRef = useRef<string | null>(null);
   // 请求序号：过期响应（晚到的旧请求）不覆盖新结果
@@ -145,6 +152,10 @@ export function useLogs(opts: UseLogsOptions) {
       cursorRef.current = data.nextCursor;
       setTotal(data.total);
     } catch (err) {
+      // 续页失败对用户有感（与 loadLogs 一致），不再静默 console.error 吞掉
+      if (mountedRef.current && reqId === reqIdRef.current) {
+        setError(err instanceof Error ? err.message : '加载更多失败');
+      }
       console.error('Failed to load more logs:', err);
     } finally {
       if (mountedRef.current && reqId === reqIdRef.current) setLoadingMore(false);
@@ -167,6 +178,8 @@ export function useLogs(opts: UseLogsOptions) {
   filterRef.current = { providerName, endpointType, search };
   useEffect(() => {
     const es = new EventSource(`${API_BASE_PATH}/logs/stream`);
+    // 连续失败计数：达到阈值后主动 close 熔断，避免后端长时间不可用时无限重连耗资源
+    let failures = 0;
     es.addEventListener('log', (e) => {
       try {
         const log = formatLog(JSON.parse((e as MessageEvent).data));
@@ -175,9 +188,19 @@ export function useLogs(opts: UseLogsOptions) {
         if (et !== 'all' && log.endpointType !== et) return;
         if (s.trim()) return;
         addLog(log);
+        // 收到日志即代表连接可用，复位 connectionLost（恢复后清除丢失提示）
+        setConnectionLost(false);
       } catch (err) {
         console.error('SSE log 解析失败:', err);
       }
+    });
+    // 错误处理：后端重启/网络中断时 EventSource 触发 error；原实现无 onerror 实时流会静默死亡。
+    // 暴露 connectionLost 给 UI；连续失败 N 次后主动 es.close() 熔断。
+    es.addEventListener('error', () => {
+      console.warn('SSE 连接异常（后端重启或网络中断）');
+      failures += 1;
+      setConnectionLost(true);
+      if (failures >= SSE_MAX_FAILURES) es.close();
     });
     return () => es.close();
   }, [addLog]);
@@ -194,7 +217,13 @@ export function useLogs(opts: UseLogsOptions) {
   // 过滤已过期临时日志（expiresAt < now），每分钟随 nowTick 重新评估；
   // 配合软上限 + 服务端清理，保证前端不堆积过期幽灵条目。
   const visibleLogs = useMemo(
-    () => logs.filter(l => !l.expiresAt || Date.parse(l.expiresAt) > Date.now()),
+    () => {
+      // 无 expiresAt 项时 filter 结果与原数组逐项相同，直接返回原引用；
+      // 否则 nowTick 每分钟都会产生新数组引用，级联触发 LogListPanel.displayLogs →
+      // groupByThread → 所有 ThreadGroupView 无意义重算（#22）。
+      if (!logs.some(l => l.expiresAt)) return logs;
+      return logs.filter(l => !l.expiresAt || Date.parse(l.expiresAt) > Date.now());
+    },
     [logs, nowTick],
   );
 
@@ -206,6 +235,9 @@ export function useLogs(opts: UseLogsOptions) {
     return loadSem(async () => {
       const all: LogEntry[] = [];
       let cursor: string | undefined;
+      // 迭代硬上限：仅以 cursor/hasMore 终止时，后端 bug（hasMore=true 但 nextCursor 不变）
+      // 会无限循环；加 guard 防失控（#28）。
+      let guard = 0;
       do {
         const data = await getLogs({
           threadId,
@@ -218,7 +250,7 @@ export function useLogs(opts: UseLogsOptions) {
         all.push(...(data.logs || []).map(formatLog));
         cursor = data.nextCursor ?? undefined;
         if (!data.hasMore) break;
-      } while (cursor);
+      } while (cursor && ++guard < THREAD_PAGE_MAX);
       return all.filter(l => !l.expiresAt || Date.parse(l.expiresAt) > Date.now());
     });
   }, [search, providerName, endpointType, loadSem]);
@@ -230,6 +262,7 @@ export function useLogs(opts: UseLogsOptions) {
     hasMore,
     total,
     error,
+    connectionLost,
     loadLogs,
     loadMore,
     addLog,

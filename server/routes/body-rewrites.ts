@@ -18,17 +18,9 @@ import {
   deleteBodyRewrite,
 } from '../config.js';
 import type { BodyRewriteRule } from '../types.js';
+import { httpStatusFromError } from './errors.js';
 import createDebug from 'debug';
 const dbg = createDebug('lucent:routes:body-rewrites');
-
-/**
- * 把 config.ts CRUD 函数抛出的 Error 翻译为 HTTP 状态码
- */
-function mapErrorToStatus(msg: string): number {
-  if (/not found/i.test(msg)) return 404;
-  if (/must|invalid|unknown key|fieldPath|pattern|flags/i.test(msg)) return 400;
-  return 500;
-}
 
 /**
  * 从 req.body 提取白名单字段（忽略 id 与未知键），并按类型归一化
@@ -86,7 +78,7 @@ export function createBodyRewritesRouter(): Router {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       dbg('创建 body 重写规则失败: %s', msg);
-      res.status(mapErrorToStatus(msg)).json({ error: msg });
+      res.status(httpStatusFromError(error)).json({ error: msg });
     }
   });
 
@@ -100,7 +92,7 @@ export function createBodyRewritesRouter(): Router {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       dbg('更新 body 重写规则失败: %s', msg);
-      res.status(mapErrorToStatus(msg)).json({ error: msg });
+      res.status(httpStatusFromError(error)).json({ error: msg });
     }
   });
 
@@ -112,7 +104,7 @@ export function createBodyRewritesRouter(): Router {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       dbg('删除 body 重写规则失败: %s', msg);
-      res.status(mapErrorToStatus(msg)).json({ error: msg });
+      res.status(httpStatusFromError(error)).json({ error: msg });
     }
   });
 

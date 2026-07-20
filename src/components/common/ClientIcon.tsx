@@ -18,12 +18,16 @@ interface ClientIconProps {
   className?: string;
 }
 
-/** 客户端品牌主色（用于 Mono 图标着色） */
+/**
+ * 客户端品牌配色（Tailwind className，修复 Bug #32 内联 style 违规）
+ * - opencode：text-* 给 Mono 图标着色（SVG 用 currentColor）
+ * - cursor/windsurf/test-client：bg-* 给兜底圆点背景
+ */
 const CLIENT_COLORS: Partial<Record<ClientType, string>> = {
-  opencode: '#10B981',    // emerald-500
-  cursor: '#A855F7',      // purple-500
-  windsurf: '#06B6D4',    // cyan-500
-  'test-client': '#F59E0B', // amber-500
+  opencode: 'text-emerald-500',     // emerald-500
+  cursor: 'bg-purple-500',          // purple-500
+  windsurf: 'bg-cyan-500',          // cyan-500
+  'test-client': 'bg-amber-500',    // amber-500
 };
 
 export function ClientIcon({ clientType, size = 14, className = '' }: ClientIconProps) {
@@ -35,7 +39,7 @@ export function ClientIcon({ clientType, size = 14, className = '' }: ClientIcon
     case 'codex':
       return <CodexColor size={size} className={className} />;
     case 'opencode':
-      return <OpenCodeMono size={size} style={{ color: CLIENT_COLORS.opencode }} className={className} />;
+      return <OpenCodeMono size={size} className={`${CLIENT_COLORS.opencode} ${className}`} />;
     case 'zcode':
       // 官方 SVG 自带深色方块 + 白 Z 配色，明暗背景均可读；object-contain 保持比例
       return (
@@ -54,12 +58,8 @@ export function ClientIcon({ clientType, size = 14, className = '' }: ClientIcon
       // 无 LobeHub 图标的客户端：用 Mono 兜底色圆点
       return (
         <span
-          className={`inline-block rounded-full ${className}`}
-          style={{
-            width: size,
-            height: size,
-            backgroundColor: CLIENT_COLORS[clientType] ?? '#9CA3AF',
-          }}
+          className={`inline-block rounded-full ${CLIENT_COLORS[clientType] ?? 'bg-gray-400'} ${className}`}
+          style={{ width: size, height: size }}
         />
       );
     default:

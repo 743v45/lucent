@@ -5,7 +5,7 @@
  * 多供应商 + 多端点结构，运行时可修改，内存缓存 + 磁盘持久化
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, DB_PATH, LOG_RETENTION_DAYS, TEMP_LOG_TTL_MINUTES } from './constants.js';
 import { ENDPOINT_TYPES, isEndpointType, isValidProviderName, PRESET_NAMES } from './types.js';
@@ -121,6 +121,17 @@ function ensureDir(): void {
   if (!existsSync(CONFIG_DIR)) {
     mkdirSync(CONFIG_DIR, { recursive: true });
   }
+}
+
+/**
+ * 深克隆配置（纯 JSON 可序列化结构，structuredClone 安全保留类型）。
+ *
+ * 用途：CRUD 写入前基于克隆构造新对象，再整体替换 cachedConfig——
+ * 避免就地 mutate 由 getConfig() 返回的共享缓存引用。
+ * 一旦 saveConfig 因磁盘满/EACCES 抛错，缓存引用仍为旧值，不与磁盘分叉。
+ */
+function cloneConfig(config: ProxyConfig): ProxyConfig {
+  return structuredClone(config);
 }
 
 /**
@@ -408,7 +419,8 @@ export function logModeEnvOverridden(): boolean {
  */
 export function setLogMode(mode: LogMode, tempTtlMinutes?: number): { logMode: LogMode; envLocked: boolean } {
   if (!isLogMode(mode)) throw new Error(`Invalid logMode: ${JSON.stringify(mode)}`);
-  const config = getConfig();
+  // 基于克隆再 mutate：写盘失败时不污染共享缓存
+  const config = cloneConfig(getConfig());
   config.logMode = mode;
   delete config.logRecording; // 归一化：落盘只保留 logMode，旧字段自然消亡
   if (tempTtlMinutes !== undefined) {
@@ -425,7 +437,7 @@ export function setLogMode(mode: LogMode, tempTtlMinutes?: number): { logMode: L
  */
 export function setRetentionDays(days: number): { retentionDays: number; envLocked: boolean } {
   if (!Number.isInteger(days) || days < 1) throw new Error('retentionDays must be a positive integer');
-  const config = getConfig();
+  const config = cloneConfig(getConfig());
   config.logRetentionDays = days;
   saveConfig(config);
   return { retentionDays: getRetentionDays(), envLocked: process.env.LUCENT_LOG_RETENTION_DAYS !== undefined };
@@ -506,15 +518,26 @@ export function getConfig(): ProxyConfig {
 }
 
 /**
- * 保存配置（更新缓存 + 写磁盘）
+ * 保存配置（写磁盘 + 更新缓存）
+ *
+ * 顺序严格为：校验 → 原子写盘 → 成功后才提交 cachedConfig。
+ * - 原子写：先 writeFileSync 到 `${CONFIG_PATH}.tmp` 再 renameSync 覆盖（POSIX rename 原子），
+ *   避免 truncate+write 中途崩溃/掉电留下半截 JSON 损坏配置。
+ * - 缓存延后提交：写盘失败（磁盘满/EACCES 等）时直接向上抛错，cachedConfig 保持旧值不被污染，
+ *   保证此后 getConfig() 返回的内存态与磁盘一致（路由层据此返回 500）。
+ *   配合 CRUD 层的 cloneConfig，校验已过但写盘失败也不会留下从未持久化的内存态。
  *
  * 写入前会做完整校验，校验失败会抛出 Error，不会写入坏数据。
  */
 export function saveConfig(config: ProxyConfig): ProxyConfig {
   validateConfig(config);
   ensureDir();
+  // 原子写：先写 .tmp 再 rename 覆盖（同目录 rename 保证同一文件系统，POSIX 原子）
+  const tmpPath = `${CONFIG_PATH}.tmp`;
+  writeFileSync(tmpPath, JSON.stringify(config, null, 2), 'utf-8');
+  renameSync(tmpPath, CONFIG_PATH);
+  // 写盘成功后才提交缓存——失败则向上抛错，缓存保持旧值不污染
   cachedConfig = config;
-  writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2), 'utf-8');
   log('配置已保存: %d providers, host=%s, proxyPort=%d', config.providers.length, config.host, config.proxyPort);
   return config;
 }
@@ -543,7 +566,7 @@ export function findProviderById(config: ProxyConfig, id: string): Provider | nu
  * 失败抛 Error：name 非法 / name 已存在 / endpoints 非法。
  */
 export function createProvider(input: Omit<Provider, 'id'>): Provider {
-  const config = getConfig();
+  const config = cloneConfig(getConfig());
   if (!isValidProviderName(input.name)) {
     throw new Error(`Invalid provider name: ${JSON.stringify(input.name)}`);
   }
@@ -572,7 +595,7 @@ export function createProvider(input: Omit<Provider, 'id'>): Provider {
  * 失败抛 Error：provider 不存在 / endpoints 非法。
  */
 export function updateProvider(id: string, updates: { endpoints?: Record<EndpointType, string | null> }): Provider {
-  const config = getConfig();
+  const config = cloneConfig(getConfig());
   const provider = findProviderById(config, id);
   if (!provider) {
     throw new Error(`Provider not found: ${id}`);
@@ -594,7 +617,7 @@ export function updateProvider(id: string, updates: { endpoints?: Record<Endpoin
  * 失败抛 Error：provider 不存在 / 新名称非法 / 新名称已被占用。
  */
 export function renameProvider(id: string, newName: string): Provider {
-  const config = getConfig();
+  const config = cloneConfig(getConfig());
   if (!isValidProviderName(newName)) {
     throw new Error(`Invalid provider name: ${JSON.stringify(newName)}`);
   }
@@ -623,7 +646,7 @@ export function renameProvider(id: string, newName: string): Provider {
  * 失败抛 Error：provider 不存在 / 只剩一个不能删。
  */
 export function deleteProvider(id: string): void {
-  const config = getConfig();
+  const config = cloneConfig(getConfig());
   if (config.providers.length <= 1) {
     throw new Error('Cannot delete the last provider');
   }
@@ -650,7 +673,7 @@ export function getBodyRewrites(): BodyRewriteRule[] {
  * 失败抛 Error：fieldPath 非法 / pattern 非法正则 / 未知键 / flags 非法（信息带定位）。
  */
 export function addBodyRewrite(input: Omit<BodyRewriteRule, 'id'>): BodyRewriteRule {
-  const config = getConfig();
+  const config = cloneConfig(getConfig());
   const newRule: BodyRewriteRule = { id: randomUUID(), ...input };
   const list = [...(config.bodyRewrites ?? []), newRule];
   validateBodyRewrites(list);
@@ -665,7 +688,7 @@ export function addBodyRewrite(input: Omit<BodyRewriteRule, 'id'>): BodyRewriteR
  * 失败抛 Error：规则不存在 / 校验失败。
  */
 export function updateBodyRewrite(id: string, patch: Partial<Omit<BodyRewriteRule, 'id'>>): BodyRewriteRule {
-  const config = getConfig();
+  const config = cloneConfig(getConfig());
   const list = config.bodyRewrites ?? [];
   const idx = list.findIndex(r => r.id === id);
   if (idx === -1) {
@@ -685,7 +708,7 @@ export function updateBodyRewrite(id: string, patch: Partial<Omit<BodyRewriteRul
  * 失败抛 Error：规则不存在。
  */
 export function deleteBodyRewrite(id: string): void {
-  const config = getConfig();
+  const config = cloneConfig(getConfig());
   const list = config.bodyRewrites ?? [];
   const idx = list.findIndex(r => r.id === id);
   if (idx === -1) {

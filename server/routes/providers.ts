@@ -27,6 +27,7 @@ import {
 import { isEndpointType, PRESET_NAMES, type EndpointType, type Provider } from '../types.js';
 import { PROTOCOL_REGISTRY } from '../../shared/protocols.js';
 import { getStrippedPaths } from '../endpoint-registry.js';
+import { httpStatusFromError } from './errors.js';
 import createDebug from 'debug';
 const dbg = createDebug('lucent:routes:providers');
 
@@ -45,16 +46,6 @@ function normalizeEndpoints(input: unknown): Provider['endpoints'] {
     'openai-responses': pick('openai-responses'),
     'anthropic-messages': pick('anthropic-messages'),
   };
-}
-
-/**
- * 把 worker-1 CRUD 工具函数抛出的 Error 翻译为 HTTP 错误响应
- */
-function mapErrorToStatus(msg: string): number {
-  if (/already exists/i.test(msg)) return 409;
-  if (/not found/i.test(msg)) return 404;
-  if (/Invalid|Cannot|must/i.test(msg)) return 400;
-  return 500;
 }
 
 export function createProvidersRouter(): Router {
@@ -100,7 +91,7 @@ export function createProvidersRouter(): Router {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       dbg('创建 provider 失败: %s', msg);
-      res.status(mapErrorToStatus(msg)).json({ error: msg });
+      res.status(httpStatusFromError(error)).json({ error: msg });
     }
   });
 
@@ -121,7 +112,7 @@ export function createProvidersRouter(): Router {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       dbg('更新 provider 失败: %s', msg);
-      res.status(mapErrorToStatus(msg)).json({ error: msg });
+      res.status(httpStatusFromError(error)).json({ error: msg });
     }
   });
 
@@ -136,7 +127,7 @@ export function createProvidersRouter(): Router {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       dbg('删除 provider 失败: %s', msg);
-      res.status(mapErrorToStatus(msg)).json({ error: msg });
+      res.status(httpStatusFromError(error)).json({ error: msg });
     }
   });
 
@@ -158,7 +149,7 @@ export function createProvidersRouter(): Router {
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       dbg('重命名 provider 失败: %s', msg);
-      res.status(mapErrorToStatus(msg)).json({ error: msg });
+      res.status(httpStatusFromError(error)).json({ error: msg });
     }
   });
 

@@ -363,9 +363,17 @@ export async function readLogs(query: LogsQuery = {}): Promise<LogsResult> {
         dbg('body 缺失 rowid=%d id=%s（跳过）', r.rowid, r.id);
         return null;
       }
-      const log = reconstructEntry(r, b.request, b.response);
-      applyContextCache(log);
-      return log;
+      // 单条 body 损坏（JSON.parse 失败）不应炸整页（Bug #6）：否则冒泡到外层 catch 把整页
+      // 变成 logs:[]，与「body 缺失就跳过」的优雅降级不一致。这里包 try/catch，失败 dbg + 返回 null，
+      // 复用下游 .filter 跳过 null 管线。
+      try {
+        const log = reconstructEntry(r, b.request, b.response);
+        applyContextCache(log);
+        return log;
+      } catch (error) {
+        dbg('reconstructEntry 失败 rowid=%d id=%s（跳过）: %O', r.rowid, r.id, error);
+        return null;
+      }
     }).filter((l): l is LogEntry => l !== null);
 
     return { logs, total, nextCursor, hasMore };
@@ -382,6 +390,8 @@ export async function getLogById(id: string): Promise<LogEntry | null> {
   try {
     const raw = getLogByIdRaw(getDb(), id);
     if (!raw) return null;
+    // reconstructEntry 对坏 JSON 仍会抛（详见 readLogs map 回调的防御注释，Bug #6）；
+    // 此处外层 catch 已兜底返回 null，单条详情损坏不会冒泡成 500。
     const log = reconstructEntry(raw.row, raw.request, raw.response);
     applyContextCache(log);
     return log;

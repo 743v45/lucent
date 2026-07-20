@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { Empty, Input, Select, Spin, Switch, Typography } from 'antd';
 import { MagnifyingGlassIcon } from '@heroicons/react/24/outline';
 import type { LogEntry, AgentType, Provider, EndpointType } from '../../types';
@@ -74,6 +74,14 @@ function formatExpiresIn(expiresAt: string): string {
   const min = Math.ceil(ms / 60000);
   if (min < 60) return `临时日志，约 ${min} 分钟后自动清理`;
   return `临时日志，约 ${Math.floor(min / 60)}h${min % 60}m 后自动清理`;
+}
+
+/**
+ * 「仅存档」过滤纯函数：archiveOnly 时隐藏临时行（expiresAt 非空）。
+ * 导出便于 node 环境单测（组件依赖 antd，node 不易直接渲染）。
+ */
+export function filterArchiveLogs(logs: LogEntry[], archiveOnly: boolean): LogEntry[] {
+  return archiveOnly ? logs.filter((l) => !l.expiresAt) : logs;
 }
 
 /** 时间 hover 显示完整日期的组件（模块顶层，避免每次渲染重建类型） */
@@ -374,10 +382,19 @@ export function LogListPanel({
   // 滚动容器引用：用于检测「内容不足以产生纵向滚动条」
   const scrollRef = useRef<HTMLDivElement>(null);
 
+  // 根容器引用：宽度走 CSS 变量驱动（根 className 用 Tailwind 任意值 w-[var(--sidebar-width)]），
+  // 避免内联 style 直写 width（low#11：项目禁手写 CSS / 内联 style）。
+  // 仅此处命令式注入变量值，宽度本身由 Tailwind 任意值类名控制——用 useLayoutEffect 在 paint 前落值，避免首帧 var 缺失闪动。
+  const rootRef = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    rootRef.current?.style.setProperty('--sidebar-width', `${width}px`);
+  }, [width]);
+
   // 「仅存档」过滤：隐藏临时行（expiresAt 非空）。仅当列表含临时数据时才显示开关。
   const [archiveOnly, setArchiveOnly] = useState(false);
+  // 渲染用列表：archiveOnly 时过滤掉临时行。空态判定也走它（Bug #20：原误用 logs.length）
   const displayLogs = useMemo(
-    () => (archiveOnly ? logs.filter((l) => !l.expiresAt) : logs),
+    () => filterArchiveLogs(logs, archiveOnly),
     [logs, archiveOnly],
   );
   const hasTemporary = logs.some((l) => l.expiresAt);
@@ -385,18 +402,21 @@ export function LogListPanel({
   // 方案 A（无感兜底）：筛选后匹配行太少、首屏撑不出滚动条时，onScroll 永不触发，
   // 更早的匹配日志就翻不出来。这里在每次渲染后检测——若不可滚动且仍有更多数据，
   // 自动补拉下一页，直到出现滚动条或数据耗尽。loadMore 自身有 loadingMore/hasMore 双守卫，不会重复加载。
+  // Bug #20：archiveOnly 时跳过——过滤后行数稀薄撑不出滚动条会反复触发 onLoadMore（补拉到的临时行仍被过滤），
+  // 形成一页页拉空的风暴；存档行若需更多可用手动「加载更多」。
   useEffect(() => {
+    if (archiveOnly) return;
     if (loading || loadingMore || !hasMore) return;
     const el = scrollRef.current;
     if (!el || el.scrollHeight > el.clientHeight) return; // 已能滚动，交给 onScroll
     onLoadMore();
-  }, [logs, hasMore, loadingMore, loading, onLoadMore]);
+  }, [logs, hasMore, loadingMore, loading, onLoadMore, archiveOnly]);
 
   return (
     <div
+      ref={rootRef}
       data-testid="log-list-panel"
-      className="h-full flex flex-col border-r border-border-subtle bg-bg-panel shrink-0"
-      style={{ width }}
+      className="h-full flex flex-col border-r border-border-subtle bg-bg-panel shrink-0 w-[var(--sidebar-width)]"
     >
       {/* Header */}
       <div className="px-4 py-3 border-b border-border-subtle flex items-center gap-2 min-w-0">
@@ -503,7 +523,7 @@ export function LogListPanel({
         <div data-testid="log-loading" className="flex-1 flex items-center justify-center min-h-[200px]">
           <Spin tip="加载中..." />
         </div>
-      ) : logs.length === 0 ? (
+      ) : displayLogs.length === 0 ? (
         <div data-testid="log-empty" className="flex-1 flex items-center justify-center min-h-[200px]">
           <Empty
             description="暂无通信记录"

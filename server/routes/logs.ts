@@ -77,9 +77,11 @@ export function createLogsRouter(options: {
   // GET /api/logs
   router.get('/api/logs', async (req, res) => {
     try {
+      // 只支持 keyset cursor 翻页：LogReader.readLogs 不读 offset（传了也被忽略），
+      // 故路由不再收集 offset——避免 API 对外假宣称支持 offset 翻页（调用方按 offset 翻页会一直拿到首页）。
+      // 未知/废弃 query（如 offset）静默忽略，不报错。
       const query: LogsQuery = {
         limit: parseInt(req.query.limit as string) || 100,
-        offset: parseInt(req.query.offset as string) || 0,
         cursor: req.query.cursor as string | undefined,
         agentType: (req.query.agentType as LogsQuery['agentType']) || 'all',
         providerName: req.query.providerName as string | undefined,
@@ -156,8 +158,10 @@ export function createLogsRouter(options: {
   // POST /api/logs/export
   router.post('/api/logs/export', (req, res) => {
     try {
-      const { includeMeta = false } = req.body ?? {};
-      const format = req.body?.format ?? 'jsonl';
+      // 无 body / 非 JSON Content-Type 时 req.body 为 undefined——先 ?? {} 守卫，杜绝裸解构 TypeError 被吞 500（low#7）
+      const body = req.body ?? {};
+      const { includeMeta = false } = body;
+      const format = body.format ?? 'jsonl';
       // format 白名单：仅允许 jsonl / markdown，杜绝拼接注入（如 'jsonl/../../../foo'）
       if (format !== 'jsonl' && format !== 'markdown') {
         res.status(400).json({ error: 'Invalid format, must be jsonl or markdown' });
@@ -183,7 +187,9 @@ export function createLogsRouter(options: {
   // POST /api/logs/import
   router.post('/api/logs/import', (req, res) => {
     try {
-      const { filePath, merge = true, validate = true } = req.body ?? {};
+      // 同 export：req.body 缺失先 ?? {} 守卫（low#7）
+      const body = req.body ?? {};
+      const { filePath, merge = true, validate = true } = body;
       if (!filePath || typeof filePath !== 'string') {
         res.status(400).json({ error: 'File path is required' });
         return;

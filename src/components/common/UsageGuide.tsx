@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { Modal, Button, message } from 'antd';
 import { CopyOutlined, CheckOutlined } from '@ant-design/icons';
 import { getProxyStatus } from '../../utils/api';
+import { buildAccessUrl } from '../../utils/access-url';
 import { DEFAULT_PROXY_PORT, COPIED_FEEDBACK_DURATION_MS } from '../../constants';
 import type { EndpointType } from '../../types';
 
@@ -24,9 +25,6 @@ const CLIENT_NAME_FOR_ENDPOINT: Record<EndpointType, string> = {
   'openai-chat': 'Codex / OpenAI',
   'openai-responses': 'Codex / OpenAI',
 };
-
-/** OpenAI 端点需要额外加 /v1 后缀 */
-const NEEDS_V1_SUFFIX: Set<EndpointType> = new Set(['openai-chat', 'openai-responses']);
 
 export interface AccessLine {
   providerName: string;
@@ -67,9 +65,15 @@ export function buildAccessLines(
       const endpointUrl = provider.endpoints[endpointType];
       if (!endpointUrl) continue;
       const envVar = ENV_VAR_FOR_ENDPOINT[endpointType];
-      const suffix = NEEDS_V1_SUFFIX.has(endpointType) ? '/v1' : '';
-      const prefix = provider.presetName ? '' : 'custom/';
-      const cmd = `export ${envVar}=http://${host}:${port}/${prefix}${provider.name}${suffix}`;
+      // 接入地址拼接收敛到共享纯函数 buildAccessUrl（修复 Bug #33 两处拼接漂移）
+      const accessUrl = buildAccessUrl({
+        name: provider.name,
+        presetName: provider.presetName,
+        endpointType,
+        host,
+        port,
+      });
+      const cmd = `export ${envVar}=${accessUrl}`;
       // cmd 含 provider name（全局唯一），同一 cmd 只可能来自同一供应商，
       // 故按 cmd 去重只会合并同一供应商的 openai-chat / openai-responses。
       if (seenCmd.has(cmd)) continue;

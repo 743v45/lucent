@@ -259,7 +259,9 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         // 上游超时护栏：为每次转发构造 AbortController，
         // - 响应头超时（HEADER_TIMEOUT_MS）：fetch 等待响应头过久 → abort，防上游 stall 空挂主链路
         // - 流式 idle 超时（STREAM_IDLE_TIMEOUT_MS）：透传期间上游久无新数据 → abort
-        // - 客户端断开：res close 时 abort，取消未完成的上游 fetch，避免上游按 token 计费的配额被空烧
+        // - 客户端断开：res close 时 abort，取消未完成的上游 fetch，避免上游按 token 计费的配额被空烧；
+        //   fetch abort 还会让 response.body 源流 error 并全量传播到 tee 的两个 branch，
+        //   使后台日志副链路（collectSSELinesInBackground 消费 logBranch）立即停止，不再被拖到 SSE 收集超时
         const controller = new AbortController();
         fetchOptions.signal = controller.signal;
 
@@ -353,8 +355,12 @@ export async function startProxyServer(options?: { port?: number; host?: string 
             },
           });
 
-          // 客户端中途断开：停 idle timer + 销毁上游流（让断开传播到上游，避免后台 tee 提取悬挂）；
-          // controller.abort 由外层早期 res.on('close') 统一触发（流式期间 upstreamDone 仍为 false）
+          // 客户端中途断开：停 idle timer + 销毁 nodeStream（释放 clientBody 分支，及时拆掉本地透传管线）。
+          // 真正终止上游连接 + 后台 tee 日志提取的是 controller.abort()（由上方早期 res.on('close') 在
+          // upstreamDone 仍为 false 时触发）：fetch abort → response.body 源流 error → tee 两个 branch
+          // 同时 error（WHATWG Streams「源 error 全量传播」，区别于消费端「两 branch 都 cancel 才取消源」
+          // 的语义），故 logBranch（collectSSELinesInBackground）随即停止、上游 socket 关闭。
+          // 注意：单独 destroy nodeStream 只 cancel 了 clientBody，不会取消 tee 源——必须靠 controller.abort 兜底。
           res.on('close', () => {
             if (idleTimer !== null) {
               clearTimeout(idleTimer);

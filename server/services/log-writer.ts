@@ -120,14 +120,21 @@ export function writeLogEntry(entry: RawLogEntry): void {
  */
 export async function drainWriteQueue(): Promise<void> {
   let timedOut = false;
+  let timerHandle: NodeJS.Timeout | undefined;
   const timer = new Promise<void>(resolve => {
-    setTimeout(() => {
+    timerHandle = setTimeout(() => {
       timedOut = true;
       resolve();
     }, DRAIN_TIMEOUT_MS);
   });
 
-  await Promise.race([writeQueue, timer]);
+  try {
+    await Promise.race([writeQueue, timer]);
+  } finally {
+    // writeQueue 先 resolve 时主动清掉超时 timer（Bug #5）：否则 timer 句柄残留，
+    // shutdown 被动延迟最长 DRAIN_TIMEOUT_MS 才退出。
+    if (timerHandle) clearTimeout(timerHandle);
+  }
 
   if (timedOut) {
     dbg('drainWriteQueue 超时 %dms，放弃等待挂起写入继续退出', DRAIN_TIMEOUT_MS);

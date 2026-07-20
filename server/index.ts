@@ -6,6 +6,7 @@
  */
 
 import express from 'express';
+import type { Request, Response } from 'express';
 import compression from 'compression';
 import { createServer as createHttpServer } from 'node:http';
 import { join } from 'node:path';
@@ -41,8 +42,21 @@ let retentionTimer: NodeJS.Timeout | null = null;
 
 // ==================== Express 应用 ====================
 
+/**
+ * compression 过滤器：SSE（text/event-stream）强制不压缩（Bug #13）。
+ *
+ * 默认 compression.filter 用 compressible 判定，text/event-stream 被判为可压缩 → SSE 分块写入
+ * 被 zlib 缓冲，实时推送退化成成批到达、心跳长时间收不到。这里在默认判定前短路 SSE → false，
+ * 其余 Content-Type 仍走默认口径。导出以便单测。
+ */
+export function sseAwareCompressionFilter(req: Request, res: Response): boolean {
+  const ct = String(res.getHeader('Content-Type') || '');
+  if (ct.includes('text/event-stream')) return false;
+  return compression.filter(req, res);
+}
+
 const app = express();
-app.use(compression());
+app.use(compression({ filter: sseAwareCompressionFilter }));
 app.use(express.json());
 
 // 静态文件服务
@@ -168,18 +182,21 @@ export async function shutdownServer(): Promise<void> {
   // 停掉临时日志清理定时器（temp-cleanup-scheduler）
   stopTempCleanupTimer();
 
-  // 等待后台 SSE 任务完成，确保数据不丢失
+  // 先停代理入口：拒绝新请求、等在途请求完成（其日志会经 writeLogEntry 入写队列）。
+  // 必须在 closeDb 之前（Bug #4）：否则在途请求完成后走 insertLog(getDb())，此时 DB 已关，
+  // getDb() 抛错被 enqueue 吞掉 → 日志丢失。
+  if (proxyServer) {
+    await proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));
+    proxyServer = null;
+  }
+
+  // 等待后台 SSE 任务完成（它们会把最终日志入写队列），确保数据不丢失
   await drainPendingSSETasks();
 
   // 等待所有挂起的日志写入完成
   await drainWriteQueue();
   // 关闭数据库（WAL checkpoint 落盘）
   closeDb();
-
-  if (proxyServer) {
-    await proxyServer.stop().catch(err => dbg('关闭代理服务器失败: %O', err));
-    proxyServer = null;
-  }
 
   server.close();
 }

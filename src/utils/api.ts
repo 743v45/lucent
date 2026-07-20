@@ -2,23 +2,70 @@
  * API 工具函数
  */
 
-import type { Provider, EndpointType, BodyRewriteRule } from '../types';
+import type {
+  Provider,
+  EndpointType,
+  BodyRewriteRule,
+  RequestData,
+  ResponseData,
+  AgentType,
+  ClientType,
+  TokenUsage,
+  Metadata,
+  KVCacheInfo,
+  ContextData,
+} from '../types';
 import { API_BASE_PATH } from '../constants';
 
 /**
- * 通用请求函数
+ * /logs 接口返回的单条日志原始形状（对齐运行时实际字段）。
+ * 供 getLogs 返回类型与 useLogs.formatLog 入参共享，避免 type narrowing 丢失字段
+ * （tokenUsage / kvCache / context / threadId / expiresAt 等十余字段）后被 `as` 强制断言。
  */
-async function request<T>(
+export interface ApiLog {
+  id: string;
+  timestamp: string;
+  request: RequestData;
+  response: ResponseData;
+  agentType: AgentType;
+  apiType?: EndpointType;
+  clientType?: ClientType;
+  duration: number;
+  ttftFirstTokenMs?: number;
+  ttftThinkingMs?: number;
+  ttftAnswerMs?: number;
+  tokensPerSecond?: number;
+  tokenUsage?: TokenUsage;
+  metadata: Metadata;
+  kvCache?: KVCacheInfo;
+  context?: ContextData;
+  error?: string;
+  isTest?: boolean;
+  providerName?: string;
+  threadId?: string;
+  endpointType?: EndpointType;
+  expiresAt?: string;
+}
+
+/**
+ * 通用请求函数
+ *
+ * headers 合并：先解构出 options.headers，再把默认 Content-Type 与调用方 headers
+ * 合并到最后。尾部 ...options 不能再覆盖 headers（low#12：原写法 ...options 在 headers
+ * 之后会整体击穿默认 Content-Type）。
+ */
+export async function request<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
   const url = `${API_BASE_PATH}${endpoint}`;
+  const { headers, ...rest } = options;
   const response = await fetch(url, {
+    ...rest,
     headers: {
       'Content-Type': 'application/json',
-      ...options.headers,
+      ...headers,
     },
-    ...options,
   });
 
   if (!response.ok) {
@@ -91,47 +138,7 @@ export async function getLogs(params?: {
   total: number;
   nextCursor: string | null;
   hasMore: boolean;
-  logs: Array<{
-    id: string;
-    timestamp: string;
-    request: {
-      method: string;
-      url: string;
-      headers: Record<string, string>;
-      body: {
-        model: string;
-        messages: Array<{
-          role: string;
-          content: string | unknown;
-        }>;
-      };
-    };
-    response: {
-      status: number;
-      statusText: string;
-      headers: Record<string, string>;
-      body: {
-        id: string;
-        type: string;
-        role: string;
-        content: unknown;
-        usage?: {
-          input_tokens: number;
-          output_tokens: number;
-          cache_creation_tokens?: number;
-          cache_read_tokens?: number;
-        };
-      };
-    };
-    agentType: string;
-    duration: number;
-    metadata: {
-      model: string;
-      provider: string;
-      stream: boolean;
-    };
-    error?: string;
-  }>;
+  logs: ApiLog[];
 }> {
   const qs = new URLSearchParams();
   if (params?.limit) qs.set('limit', String(params.limit));

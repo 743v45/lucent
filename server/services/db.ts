@@ -186,6 +186,24 @@ export function buildSearchText(entry: RawLogEntry): string {
   return parts.join('\n');
 }
 
+// ==================== 预编译语句缓存 ====================
+//
+// #8 热路径性能：interceptor 每条日志走 insertLogInner（3 条语句），list/search 每请求
+// 重新 prepare。better-sqlite3 的 prepare 会编译 SQL，重复 prepare 同一串是纯浪费。
+// 这里按「Database 实例 + SQL 字符串」缓存 Statement：首次 prepareCached 编译并缓存，
+// 后续命中缓存直接 run/get/all。
+// 用 WeakMap 按 DB 实例隔离——测试与多库场景下每个 DB 各自一套缓存，DB 释放后自动回收。
+const stmtCache = new WeakMap<DB, Map<string, Database.Statement>>();
+
+/** 取（或首次编译并缓存）某条 SQL 在该 DB 上的预编译语句 */
+function prepareCached(db: DB, sql: string): Database.Statement {
+  let m = stmtCache.get(db);
+  if (!m) { m = new Map(); stmtCache.set(db, m); }
+  let s = m.get(sql);
+  if (!s) { s = db.prepare(sql); m.set(sql, s); }
+  return s;
+}
+
 // ==================== 写入 ====================
 
 const INSERT_LOG = `
@@ -235,14 +253,14 @@ function toLogParams(entry: RawLogEntry): Record<string, unknown> {
  * 返回是否实际写入（false = 因 id 重复跳过）。
  */
 function insertLogInner(db: DB, entry: RawLogEntry): boolean {
-  const info = db.prepare(INSERT_LOG).run(toLogParams(entry));
+  const info = prepareCached(db, INSERT_LOG).run(toLogParams(entry));
   if (info.changes === 0) return false; // id 已存在，幂等跳过
   const rowid = Number(info.lastInsertRowid);
   const request = JSON.stringify({ method: entry.method ?? 'GET', url: entry.url ?? '', headers: entry.headers ?? {}, body: entry.body });
   const response = JSON.stringify(entry.response);
   const search_text = buildSearchText(entry);
-  db.prepare(INSERT_BODY).run(rowid, request, response, search_text);
-  db.prepare(INSERT_FTS).run(rowid, search_text);
+  prepareCached(db, INSERT_BODY).run(rowid, request, response, search_text);
+  prepareCached(db, INSERT_FTS).run(rowid, search_text);
   return true;
 }
 
@@ -287,6 +305,10 @@ export function insertLogsBatch(db: DB, entries: RawLogEntry[]): { imported: num
  *
  * 注：自 2026-07-09 起不再在启动时自动调用（见
  * openspec/changes/2026-07-09-stop-startup-migration），仅作手动/一次性迁移工具保留。
+ *
+ * onProgress 语义（low#5 修正）：流式逐文件处理，无预扫描，无法预知条目总量——
+ * 故 total 实为「已处理累计条数」，与 done 相等。调用方不应据 total 当分母算百分比
+ * （会永远 100%）；done 同为已处理累计条数，随文件处理单调递增。如需真实总量，请调用前自行预统计。
  */
 export function migrateFromJsonl(
   db: DB,
@@ -341,6 +363,7 @@ export function migrateFromJsonl(
       }
     }
     if (batch.length) tx(batch);
+    // low#5: done/total 均传「已处理累计条数」（流式无预扫描，无法预知总量；见函数 JSDoc）
     if (onProgress) onProgress(imported + skipped, imported + skipped, file);
   }
 
@@ -420,7 +443,7 @@ export function listLogs(
   const filterClause = filterWhere.length ? `WHERE ${filterWhere.join(' AND ')}` : '';
 
   // total：全量命中数（不含 keyset 限制，供「N 条」展示）
-  const total = (db.prepare(`SELECT COUNT(*) AS c FROM logs ${filterClause}`).get(...filterParams) as { c: number }).c;
+  const total = (prepareCached(db, `SELECT COUNT(*) AS c FROM logs ${filterClause}`).get(...filterParams) as { c: number }).c;
 
   const cur = decodeCursor(opts.cursor);
   // 显式 offset（bench / 旧调用）走 OFFSET；否则 keyset（首页无 cursor、续页有 cursor，LIMIT+1 探测 hasMore）
@@ -429,7 +452,8 @@ export function listLogs(
     const params = [...filterParams];
     if (cur) { where.push('(timestamp < ? OR (timestamp = ? AND id < ?))'); params.push(cur.ts, cur.ts, cur.id); }
     const clause = where.length ? `WHERE ${where.join(' AND ')}` : '';
-    const rows = db.prepare(
+    const rows = prepareCached(
+      db,
       `SELECT ${LOG_COLS} FROM logs ${clause} ORDER BY timestamp DESC, id DESC LIMIT ?`,
     ).all(...params, opts.limit + 1) as LogRow[];
     const hasMore = rows.length > opts.limit;
@@ -440,7 +464,8 @@ export function listLogs(
   }
 
   // OFFSET 旧模式
-  const logs = db.prepare(
+  const logs = prepareCached(
+    db,
     `SELECT ${LOG_COLS} FROM logs ${filterClause} ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`,
   ).all(...filterParams, opts.limit, opts.offset ?? 0) as LogRow[];
   return { logs, total, nextCursor: null, hasMore: logs.length >= opts.limit };
@@ -467,8 +492,8 @@ export function searchLogs(
 
   // total：全量命中数（不含 keyset 限制）
   const total = useFts
-    ? (db.prepare(`SELECT COUNT(*) AS c FROM logs_fts f JOIN logs l ON l.rowid = f.rowid WHERE logs_fts MATCH ? ${andFilter}`).get(buildFtsQuery(trimmed), ...filterParams) as { c: number }).c
-    : (db.prepare(`SELECT COUNT(*) AS c FROM log_bodies b JOIN logs l ON l.rowid = b.log_rowid WHERE b.search_text LIKE ? ${andFilter}`).get(`%${trimmed}%`, ...filterParams) as { c: number }).c;
+    ? (prepareCached(db, `SELECT COUNT(*) AS c FROM logs_fts f JOIN logs l ON l.rowid = f.rowid WHERE logs_fts MATCH ? ${andFilter}`).get(buildFtsQuery(trimmed), ...filterParams) as { c: number }).c
+    : (prepareCached(db, `SELECT COUNT(*) AS c FROM log_bodies b JOIN logs l ON l.rowid = b.log_rowid WHERE b.search_text LIKE ? ${andFilter}`).get(`%${trimmed}%`, ...filterParams) as { c: number }).c;
 
   const baseFrom = useFts
     ? `FROM logs_fts f JOIN logs l ON l.rowid = f.rowid WHERE logs_fts MATCH ?`
@@ -477,7 +502,8 @@ export function searchLogs(
 
   if (opts.offset == null || cur) {
     // keyset：首页无 cursor、续页有 cursor；LIMIT+1 探测 hasMore
-    const rows = db.prepare(
+    const rows = prepareCached(
+      db,
       `SELECT ${LOG_COLS_L} ${baseFrom} ${andFilter} ${andKeyset} ORDER BY l.timestamp DESC, l.id DESC LIMIT ?`,
     ).all(leadParam, ...filterParams, ...keysetParams, opts.limit + 1) as LogRow[];
     const hasMore = rows.length > opts.limit;
@@ -488,7 +514,8 @@ export function searchLogs(
   }
 
   // OFFSET 旧模式
-  const logs = db.prepare(
+  const logs = prepareCached(
+    db,
     `SELECT ${LOG_COLS_L} ${baseFrom} ${andFilter} ORDER BY l.timestamp DESC, l.id DESC LIMIT ? OFFSET ?`,
   ).all(leadParam, ...filterParams, opts.limit, opts.offset ?? 0) as LogRow[];
   return { logs, total, nextCursor: null, hasMore: logs.length >= opts.limit };
@@ -551,36 +578,39 @@ export function clearAllLogs(db: DB): number {
 
 // ==================== 保留期清理 ====================
 
-/** 删除早于 cutoff 的日志（级联 log_bodies + 手动删 FTS） */
-export function deleteOldLogs(db: DB, cutoffISO: string): number {
+/**
+ * 按谓词批量删除日志（#7 子查询驱动 + low#4 抽公共 helper）。
+ *
+ * 同一事务内发两条参数化语句，避免旧实现「SELECT rowid → JS 拼 IN 字面量」
+ * （保留期清理一次删几千上万行时字面量 SQL 串会很大）：
+ *   1. DELETE FROM logs_fts WHERE rowid IN (SELECT rowid FROM logs WHERE <whereClause>)
+ *   2. DELETE FROM logs WHERE <whereClause>   -- ON DELETE CASCADE 清 log_bodies
+ *
+ * 顺序关键：必须先删 FTS 再删 logs——删 logs 后子查询 SELECT rowid 将返回空。
+ * 返回实际删除的 logs 行数（第二条 DELETE 的 changes）。
+ */
+function deleteLogsByPredicate(db: DB, whereClause: string, whereParams: unknown[]): number {
   const tx = db.transaction(() => {
-    const rowids = db.prepare(`SELECT rowid FROM logs WHERE timestamp < ?`).all(cutoffISO) as { rowid: number }[];
-    if (rowids.length === 0) return 0;
-    const idList = rowids.map(r => r.rowid).join(',');
-    db.prepare(`DELETE FROM logs_fts WHERE rowid IN (${idList})`).run();
-    db.prepare(`DELETE FROM logs WHERE rowid IN (${idList})`).run(); // ON DELETE CASCADE 清 log_bodies
-    return rowids.length;
+    prepareCached(db, `DELETE FROM logs_fts WHERE rowid IN (SELECT rowid FROM logs WHERE ${whereClause})`).run(...whereParams);
+    const info = prepareCached(db, `DELETE FROM logs WHERE ${whereClause}`).run(...whereParams); // ON DELETE CASCADE 清 log_bodies
+    return info.changes;
   });
-  const n = tx();
+  return tx();
+}
+
+/** 删除早于 cutoff 的日志（级联 log_bodies + 子查询删 FTS） */
+export function deleteOldLogs(db: DB, cutoffISO: string): number {
+  const n = deleteLogsByPredicate(db, 'timestamp < ?', [cutoffISO]);
   dbg('保留期清理: 删除 %d 行 (cutoff=%s)', n, cutoffISO);
   return n;
 }
 
 /**
  * 删除已过期的临时日志（expires_at 非空且早于 nowISO）。
- * 与 deleteOldLogs 同结构（事务 + 级联 log_bodies + 手动删 FTS），仅 WHERE 不同；
  * WHERE 带 `expires_at IS NOT NULL` 保护存档数据（NULL）绝不被误删。
  */
 export function deleteExpiredLogs(db: DB, nowISO: string): number {
-  const tx = db.transaction(() => {
-    const rowids = db.prepare(`SELECT rowid FROM logs WHERE expires_at IS NOT NULL AND expires_at < ?`).all(nowISO) as { rowid: number }[];
-    if (rowids.length === 0) return 0;
-    const idList = rowids.map(r => r.rowid).join(',');
-    db.prepare(`DELETE FROM logs_fts WHERE rowid IN (${idList})`).run();
-    db.prepare(`DELETE FROM logs WHERE rowid IN (${idList})`).run(); // ON DELETE CASCADE 清 log_bodies
-    return rowids.length;
-  });
-  const n = tx();
+  const n = deleteLogsByPredicate(db, 'expires_at IS NOT NULL AND expires_at < ?', [nowISO]);
   dbg('临时日志清理: 删除 %d 行 (now=%s)', n, nowISO);
   return n;
 }

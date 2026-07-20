@@ -44,9 +44,11 @@ export function mergeThreadLogs(fullLogs: LogEntry[] | null, freshLogs: LogEntry
   const base = fullLogs ?? freshLogs;
   const seen = new Set(base.map(l => l.id));
   const fresh = freshLogs.filter(l => !seen.has(l.id));
-  return [...base, ...fresh].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-  );
+  // 预计算时间戳再排序，避免 comparator 内 O(n log n) 次反复 new Date()
+  return [...base, ...fresh]
+    .map(l => ({ log: l, t: new Date(l.timestamp).getTime() }))
+    .sort((a, b) => a.t - b.t)
+    .map(x => x.log);
 }
 
 /** 汇总一个会话的行集：请求数 / 末条 main 消息数 / token 总和 */
@@ -83,36 +85,46 @@ function deriveTitle(logs: LogEntry[]): string {
  * 返回 groups 按 startTime 倒序（最新会话在前）。
  */
 export function groupByThread(logs: LogEntry[]): GroupResult {
-  // 统一升序，便于组内展示与 sub 附属判定
-  const ascending = [...logs].sort(
-    (a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime(),
-  );
+  // 预计算每条日志时间戳并按时间升序，后续排序/二分/附属判定全部复用预计算值，
+  // 避免 comparator 内 O(n log n) 次反复 new Date()（low#13）。
+  const withTime = logs
+    .map(l => ({ log: l, t: new Date(l.timestamp).getTime() }))
+    .sort((a, b) => a.t - b.t);
 
   const byThread = new Map<string, LogEntry[]>();
-  // 各 thread 首条 main 的时间，用于 sub 邻近附属判定
+  // 各 thread 首条 main 的时间，用于 sub 邻近附属判定；随 withTime 升序构建，天然有序
   const threadStart: { threadId: string; time: number }[] = [];
-  for (const log of ascending) {
+  for (const { log, t } of withTime) {
     if (!log.threadId) continue;
     if (!byThread.has(log.threadId)) {
       byThread.set(log.threadId, []);
-      threadStart.push({ threadId: log.threadId, time: new Date(log.timestamp).getTime() });
+      threadStart.push({ threadId: log.threadId, time: t });
     }
     byThread.get(log.threadId)!.push(log);
   }
-  threadStart.sort((a, b) => a.time - b.time);
+  // threadId → 首条时间，供 groups 排序复用，避免 comparator 内 new Date()
+  const startMs = new Map(threadStart.map(s => [s.threadId, s.time]));
 
-  // 无 threadId 的 sub：归属时间不晚于它的最近 main 会话
+  // 无 threadId 的 sub：二分查找时间不晚于它的最近 main 会话（low#10，原线性扫描 O(subs×threads)）
   const subAssign = new Map<string, LogEntry[]>();
   const ungrouped: LogEntry[] = [];
-  for (const log of ascending) {
+  for (const { log, t } of withTime) {
     if (log.threadId) continue;
-    const t = new Date(log.timestamp).getTime();
-    let target: string | undefined;
-    for (const ts of threadStart) {
-      if (ts.time <= t) target = ts.threadId;
-      else break;
+    // 升序 threadStart 中找最大 time <= t：标准右侧二分
+    let lo = 0;
+    let hi = threadStart.length - 1;
+    let idx = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (threadStart[mid].time <= t) {
+        idx = mid;
+        lo = mid + 1;
+      } else {
+        hi = mid - 1;
+      }
     }
-    if (target) {
+    if (idx >= 0) {
+      const target = threadStart[idx].threadId;
       if (!subAssign.has(target)) subAssign.set(target, []);
       subAssign.get(target)!.push(log);
     } else {
@@ -132,7 +144,8 @@ export function groupByThread(logs: LogEntry[]): GroupResult {
       endTime: mainLogs[mainLogs.length - 1]?.timestamp ?? '',
     });
   }
-  groups.sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+  // groups 按 startTime 倒序（最新在前）：用预计算 startMs，避免 comparator 内 new Date()
+  groups.sort((a, b) => (startMs.get(b.threadId) ?? 0) - (startMs.get(a.threadId) ?? 0));
 
   return { groups, ungrouped };
 }

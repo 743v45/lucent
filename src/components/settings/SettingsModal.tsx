@@ -19,7 +19,9 @@ import {
   deleteProvider,
   renameProvider,
   testProviderEndpoint,
+  getProxyStatus,
 } from '../../utils/api';
+import { buildAccessUrl } from '../../utils/access-url';
 import type { Provider, EndpointType, ProviderPreset } from '../../types';
 import { ENDPOINT_TYPES, ENDPOINT_LABELS, isValidProviderName } from '../../types';
 import { SETTINGS_MODAL_WIDTH, DEFAULT_PROXY_PORT } from '../../constants';
@@ -147,7 +149,9 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   // 组件卸载时清掉所有 pending 定时器，避免泄漏 / 卸载后 setState
   useEffect(() => () => autoSaver.cancelAll(), [autoSaver]);
 
-  const proxyPort = DEFAULT_PROXY_PORT; // TODO: 从 status API 获取动态值
+  // 真实代理 host/port（修复 Bug #30：原硬编码 DEFAULT_PROXY_PORT，非默认端口时复制出的接入地址连不上）
+  const [proxyHost, setProxyHost] = useState('127.0.0.1');
+  const [proxyPort, setProxyPort] = useState(DEFAULT_PROXY_PORT);
 
   useEffect(() => {
     if (!open) return;
@@ -155,9 +159,18 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     const loadProviders = async () => {
       setLoading(true);
       try {
-        const list = await listProviders();
+        // 并发拉取 provider 列表 + 代理状态（真实 host/port）；
+        // 状态拉取失败不阻塞列表加载，端口/host 回退到默认值
+        const [list, status] = await Promise.all([
+          listProviders(),
+          getProxyStatus().catch(() => null),
+        ]);
         if (cancelled) return;
         setProviders(list);
+        if (status) {
+          setProxyPort(status.proxyPort || DEFAULT_PROXY_PORT);
+          setProxyHost(status.host || '127.0.0.1');
+        }
         // 并发拉取每个 provider 的完整配置（替代串行 N+1）
         const fulls = await Promise.all(list.map(p => getProviderFull(p.name)));
         if (cancelled) return;
@@ -260,7 +273,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     if (!window.confirm(`确定要删除供应商「${name}」吗？此操作不可恢复。`)) return;
     try {
       await deleteProvider(name);
-      setProviders(providers.filter(p => p.name !== name));
+      // 函数式更新，避免 await 后基于旧 providers 快照抹掉并发变更（修复 Bug #31 陈旧闭包）
+      setProviders(prev => prev.filter(p => p.name !== name));
       setFormData(prev => {
         const next = { ...prev };
         delete next[name];
@@ -298,7 +312,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     }
     try {
       const renamed = await renameProvider(oldName, newName);
-      setProviders(providers.map(p => (p.name === oldName ? renamed : p)));
+      // 函数式更新，避免 await 后基于旧 providers 快照抹掉并发变更（修复 Bug #31 陈旧闭包）
+      setProviders(prev => prev.map(p => (p.name === oldName ? renamed : p)));
       setFormData(prev => {
         const data = prev[oldName];
         const next = { ...prev };
@@ -345,16 +360,19 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         ...prev,
         [name]: { ...prev[name], [endpointType]: { ok: false, duration: 0, message: (e as Error).message } },
       }));
-      message.error('测试失败');
+      // 失败 toast 带具体错误信息（修复 Bug #14：原只弹通用"测试失败"，排障困难）
+      message.error((e as Error).message || '测试失败');
     } finally {
       setTestingMap(prev => ({ ...prev, [testKey]: false }));
     }
   };
 
-  const getAccessUrl = (p: Provider) => {
-    const prefix = p.presetName ? '' : 'custom/';
-    return `http://127.0.0.1:${proxyPort}/${prefix}${p.name}`;
-  };
+  const getAccessUrl = (p: Provider) => buildAccessUrl({
+    name: p.name,
+    presetName: p.presetName,
+    host: proxyHost,
+    port: proxyPort,
+  });
 
   const handleCopyAccessUrl = (p: Provider) => {
     navigator.clipboard.writeText(getAccessUrl(p)).then(() => {
@@ -630,26 +648,30 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
                     </Button>
                   )}
                   {result && (
-                    <div
-                      data-testid="test-result"
-                      data-protocol={et}
-                      data-ok={result.ok ? 'true' : 'false'}
-                      className={`flex items-center gap-1 text-xs ${
-                      result.ok ? 'text-success' : 'text-warning'
-                    }`}>
-                      {result.ok ? <CheckCircleOutlined /> : <ExclamationCircleOutlined />}
-                      <span>{result.ok ? `${result.duration}ms` : result.message.slice(0, 20)}</span>
-                      <Button
-                        type="text"
-                        size="small"
-                        icon={<CloseOutlined />}
-                        onClick={() => setTestResults(prev => ({
-                          ...prev,
-                          [p.name]: { ...prev[p.name], [et]: null },
-                        }))}
-                        className="!text-current hover:!opacity-70"
-                      />
-                    </div>
+                    <Tooltip title={result.ok ? undefined : result.message}>
+                      <div
+                        data-testid="test-result"
+                        data-protocol={et}
+                        data-ok={result.ok ? 'true' : 'false'}
+                        className={`flex items-center gap-1 text-xs ${
+                        result.ok ? 'text-success' : 'text-warning'
+                        }`}>
+                        {result.ok ? <CheckCircleOutlined /> : <ExclamationCircleOutlined />}
+                        <span className={result.ok ? undefined : 'inline-block max-w-[200px] truncate'}>
+                          {result.ok ? `${result.duration}ms` : result.message}
+                        </span>
+                        <Button
+                          type="text"
+                          size="small"
+                          icon={<CloseOutlined />}
+                          onClick={() => setTestResults(prev => ({
+                            ...prev,
+                            [p.name]: { ...prev[p.name], [et]: null },
+                          }))}
+                          className="!text-current hover:!opacity-70"
+                        />
+                      </div>
+                    </Tooltip>
                   )}
                   </div>
                   {hasUrlError && (

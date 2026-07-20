@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { message, Radio, InputNumber, Popover, Select } from 'antd';
 import { LogListPanel } from './components/dashboard/LogListPanel';
 import { DetailPanel } from './components/viewer/DetailPanel';
@@ -9,7 +9,7 @@ import { UsageGuide } from './components/common/UsageGuide';
 import { useLogs } from './hooks/useLogs';
 import { useAutoRefresh } from './hooks/useAutoRefresh';
 import { ArchiveBoxIcon, ArrowPathIcon, ChevronDownIcon, ClockIcon, Cog6ToothIcon, EyeSlashIcon, InformationCircleIcon, WrenchScrewdriverIcon } from '@heroicons/react/24/outline';
-import type { TabType, Provider, LogMode } from './types';
+import type { TabType, Provider, LogMode, Preferences, SettingsContextValue } from './types';
 import {
   URL_PARAM_LOG_ID,
   URL_PARAM_TAB,
@@ -30,6 +30,130 @@ const PROVIDER_FILTER_ALL = 'all';
 const ENDPOINT_FILTER_STORAGE_KEY = 'lucent.endpointFilter';
 const ENDPOINT_FILTER_ALL = 'all';
 
+/** 侧栏宽度按上下限钳制（纯函数，导出便于 node 单测）。 */
+export function clampSidebarWidth(clientX: number): number {
+  return Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, clientX));
+}
+
+/**
+ * 侧栏拖拽 hook（Bug #23）：
+ *  - 宽度用 ref 跟踪，onDragMove 里只写 ref + rAF 节流 setState（不再每像素 setState → 整树逐像素重渲染）；
+ *  - endDrag 读 ref.current 落点 + 持久化，三个回调零依赖（useCallback([])）→ 引用稳定，
+ *    App 的全局 mousemove/mouseup 监听 effect 只绑一次（消除原 [sidebarWidth] 依赖每像素 rebind 的间隙丢失风险）。
+ * DOM-free（document/localStorage/rAF 仅在回调体内引用，不在渲染期求值），导出便于 node 单测引用稳定性。
+ */
+export interface SidebarDragApi {
+  width: number;
+  beginDrag: () => void;
+  onDragMove: (e: MouseEvent) => void;
+  endDrag: () => void;
+}
+
+export function useSidebarDrag(initializer: () => number): SidebarDragApi {
+  const [width, setWidth] = useState<number>(initializer);
+  // 宽度 ref：拖拽中每像素只写这里，state 经 rAF 节流落点；endDrag 持久化读它（比 state 更准）
+  const widthRef = useRef<number>(width);
+  const rafRef = useRef<number | null>(null);
+  const draggingRef = useRef(false);
+
+  // rAF 节流提交：每帧最多落点一次 setWidth，视觉随光标但不再逐像素整树重渲染
+  const scheduleCommit = useCallback(() => {
+    if (rafRef.current != null) return; // 已有挂起的帧，复用
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      setWidth(widthRef.current);
+    });
+  }, []);
+
+  const beginDrag = useCallback(() => {
+    draggingRef.current = true;
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
+  const onDragMove = useCallback((e: MouseEvent) => {
+    if (!draggingRef.current) return;
+    widthRef.current = clampSidebarWidth(e.clientX);
+    scheduleCommit();
+  }, [scheduleCommit]);
+
+  const endDrag = useCallback(() => {
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
+    if (rafRef.current != null) {
+      cancelAnimationFrame(rafRef.current); // 丢弃挂起帧
+      rafRef.current = null;
+      setWidth(widthRef.current); // 立即落点，保证视觉与持久化值一致
+    }
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+    localStorage.setItem(STORAGE_KEY_SIDEBAR_WIDTH, String(widthRef.current));
+  }, []);
+
+  return { width, beginDrag, onDragMove, endDrag };
+}
+
+/**
+ * 应用 preferences 局部更新到状态 + URL（纯逻辑，导出便于 node 单测）：
+ *  - activeTab 变 → 同时 setActiveTab 与 updateUrl（带当前 selectedLogId）；
+ *  - conversationView 变 → 仅 setConversationView。
+ */
+export function applyPreferencesUpdate(
+  updates: Partial<Preferences>,
+  ctx: {
+    selectedLogId: string | null;
+    setActiveTab: (t: TabType) => void;
+    updateUrl: (logId: string | null, tab: TabType) => void;
+    setConversationView: (v: 'timeline' | 'session') => void;
+  },
+): void {
+  if (updates.activeTab) {
+    ctx.setActiveTab(updates.activeTab);
+    ctx.updateUrl(ctx.selectedLogId, updates.activeTab);
+  }
+  if (updates.conversationView) {
+    ctx.setConversationView(updates.conversationView);
+  }
+}
+
+/**
+ * 组装 SettingsContext 值（Bug #24）：
+ *  - updatePreferences 用 useCallback（依赖 selectedLogId/updateUrl/setters）；
+ *  - 整体 value 用 useMemo（依赖 activeTab/conversationView/updatePreferences）。
+ *  → 同一输入下引用稳定，避免 App 每次渲染（如自动刷新拉日志）都给所有 useContext 消费者换新值、强制重渲染。
+ * DOM-free（仅 useMemo/useCallback），导出便于 node 环境用 react-test-renderer 测引用稳定性。
+ */
+export function useSettingsValue(args: {
+  activeTab: TabType;
+  conversationView: 'timeline' | 'session';
+  selectedLogId: string | null;
+  updateUrl: (logId: string | null, tab: TabType) => void;
+  setActiveTab: (t: TabType) => void;
+  setConversationView: (v: 'timeline' | 'session') => void;
+}): SettingsContextValue {
+  const { activeTab, conversationView, selectedLogId, updateUrl, setActiveTab, setConversationView } = args;
+  const updatePreferences = useCallback(
+    (updates: Partial<Preferences>) =>
+      applyPreferencesUpdate(updates, { selectedLogId, setActiveTab, updateUrl, setConversationView }),
+    [selectedLogId, updateUrl, setActiveTab, setConversationView],
+  );
+  return useMemo<SettingsContextValue>(
+    () => ({
+      preferences: {
+        theme: DEFAULT_THEME,
+        activeTab,
+        sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
+        autoCollapse: true,
+        showThinking: false,
+        showFullTools: false,
+        conversationView,
+      },
+      updatePreferences,
+    }),
+    [activeTab, conversationView, updatePreferences],
+  );
+}
+
 function App(): JSX.Element {
   // 读取初始 URL 参数
   const params = new URLSearchParams(window.location.search);
@@ -41,11 +165,17 @@ function App(): JSX.Element {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [rewriteOpen, setRewriteOpen] = useState(false);
   const [usageGuideOpen, setUsageGuideOpen] = useState(false);
-  const [sidebarWidth, setSidebarWidth] = useState(() => {
+  // 侧栏宽度 + 拖拽：宽度用 ref 跟踪 + rAF 节流 setState，回调零依赖（Bug #23：
+  // 原每像素 setSidebarWidth 致整树逐像素重渲染，handleMouseUp 依赖 [sidebarWidth] 每像素变致监听反复装卸）
+  const {
+    width: sidebarWidth,
+    beginDrag: handleMouseDown,
+    onDragMove: handleMouseMove,
+    endDrag: handleMouseUp,
+  } = useSidebarDrag(() => {
     const saved = localStorage.getItem(STORAGE_KEY_SIDEBAR_WIDTH);
     return saved ? parseInt(saved, 10) : SIDEBAR_DEFAULT_WIDTH;
   });
-  const isDragging = useRef(false);
 
   // 同步状态到 URL
   const updateUrl = useCallback((logId: string | null, tab: TabType) => {
@@ -204,49 +334,18 @@ function App(): JSX.Element {
 
   const selectedLog = logs.find(log => log.id === selectedLogId);
 
-  const settingsValue: import('./types').SettingsContextValue = {
-    preferences: {
-      theme: DEFAULT_THEME,
-      activeTab,
-      sidebarWidth: SIDEBAR_DEFAULT_WIDTH,
-      autoCollapse: true,
-      showThinking: false,
-      showFullTools: false,
-      conversationView,
-    },
-    updatePreferences: (updates: Partial<typeof settingsValue.preferences>) => {
-      if (updates.activeTab) {
-        setActiveTab(updates.activeTab);
-        updateUrl(selectedLogId, updates.activeTab);
-      }
-      if (updates.conversationView) {
-        setConversationView(updates.conversationView);
-      }
-    },
-  };
+  // SettingsContext 值：useSettingsValue 内部用 useMemo/useCallback 稳定引用（Bug #24：
+  // 原每渲染新建对象字面量/函数，作 Provider value 强制所有 useContext 消费者重渲染）
+  const settingsValue = useSettingsValue({
+    activeTab,
+    conversationView,
+    selectedLogId,
+    updateUrl,
+    setActiveTab,
+    setConversationView,
+  });
 
-  // 拖拽分割栏处理
-  const handleMouseDown = useCallback(() => {
-    isDragging.current = true;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  }, []);
-
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    if (!isDragging.current) return;
-    const newWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.min(SIDEBAR_MAX_WIDTH, e.clientX));
-    setSidebarWidth(newWidth);
-  }, []);
-
-  const handleMouseUp = useCallback(() => {
-    isDragging.current = false;
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    // 保存宽度到 localStorage
-    localStorage.setItem(STORAGE_KEY_SIDEBAR_WIDTH, String(sidebarWidth));
-  }, [sidebarWidth]);
-
-  // 绑定全局鼠标事件
+  // 绑定全局鼠标事件：handleMouseMove/handleMouseUp 来自 useSidebarDrag（零依赖稳定引用）→ effect 只绑一次（Bug #23）
   useEffect(() => {
     document.addEventListener('mousemove', handleMouseMove);
     document.addEventListener('mouseup', handleMouseUp);
@@ -329,12 +428,6 @@ function App(): JSX.Element {
                       </div>
                     )}
                   </div>
-                  {logModeEnvLocked && (
-                    <div className="text-[12px] text-amber-600 flex items-center gap-1">
-                      <InformationCircleIcon className="w-3.5 h-3.5" />
-                      被环境变量锁定，切换不生效
-                    </div>
-                  )}
                 </div>
               }
             >

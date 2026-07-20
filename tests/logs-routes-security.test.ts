@@ -32,6 +32,16 @@ vi.mock('../server/log-manager.js', () => ({
   clearAllLogs: () => ({ success: true, deleted: 0 }),
 }));
 
+// mock LogReader：GET /api/logs 断言传入的 LogsQuery（low#6：offset 不应再被收集）
+const { readLogsMock } = vi.hoisted(() => ({
+  readLogsMock: vi.fn(),
+}));
+vi.mock('../server/services/log-reader.js', () => ({
+  readLogs: readLogsMock,
+  invalidateCache: vi.fn(),
+  getLogById: vi.fn(),
+}));
+
 let dir: string;
 let server: ReturnType<import('express').Express['listen']> | undefined;
 /** 直接注册的 mock SSE 客户端（503 测试用），按引用清理 */
@@ -43,6 +53,8 @@ beforeEach(() => {
   exportLogsMock.mockReturnValue({ success: true, count: 0, path: 'mock' });
   importLogsMock.mockReset();
   importLogsMock.mockReturnValue({ success: true, imported: 0, errors: 0 });
+  readLogsMock.mockReset();
+  readLogsMock.mockResolvedValue({ logs: [], total: 0, nextCursor: null, hasMore: false });
 });
 
 afterEach(async () => {
@@ -248,5 +260,73 @@ describe('GET /api/logs/stream — 连接上限 + 心跳安全（Bug #2 / #5）'
     } finally {
       process.off('uncaughtException', onUncaught);
     }
+  });
+});
+
+describe('GET /api/logs — offset 不再被收集（low#6：API 只支持 cursor 翻页）', () => {
+  // 现状：路由曾把 offset 塞进 LogsQuery，但 LogReader.readLogs 走 keyset cursor 根本不读 offset，
+  // 调用方按 offset 翻页会一直拿到首页。修复：路由不再收集 offset（未知 query 不报错）。
+  it('传 offset 不报错（200），且 offset 不进入传给 readLogs 的 query', async () => {
+    const base = await listen(makeApp());
+    const res = await fetch(`${base}/api/logs?offset=50&limit=10`);
+    expect(res.status).toBe(200);
+    expect(readLogsMock).toHaveBeenCalledTimes(1);
+    const query = readLogsMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(query).not.toHaveProperty('offset');
+    // limit 仍正常透传
+    expect(query.limit).toBe(10);
+  });
+
+  it('不传 offset 同样正常，query 无 offset 字段', async () => {
+    const base = await listen(makeApp());
+    const res = await fetch(`${base}/api/logs?limit=5`);
+    expect(res.status).toBe(200);
+    const query = readLogsMock.mock.calls[0][0] as Record<string, unknown>;
+    expect(query).not.toHaveProperty('offset');
+    expect(query.limit).toBe(5);
+  });
+
+  it('offset 与无 offset 传入相同 query 形状（offset 不再影响该 API 翻页）', async () => {
+    const base = await listen(makeApp());
+    await fetch(`${base}/api/logs?offset=999`);
+    await fetch(`${base}/api/logs`);
+    expect(readLogsMock).toHaveBeenCalledTimes(2);
+    const q1 = readLogsMock.mock.calls[0][0] as Record<string, unknown>;
+    const q2 = readLogsMock.mock.calls[1][0] as Record<string, unknown>;
+    expect(q1).toEqual(q2);
+  });
+});
+
+describe('POST /api/logs/{export,import} — req.body 缺失不 500（low#7 null 守卫）', () => {
+  // 无 body / 非 JSON Content-Type 时 req.body 为 undefined，裸解构会抛 TypeError 被吞成 500。
+  // 守卫：解构前 req.body ?? {}。fetch 不带 body / Content-Type → express.json 跳过 → req.body=undefined。
+  it('export 无 body 不 500（format 走默认 jsonl，触达 LogManager）', async () => {
+    const base = await listen(makeApp());
+    const res = await fetch(`${base}/api/logs/export`, { method: 'POST' });
+    expect(res.status).not.toBe(500);
+    expect(res.status).toBe(200);
+    expect(exportLogsMock).toHaveBeenCalledTimes(1);
+    expect(exportLogsMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ format: 'jsonl', includeMeta: false }),
+    );
+  });
+
+  it('import 无 body 回 400（filePath 缺失），而非 500', async () => {
+    const base = await listen(makeApp());
+    const res = await fetch(`${base}/api/logs/import`, { method: 'POST' });
+    expect(res.status).not.toBe(500);
+    expect(res.status).toBe(400);
+    expect(importLogsMock).not.toHaveBeenCalled();
+  });
+
+  it('export 非 JSON Content-Type（text/plain）req.body 仍守卫，不 500', async () => {
+    const base = await listen(makeApp());
+    const res = await fetch(`${base}/api/logs/export`, {
+      method: 'POST',
+      headers: { 'content-type': 'text/plain' },
+      body: '',
+    });
+    expect(res.status).not.toBe(500);
   });
 });
