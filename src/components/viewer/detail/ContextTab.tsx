@@ -15,7 +15,8 @@
 import { useState, useMemo, useCallback, memo } from 'react';
 import type { LogEntry, ContextMessage, ContentBlock } from '../../../types';
 import { ChevronIcon } from '../../common/ChevronIcon';
-import { MarkdownContent } from './shared';
+import { MarkdownContent, CopyButton } from './shared';
+import { copyText } from './utils';
 
 export interface ContextTabProps {
   log: LogEntry;
@@ -402,24 +403,30 @@ const ContextListItem = memo(function ContextListItem({
 
 // ==================== Context Detail Card（#16 memo + 卡片引用稳定） ====================
 
-// 右侧详情的一张卡片：可选头部（标签 + 角标）+ markdown 正文。
+// 右侧详情的一张卡片：头部（可选标签 + 角标 + 复制按钮）+ markdown 正文。
 // system 的每一段、message 的每个 content block 都是独立卡片，不再合并成一坨文本。
+// TAE-110：每张卡片各自带一个复制按钮，点一下只复制这一段（非整块复制）——
+//   无 label/tag 的卡片（单段 system / 文本块 / 工具描述）也照常出头部，仅为承载复制按钮。
 // #16：包 memo——配合父级 detail 的 useMemo，card 引用稳定时跳过重渲染（不重解析 markdown）。
 const ContextDetailCard = memo(function ContextDetailCard({ card, highlight }: { card: DetailCard; highlight?: string }): JSX.Element {
+  // 复制这一张卡片的正文：onCopy 返回真实结果，CopyButton 仅在成功时显「已复制」（不撒谎）。
+  const copyCard = useCallback(() => copyText(card.content), [card.content]);
   return (
     <div
       data-testid="context-card"
       data-kind={card.kind}
       className="rounded-lg border border-border-subtle bg-bg-surface/50 overflow-hidden"
     >
-      {(card.label || card.tag) && (
-        <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border-subtle bg-bg-surface/30">
+      {/* 头部：左 label/tag、右复制按钮。即使无 label/tag 也保留头部以承载复制按钮（TAE-110）。 */}
+      <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border-subtle bg-bg-surface/30">
+        <div className="flex items-center gap-2 min-w-0">
           {card.label && <span className="text-sm font-[510] text-text-secondary">{card.label}</span>}
           {card.tag && (
             <span className={`text-xs px-1.5 py-0.5 rounded ${card.tag.className}`}>{card.tag.text}</span>
           )}
         </div>
-      )}
+        <CopyButton onCopy={copyCard} testId="context-card-copy" />
+      </div>
       <div className="p-3">
         {card.content
           ? <MarkdownContent content={card.content} highlight={highlight} />

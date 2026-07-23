@@ -46,7 +46,8 @@ SyntaxHighlighter.registerLanguage('markdown', markdown);
 
 // low#9：onCopy 返回真实复制结果（boolean | Promise<boolean>），仅在成功时显示「已复制」——
 // 非安全上下文 / 权限拒绝时 copyText 回退 execCommand，失败不再无条件撒谎。
-export function CopyButton({ onCopy }: { onCopy: () => boolean | Promise<boolean> }) {
+// testId 可选：详情卡片等需要被 e2e 定位的复用方传入，其余调用方不传则不挂 data-testid。
+export function CopyButton({ onCopy, testId }: { onCopy: () => boolean | Promise<boolean>; testId?: string }) {
   const [copied, setCopied] = useState(false);
 
   const handleClick = async () => {
@@ -65,6 +66,7 @@ export function CopyButton({ onCopy }: { onCopy: () => boolean | Promise<boolean
   return (
     <button
       onClick={handleClick}
+      data-testid={testId}
       className={`px-3 py-0.5 text-[13px] font-[510] rounded-md transition-colors ${
         copied
           ? 'text-success bg-success/20'
