@@ -15,7 +15,8 @@
 import { useState, useMemo, useCallback, memo } from 'react';
 import type { LogEntry, ContextMessage, ContentBlock } from '../../../types';
 import { ChevronIcon } from '../../common/ChevronIcon';
-import { MarkdownContent } from './shared';
+import { MarkdownContent, CopyButton } from './shared';
+import { copyText } from './utils';
 
 export interface ContextTabProps {
   log: LogEntry;
@@ -406,20 +407,36 @@ const ContextListItem = memo(function ContextListItem({
 // system 的每一段、message 的每个 content block 都是独立卡片，不再合并成一坨文本。
 // #16：包 memo——配合父级 detail 的 useMemo，card 引用稳定时跳过重渲染（不重解析 markdown）。
 const ContextDetailCard = memo(function ContextDetailCard({ card, highlight }: { card: DetailCard; highlight?: string }): JSX.Element {
+  const hasHeader = Boolean(card.label || card.tag);
+  // 卡片正文为空（显示「（空）」那张）时，没东西可复制，不显示按钮。
+  const canCopy = Boolean(card.content);
+
   return (
     <div
       data-testid="context-card"
       data-kind={card.kind}
       className="rounded-lg border border-border-subtle bg-bg-surface/50 overflow-hidden"
     >
-      {(card.label || card.tag) && (
+      {hasHeader ? (
         <div className="flex items-center justify-between gap-2 px-3 py-2 border-b border-border-subtle bg-bg-surface/30">
-          {card.label && <span className="text-sm font-[510] text-text-secondary">{card.label}</span>}
-          {card.tag && (
-            <span className={`text-xs px-1.5 py-0.5 rounded ${card.tag.className}`}>{card.tag.text}</span>
+          {card.label ? (
+            <span className="text-sm font-[510] text-text-secondary">{card.label}</span>
+          ) : (
+            <span />
           )}
+          <div className="flex items-center gap-2">
+            {card.tag && (
+              <span className={`text-xs px-1.5 py-0.5 rounded ${card.tag.className}`}>{card.tag.text}</span>
+            )}
+            {canCopy && <CopyButton onCopy={() => copyText(card.content)} />}
+          </div>
         </div>
-      )}
+      ) : canCopy ? (
+        // 无头卡片（text 段、纯文本消息卡）：单独起一个头行放复制按钮，保证每张卡都有入口。
+        <div className="flex items-center justify-end px-3 py-2 border-b border-border-subtle bg-bg-surface/30">
+          <CopyButton onCopy={() => copyText(card.content)} />
+        </div>
+      ) : null}
       <div className="p-3">
         {card.content
           ? <MarkdownContent content={card.content} highlight={highlight} />
