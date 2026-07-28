@@ -105,6 +105,14 @@ CREATE VIRTUAL TABLE IF NOT EXISTS logs_fts USING fts5(
   search_text,
   tokenize = 'trigram'
 );
+
+-- 配置存储（与日志同库）：单行 JSON blob（id 恒为 1）。config-store 也会幂等建此表，
+-- 这里一并声明，确保任何先由 log-writer 开库的路径下 config 表也存在。
+CREATE TABLE IF NOT EXISTS config (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  data TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;
 
 /**

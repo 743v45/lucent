@@ -6,13 +6,12 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { readFile } from 'node:fs/promises';
-import { createTestEnv, cleanTestDir, writeTestConfig, startBackend, stopBackend, createMockUpstream, type MockUpstream, type TestEnv } from './e2e-helpers.js';
+import { createTestEnv, cleanTestDir, writeTestConfig, readTestConfig, startBackend, stopBackend, createMockUpstream, type MockUpstream, type TestEnv } from './e2e-helpers.js';
 
 // ==================== 常量 ====================
 
 const testEnv = createTestEnv('config-reload-e2e');
-const { configPath: CONFIG_PATH, proxyPort: PROXY_PORT, webPort: WEB_PORT } = testEnv;
+const { proxyPort: PROXY_PORT, webPort: WEB_PORT } = testEnv;
 
 // ==================== 全局状态 ====================
 
@@ -39,8 +38,7 @@ async function proxyRequest(): Promise<{ ok: boolean }> {
 }
 
 async function readConfig(): Promise<any> {
-  const content = await readFile(CONFIG_PATH, 'utf-8');
-  return JSON.parse(content);
+  return readTestConfig(testEnv);
 }
 
 // ==================== 测试套件 ====================
@@ -116,7 +114,7 @@ describe('配置动态更新 E2E 测试', () => {
     expect(mock2.requests.length).toBeGreaterThan(0);
   });
 
-  it('验证配置已持久化到磁盘', async () => {
+  it('验证配置已持久化到数据库', async () => {
     const config = await readConfig();
     const glm = config.providers.find((p: any) => p.name === 'glm');
     expect(glm).toBeDefined();

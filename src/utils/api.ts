@@ -325,6 +325,29 @@ export async function testProviderEndpoint(
   });
 }
 
+// ==================== Config 导入导出 API ====================
+
+/**
+ * 导出当前配置为可移植 SQL 脚本（config 表单行 JSON blob）。返回 SQL 文本（可直接下载/喂 sqlite）。
+ */
+export async function exportConfigSql(): Promise<string> {
+  const response = await fetch(`${API_BASE_PATH}/config/export`);
+  if (!response.ok) {
+    throw new Error(`API Error: ${response.status} - ${await response.text()}`);
+  }
+  return response.text();
+}
+
+/**
+ * 导入配置（JSON 对象/字符串，或导出的 SQL 脚本），事务替换。校验失败抛错（消息来自后端）。
+ */
+export async function importConfig(payload: string | object): Promise<{ success: boolean }> {
+  return request('/config/import', {
+    method: 'POST',
+    body: JSON.stringify({ payload }),
+  });
+}
+
 // ==================== Body Rewrite API ====================
 
 /**

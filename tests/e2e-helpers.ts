@@ -6,7 +6,7 @@
 
 import { spawn, type ChildProcess } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdir, rm, readdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, rm, readdir, readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { tmpdir } from 'node:os';
 import Database from 'better-sqlite3';
@@ -58,10 +58,35 @@ export async function removeTestDir(env: TestEnv): Promise<void> {
 }
 
 /**
- * 写入测试配置文件
+ * 写入测试配置（直写 configDir/lucent.db 的 config 表，单行 JSON blob）。
+ * 配置已入库：后端 startBackend 后 loadConfig 直接读此表，不依赖迁移、不惧 re-seed。
  */
 export async function writeTestConfig(env: TestEnv, config: Record<string, unknown>): Promise<void> {
-  await writeFile(env.configPath, JSON.stringify(config, null, 2));
+  const dbPath = join(env.configDir, 'lucent.db');
+  const db = new Database(dbPath);
+  try {
+    db.pragma('busy_timeout = 5000');
+    db.exec('CREATE TABLE IF NOT EXISTS config (id INTEGER PRIMARY KEY CHECK (id = 1), data TEXT NOT NULL, updated_at TEXT NOT NULL)');
+    db.prepare('INSERT OR REPLACE INTO config (id, data, updated_at) VALUES (?, ?, ?)')
+      .run(1, JSON.stringify(config), new Date().toISOString());
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * 读测试配置（config 表）。后端运行时经只读连接读，WAL 多读并发安全。
+ */
+export async function readTestConfig(env: TestEnv): Promise<Record<string, unknown>> {
+  const dbPath = join(env.configDir, 'lucent.db');
+  if (!existsSync(dbPath)) return {};
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    const row = db.prepare('SELECT data FROM config WHERE id = 1').get() as { data: string } | undefined;
+    return row ? (JSON.parse(row.data) as Record<string, unknown>) : {};
+  } finally {
+    db.close();
+  }
 }
 
 // ==================== 后端进程管理 ====================

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, type ChangeEvent } from 'react';
 import { Modal, Input, Button, message, Empty, Tooltip } from 'antd';
 import {
   PlusOutlined,
@@ -10,6 +10,8 @@ import {
   ExclamationCircleOutlined,
   CloseOutlined,
   ArrowLeftOutlined,
+  DownloadOutlined,
+  UploadOutlined,
 } from '@ant-design/icons';
 import {
   listProviders,
@@ -20,6 +22,8 @@ import {
   renameProvider,
   testProviderEndpoint,
   getProxyStatus,
+  exportConfigSql,
+  importConfig,
 } from '../../utils/api';
 import { buildAccessUrl } from '../../utils/access-url';
 import type { Provider, EndpointType, ProviderPreset } from '../../types';
@@ -132,10 +136,14 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
   const [showPresetPanel, setShowPresetPanel] = useState(false);
   const [customNameInput, setCustomNameInput] = useState('');
   const [showCustomInput, setShowCustomInput] = useState(false);
+  // 导入后自增以触发 provider 列表重新加载（配置被整体替换）
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   // ref 始终指向最新 formData，避免 handleAutoSave 闭包读取旧值
   const formDataRef = useRef(formData);
   formDataRef.current = formData;
+  // 导入文件选择隐藏 input
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 按 provider 防抖的自动保存器（修复连续编辑时并发 PUT 整体覆盖 endpoints 的回滚 bug）。
   // 用 useState 惰性初始化保证整个组件生命周期只创建一次，内部 timers Map 随之常驻。
@@ -191,7 +199,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
     return () => {
       cancelled = true;
     };
-  }, [open]);
+  }, [open, reloadNonce]);
 
   const handleExpand = (name: string) => {
     setExpanded(expanded === name ? null : name);
@@ -387,6 +395,41 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       const current = prev[name] || { endpoints: {} as Record<EndpointType, string | null> };
       return { ...prev, [name]: { ...current, endpoints: { ...current.endpoints, [field]: value } } };
     });
+  };
+
+  /** 导出当前配置为 SQL 脚本并触发浏览器下载（lucent-config.sql） */
+  const handleExportConfig = async () => {
+    try {
+      const sql = await exportConfigSql();
+      const blob = new Blob([sql], { type: 'text/plain' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'lucent-config.sql';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      message.success('配置已导出');
+    } catch (e) {
+      message.error((e as Error).message || '导出失败');
+    }
+  };
+
+  /** 导入配置（.sql 或 .json）：读取文件文本 → POST → 成功后刷新 provider 列表 */
+  const handleImportFile = async (e: ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      await importConfig(text);
+      message.success('配置已导入，正在刷新');
+      setReloadNonce(n => n + 1); // 触发 effect 重新加载（配置已被整体替换）
+    } catch (err) {
+      message.error((err as Error).message || '导入失败');
+    } finally {
+      if (fileInputRef.current) fileInputRef.current.value = ''; // 允许重复选同一文件
+    }
   };
 
   const providerNames = new Set(providers.map(p => p.name));
@@ -756,6 +799,33 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
 
             {/* 底部新增按钮 */}
             <div className="pt-2 border-t border-border-subtle">
+              <div className="flex items-center justify-end gap-1 mb-2">
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<DownloadOutlined />}
+                  onClick={handleExportConfig}
+                  data-testid="export-config-btn"
+                >
+                  导出配置
+                </Button>
+                <Button
+                  size="small"
+                  type="text"
+                  icon={<UploadOutlined />}
+                  onClick={() => fileInputRef.current?.click()}
+                  data-testid="import-config-btn"
+                >
+                  导入配置
+                </Button>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".sql,.json,application/json,text/plain"
+                  onChange={handleImportFile}
+                  className="hidden"
+                />
+              </div>
               <Button
                 type="dashed"
                 icon={<PlusOutlined />}

@@ -5,9 +5,10 @@
  * 多供应商 + 多端点结构，运行时可修改，内存缓存 + 磁盘持久化
  */
 
-import { readFileSync, writeFileSync, renameSync, existsSync, mkdirSync, copyFileSync } from 'node:fs';
+import { readFileSync, existsSync, copyFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { CONFIG_PATH, CONFIG_DIR, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, DB_PATH, LOG_RETENTION_DAYS, TEMP_LOG_TTL_MINUTES } from './constants.js';
+import { CONFIG_PATH, DEFAULT_PROXY_PORT, DEFAULT_WEB_PORT, DEFAULT_SERVER_HOST, LOG_DIR, DB_PATH, LOG_RETENTION_DAYS, TEMP_LOG_TTL_MINUTES } from './constants.js';
+import { readConfigJson, writeConfigJson } from './services/config-store.js';
 import { ENDPOINT_TYPES, isEndpointType, isValidProviderName, PRESET_NAMES } from './types.js';
 import type { EndpointType, Provider, BodyRewriteRule } from './types.js';
 import { parseFieldPath } from './body-rewriter.js';
@@ -116,12 +117,6 @@ function buildDefaultConfig(): ProxyConfig {
 let cachedConfig: ProxyConfig | null = null;
 
 // ==================== 工具函数 ====================
-
-function ensureDir(): void {
-  if (!existsSync(CONFIG_DIR)) {
-    mkdirSync(CONFIG_DIR, { recursive: true });
-  }
-}
 
 /**
  * 深克隆配置（纯 JSON 可序列化结构，structuredClone 安全保留类型）。
@@ -363,7 +358,7 @@ export function resolveEffectiveConfig(): ResolvedConfig {
     proxyPort:           parseEnvNumber('LUCENT_PROXY_PORT',  raw.proxyPort),
     webPort:             parseEnvNumber('LUCENT_WEB_PORT',    raw.webPort),
     logDir:              process.env.LUCENT_LOG_DIR           || raw.logDir             || LOG_DIR,
-    dbPath:              process.env.LUCENT_DB_PATH            || raw.dbPath             || DB_PATH,
+    dbPath:              process.env.LUCENT_DB_PATH            || DB_PATH, // 固定路径：config 已入库，不再由 config.dbPath 自指
     logRetentionDays:    parseEnvNumber('LUCENT_LOG_RETENTION_DAYS', raw.logRetentionDays ?? LOG_RETENTION_DAYS),
     logMode:             resolveLogModeFromEnv(raw),
     tempLogTtlMinutes:   parseEnvNumber('LUCENT_TEMP_LOG_TTL_MINUTES', raw.tempLogTtlMinutes ?? TEMP_LOG_TTL_MINUTES),
@@ -456,59 +451,86 @@ function applyHostOverride(config: ProxyConfig): void {
 }
 
 /**
- * 写入默认配置到磁盘并缓存
+ * 归一化旧字段：logRecording(true/false) → logMode(archive/off)。无 logMode 时映射并清除旧字段。
  */
-function initDefaultConfig(): ProxyConfig {
-  const def = buildDefaultConfig();
-  ensureDir();
-  writeFileSync(CONFIG_PATH, JSON.stringify(def, null, 2), 'utf-8');
-  cachedConfig = def;
-  applyHostOverride(cachedConfig);
-  log('初始化默认配置: providers=%d', def.providers.length);
-  return cachedConfig;
+function normalizeLegacy(parsed: ProxyConfig): ProxyConfig {
+  const cfg = cloneConfig(parsed);
+  if (cfg.logMode === undefined && cfg.logRecording !== undefined) {
+    cfg.logMode = cfg.logRecording ? 'archive' : 'off';
+    delete cfg.logRecording;
+  }
+  return cfg;
 }
 
 /**
- * 加载配置（从磁盘读取）
- *
- * 行为：
- * - 文件不存在 → 创建默认配置并写盘
- * - 文件存在但 JSON 解析失败或校验失败 → 先把损坏文件备份为 config.json.bak，再写默认配置
- * - 文件合法 → 返回
+ * 一次性迁移：若 legacy config.json 存在，校验后导入（保留 .bak）。文件不存在或非法返回 null。
  */
-export function loadConfig(): ProxyConfig {
-  if (!existsSync(CONFIG_PATH)) {
-    log('配置文件不存在，初始化默认配置');
-    return initDefaultConfig();
-  }
-
+function tryMigrateLegacyFile(): ProxyConfig | null {
+  if (!existsSync(CONFIG_PATH)) return null;
   try {
     const raw = readFileSync(CONFIG_PATH, 'utf-8');
     const parsed = JSON.parse(raw);
     validateConfig(parsed);
-    // 向后兼容：旧 config.json 只有 logRecording 没 logMode，映射 true→archive / false→off
-    if (parsed.logMode === undefined && parsed.logRecording !== undefined) {
-      parsed.logMode = parsed.logRecording ? 'archive' : 'off';
-      delete parsed.logRecording;
-    }
-    cachedConfig = parsed;
-    applyHostOverride(cachedConfig);
-    return cachedConfig;
-  } catch (error) {
-    // 配置损坏：先把原文件备份为 .bak（用户配置不丢失），再写默认配置
+    const cfg = normalizeLegacy(parsed);
     try {
       copyFileSync(CONFIG_PATH, `${CONFIG_PATH}.bak`);
-      log('损坏的配置文件已备份: %s', `${CONFIG_PATH}.bak`);
+      log('已迁移 legacy config.json（原文件备份为 .bak）');
     } catch (backupErr) {
-      log('备份损坏配置文件失败（继续覆盖）: %O', backupErr);
+      log('备份 legacy config.json 失败（继续迁移）: %O', backupErr);
     }
-    log('配置文件无效，已备份原文件并重置为默认配置: %O', error);
-    return initDefaultConfig();
+    return cfg;
+  } catch (error) {
+    // legacy 文件损坏：备份后忽略，回落默认
+    try { copyFileSync(CONFIG_PATH, `${CONFIG_PATH}.bak`); } catch { /* ignore */ }
+    log('legacy config.json 无效，已备份并忽略: %O', error);
+    return null;
   }
 }
 
 /**
- * 获取当前配置（内存缓存，无磁盘 IO）
+ * 初始化 config 表行：优先一次性迁移 legacy config.json，否则写默认配置；均落库 + 缓存。
+ */
+function initDefaultConfig(): ProxyConfig {
+  const migrated = tryMigrateLegacyFile();
+  const cfg = migrated ?? buildDefaultConfig();
+  writeConfigJson(cfg); // 落库（事务原子）
+  cachedConfig = cfg;
+  applyHostOverride(cachedConfig);
+  log('初始化配置到 DB: providers=%d, 来源=%s', cfg.providers.length, migrated ? '迁移自 config.json' : '默认');
+  return cachedConfig;
+}
+
+/**
+ * 加载配置（从 SQLite config 表读取）。
+ *
+ * 行为：
+ * - config 表无合法行 → 一次性迁移 legacy config.json；无文件则写默认（均落库）
+ * - 表中有行但 JSON 解析/校验失败 → 视为空，回落 initDefaultConfig（迁移或默认）
+ * - 合法 → 归一化旧字段 + host 覆盖后缓存返回
+ *
+ * 与旧实现的差异：持久化在 DB（config-store 瞬时连接 + 事务原子写），不再以 config.json 为源。
+ */
+export function loadConfig(): ProxyConfig {
+  if (cachedConfig) return cachedConfig;
+
+  const stored = readConfigJson();
+  if (stored !== null) {
+    try {
+      validateConfig(stored);
+      const cfg = normalizeLegacy(stored as ProxyConfig);
+      applyHostOverride(cfg);
+      cachedConfig = cfg;
+      return cachedConfig;
+    } catch (error) {
+      // 存储的 config 损坏：回落 initDefaultConfig（迁移 legacy 或默认）
+      log('DB 中存储的 config 校验失败，回落初始化: %O', error);
+    }
+  }
+  return initDefaultConfig();
+}
+
+/**
+ * 获取当前配置（内存缓存，无 DB IO）。首次访问触发 loadConfig。
  */
 export function getConfig(): ProxyConfig {
   if (!cachedConfig) {
@@ -518,28 +540,33 @@ export function getConfig(): ProxyConfig {
 }
 
 /**
- * 保存配置（写磁盘 + 更新缓存）
+ * 保存配置（事务写 DB config 表 + 更新缓存）。
  *
- * 顺序严格为：校验 → 原子写盘 → 成功后才提交 cachedConfig。
- * - 原子写：先 writeFileSync 到 `${CONFIG_PATH}.tmp` 再 renameSync 覆盖（POSIX rename 原子），
- *   避免 truncate+write 中途崩溃/掉电留下半截 JSON 损坏配置。
- * - 缓存延后提交：写盘失败（磁盘满/EACCES 等）时直接向上抛错，cachedConfig 保持旧值不被污染，
- *   保证此后 getConfig() 返回的内存态与磁盘一致（路由层据此返回 500）。
- *   配合 CRUD 层的 cloneConfig，校验已过但写盘失败也不会留下从未持久化的内存态。
+ * 顺序严格为：校验 → 事务写库（INSERT OR REPLACE，单行原子）→ 成功后才提交 cachedConfig。
+ * - 事务原子：better-sqlite3 transaction 保证写入要么整体生效要么整体不变，替代旧的 tmp+rename 文件原子写。
+ * - 缓存延后提交：写库失败（磁盘满/锁等）时直接向上抛错，cachedConfig 保持旧值不被污染，
+ *   保证此后 getConfig() 返回的内存态与库一致（路由层据此返回 500）。
+ *   配合 CRUD 层的 cloneConfig，校验已过但写库失败也不会留下从未持久化的内存态。
  *
  * 写入前会做完整校验，校验失败会抛出 Error，不会写入坏数据。
  */
 export function saveConfig(config: ProxyConfig): ProxyConfig {
   validateConfig(config);
-  ensureDir();
-  // 原子写：先写 .tmp 再 rename 覆盖（同目录 rename 保证同一文件系统，POSIX 原子）
-  const tmpPath = `${CONFIG_PATH}.tmp`;
-  writeFileSync(tmpPath, JSON.stringify(config, null, 2), 'utf-8');
-  renameSync(tmpPath, CONFIG_PATH);
-  // 写盘成功后才提交缓存——失败则向上抛错，缓存保持旧值不污染
+  writeConfigJson(config); // 事务原子写；失败向上抛错，缓存保持旧值不污染
   cachedConfig = config;
   log('配置已保存: %d providers, host=%s, proxyPort=%d', config.providers.length, config.host, config.proxyPort);
   return config;
+}
+
+/**
+ * 用候选配置整体替换并持久化（导入用）：校验 → saveConfig（事务写库 + 缓存）。
+ * 校验失败抛 Error（路由层转 400，库与缓存均不变）。返回生效后的配置。
+ */
+export function replaceConfig(candidate: unknown): ProxyConfig {
+  validateConfig(candidate);
+  const cfg = normalizeLegacy(candidate as ProxyConfig);
+  saveConfig(cfg);
+  return cfg;
 }
 
 // ==================== Provider 查找 ====================

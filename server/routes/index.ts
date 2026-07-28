@@ -9,6 +9,7 @@ import { createStatusRouter } from './status.js';
 import { createLogsRouter } from './logs.js';
 import { createProvidersRouter } from './providers.js';
 import { createBodyRewritesRouter } from './body-rewrites.js';
+import { createConfigRouter } from './config.js';
 
 export interface RouteOptions {
   proxyEnabled: { value: boolean };
@@ -36,4 +37,5 @@ export function mountRoutes(app: Express, options: RouteOptions): void {
 
   app.use(createProvidersRouter());
   app.use(createBodyRewritesRouter());
+  app.use(createConfigRouter());
 }

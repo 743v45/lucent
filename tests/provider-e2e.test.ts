@@ -12,7 +12,8 @@
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
-import { readFile } from 'node:fs/promises';
+import Database from 'better-sqlite3';
+import { dirname } from 'node:path';
 import { existsSync } from 'node:fs';
 import { spawn, type ChildProcess } from 'node:child_process';
 import { createTestEnv, cleanTestDir, removeTestDir, writeTestConfig, startBackend, stopBackend, readLatestLog, createMockUpstream, type MockUpstream, type TestEnv } from './e2e-helpers.js';
@@ -92,9 +93,16 @@ async function apiRequest(
 }
 
 async function readTestConfig(configPath: string = CONFIG_PATH): Promise<ProxyConfig | null> {
-  if (!existsSync(configPath)) return null;
-  const content = await readFile(configPath, 'utf-8');
-  return JSON.parse(content);
+  const dbPath = `${dirname(configPath)}/lucent.db`;
+  if (!existsSync(dbPath)) return null;
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
+  try {
+    const row = db.prepare('SELECT data FROM config WHERE id = 1').get() as { data: string } | undefined;
+    if (!row) return null;
+    return JSON.parse(row.data) as ProxyConfig;
+  } finally {
+    db.close();
+  }
 }
 
 /**
