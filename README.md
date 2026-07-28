@@ -52,6 +52,40 @@ npm start
 # 浏览器自动打开 http://localhost:7049
 ```
 
+## Docker 部署
+
+一行命令构建并启动（需先启动 Docker Desktop / 守护进程）：
+
+```bash
+docker compose up -d --build
+```
+
+启动后：
+
+- **Web UI**：http://localhost:7049（管理面板：配置供应商 / 查看通信记录）
+- **代理**：http://localhost:7048（AI 客户端把 BASE_URL 指向这里，路径规则同下）
+
+| 项 | 默认 | 说明 |
+|----|------|------|
+| 代理端口 | `7048` | 宿主机侧可经 `.env` 的 `LUCENT_PROXY_PORT` 覆盖 |
+| Web UI 端口 | `7049` | 宿主机侧可经 `.env` 的 `LUCENT_WEB_PORT` 覆盖 |
+| 数据卷 | `lucent-data` → `/data` | config.json + logs/ + lucent.db，`down` 不删 |
+
+常用命令：
+
+```bash
+docker compose up -d --build   # 构建并后台启动
+docker compose logs -f         # 跟随日志
+docker compose ps              # 查看状态（含 healthcheck）
+docker compose restart         # 重启
+docker compose down            # 停止并移除容器（volume 保留）
+docker compose down -v         # 同上并删除数据卷（⚠️ 清空配置与日志）
+```
+
+安全：镜像以非 root（`node`）运行，配合只读根文件系统 + `no-new-privileges`。代理端口默认绑 `0.0.0.0`（局域网可访，便于外部工具接入）；如仅本机使用，把 `docker-compose.yml` 的 `ports` 改为 `127.0.0.1:7048:7048` / `127.0.0.1:7049:7049`。
+
+> 日志旋钮（模式 / 保留期 / 临时 TTL）默认不注入，行为与裸机一致，可在 Web UI 实时改；如需 env 锁定，编辑 `docker-compose.yml` 的 `environment` 段。样例见 `.env.example`。
+
 ## 使用方法
 
 ### 第一步：配置供应商

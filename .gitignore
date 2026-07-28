@@ -34,6 +34,8 @@ Thumbs.db
 config.local.json
 preferences.local.json
 opencode.json
+.env
+.env.local
 
 # Design docs (local only)
 DESIGN.md

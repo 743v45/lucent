@@ -17,19 +17,27 @@ services:
     image: lucent:latest
     container_name: lucent
     init: true                       # tini 做 PID 1，确保 SIGTERM 触发 server graceful 关闭
+    user: node                       # 非 root 运行（与镜像内 USER node 一致，双保险）
+    security_opt:
+      - no-new-privileges:true       # 禁止容器内提权
+    read_only: true                  # 根文件系统只读；仅 /data（卷）+ /tmp（tmpfs）可写
+    tmpfs:
+      - /tmp                         # 运行时临时文件落点
     ports:
-      - "7048:7048"                  # 代理
-      - "7049:7049"                  # Web UI
+      # 宿主机侧端口可经 .env 用 LUCENT_PROXY_PORT / LUCENT_WEB_PORT 覆盖（避免冲突）；
+      # 容器内固定 7048/7049，故 healthcheck 与 EXPOSE 不受影响。
+      - "${LUCENT_PROXY_PORT:-7048}:7048"   # 代理（host 侧 0.0.0.0；仅本机用改 127.0.0.1:…:7048）
+      - "${LUCENT_WEB_PORT:-7049}:7049"     # Web UI
     environment:
       - LUCENT_HOST=0.0.0.0
       - LUCENT_CONFIG_DIR=/data
-      # 可选覆盖（取消注释按需调整）
-      # - LUCENT_PROXY_PORT=7048
-      # - LUCENT_WEB_PORT=7049
-      # - LUCENT_LOG_RETENTION_DAYS=30
-      # - LUCENT_MAX_LOG_FILES=50
+      # 可选日志旋钮（取消注释启用）。注意：这些变量一旦存在，app 即视为 env 锁定，
+      # Web UI 对应控件会显示「被 env 锁定」并禁用——故仅在确需锁定时启用。
+      # - LUCENT_LOG_MODE=archive                # off / temporary / archive
+      # - LUCENT_LOG_RETENTION_DAYS=3            # 存档保留期（天）
+      # - LUCENT_TEMP_LOG_TTL_MINUTES=30         # 临时日志存活（分钟）
     volumes:
-      - lucent-data:/data            # config.json + logs/ 持久化
+      - lucent-data:/data            # config.json + logs/ + lucent.db 持久化
     restart: unless-stopped
 
 volumes:

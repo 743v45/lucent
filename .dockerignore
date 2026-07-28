@@ -26,6 +26,8 @@ logs
 .vscode
 .idea
 opencode.json
+.env
+.env.local
 
 # 本地文档与截图（运行不需要）
 docs
