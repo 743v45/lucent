@@ -59,6 +59,12 @@ export interface ListFilter {
   startDate?: string;
   endDate?: string;
   threadId?: string;
+  /** 按模型过滤（CLI --model / Web API 可选）；命中 idx_logs_model */
+  model?: string;
+  /** 按 HTTP 状态码过滤（CLI --status） */
+  status?: number;
+  /** 是否测试请求（CLI --is-test / --no-is-test） */
+  isTest?: boolean;
 }
 
 // ==================== 建库 / Schema ====================
@@ -138,6 +144,16 @@ export function openDb(dbPath: string): DB {
   const ver = db.prepare('select sqlite_version() as v').get() as { v: string };
   dbg('数据库就绪: %s (sqlite %s)', dbPath, ver.v);
   return db;
+}
+
+/**
+ * 只读打开数据库（CLI / 查询工具用）。
+ * 不建表、不迁移、不挂单例；调用方查完自行 close()。
+ * fileMustExist：文件不存在时抛 SQLITE_CANTOPEN（而非新建空库），调用方据此报 db 错误。
+ * 服务器没跑也能查——WAL 模式下只读连接与服务器写连接并发安全。
+ */
+export function openDbReadonly(dbPath: string): DB {
+  return new Database(dbPath, { readonly: true, fileMustExist: true });
 }
 
 // ==================== search_text 抽取 ====================
@@ -403,6 +419,9 @@ function applyFilter(filter: ListFilter, where: string[], params: unknown[]): vo
   if (filter.startDate) { where.push('timestamp >= ?'); params.push(filter.startDate); }
   if (filter.endDate) { where.push('timestamp <= ?'); params.push(filter.endDate); }
   if (filter.threadId) { where.push('thread_id = ?'); params.push(filter.threadId); }
+  if (filter.model) { where.push('model = ?'); params.push(filter.model); }
+  if (filter.status != null) { where.push('status = ?'); params.push(filter.status); }
+  if (filter.isTest != null) { where.push('is_test = ?'); params.push(filter.isTest ? 1 : 0); }
 }
 
 /** 列表/检索统一返回：行 + 总数（「N 条」展示用）+ 下一页 keyset 游标 + 是否还有更多 */
@@ -569,6 +588,77 @@ export function fetchBodies(db: DB, rowids: number[]): Map<number, { request: st
 export function getStats(db: DB): { count: number; oldest: string | null; newest: string | null } {
   const row = db.prepare(`SELECT COUNT(*) AS c, MIN(timestamp) AS oldest, MAX(timestamp) AS newest FROM logs`).get() as { c: number; oldest: string | null; newest: string | null };
   return { count: row.c, oldest: row.oldest, newest: row.newest };
+}
+
+// ==================== 维度聚合（CLI stats） ====================
+
+/** stats 聚合支持的维度 → SQL 表达式映射 */
+const STATS_DIMENSION_EXPR: Record<string, string> = {
+  provider: 'provider_name',
+  model: 'model',
+  'agent-type': 'agent_type',
+  endpoint: 'endpoint_type',
+  status: 'status',
+  day: 'substr(timestamp, 1, 10)',
+  hour: 'substr(timestamp, 1, 13)',
+};
+
+/** stats 支持的维度 key 列表（供 CLI 校验 --by） */
+export function getStatsDimensionKeys(): string[] {
+  return Object.keys(STATS_DIMENSION_EXPR);
+}
+
+/** 单个聚合桶 */
+export interface StatsBucket {
+  key: string | number | null;
+  count: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_read_tokens: number;
+  cache_creation_tokens: number;
+  total_duration_ms: number;
+}
+
+/** stats 命令返回：维度 + 桶列表 + 全量汇总（不含 key） */
+export interface StatsResult {
+  dimension: string;
+  buckets: StatsBucket[];
+  totals: Omit<StatsBucket, 'key'>;
+}
+
+const STATS_METRICS = `COUNT(*) AS count,
+    COALESCE(SUM(input_tokens), 0) AS input_tokens,
+    COALESCE(SUM(output_tokens), 0) AS output_tokens,
+    COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+    COALESCE(SUM(cache_creation_tokens), 0) AS cache_creation_tokens,
+    COALESCE(SUM(duration), 0) AS total_duration_ms`;
+
+/**
+ * 按维度聚合统计（CLI `stats` 用）：GROUP BY <维度表达式>，每桶含 count / 各 token / 总耗时；
+ * totals 为同 filter 下的全量汇总。COALESCE 防 NULL token 列污染求和。
+ * 未知 dimension 抛 Error（调用方按 bad-args 处理）。
+ */
+export function getStatsByDimension(
+  db: DB,
+  opts: { dimension: string; filter?: ListFilter },
+): StatsResult {
+  const expr = STATS_DIMENSION_EXPR[opts.dimension];
+  if (!expr) throw new Error(`unknown stats dimension: ${opts.dimension}`);
+
+  const where: string[] = [];
+  const params: unknown[] = [];
+  if (opts.filter) applyFilter(opts.filter, where, params);
+  const whereClause = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+  const buckets = db.prepare(
+    `SELECT ${expr} AS key, ${STATS_METRICS} FROM logs ${whereClause} GROUP BY ${expr} ORDER BY count DESC`,
+  ).all(...params) as StatsBucket[];
+
+  const totals = db.prepare(
+    `SELECT ${STATS_METRICS} FROM logs ${whereClause}`,
+  ).get(...params) as Omit<StatsBucket, 'key'>;
+
+  return { dimension: opts.dimension, buckets, totals };
 }
 
 /** 清空所有日志（logs 级联 log_bodies，FTS 手动清），再 VACUUM 回收空间 */
