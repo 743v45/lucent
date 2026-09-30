@@ -315,6 +315,8 @@ export interface MockUpstream {
   reset(): void;
   /** 切换响应模式（Anthropic: sse-text 等；OpenAI: chat-sse 等；auto: sse/json/error-*） */
   setMode(mode: AnthropicResponseMode | OpenAIResponseMode | AutoResponseMode): void;
+  /** 配置 /models 响应的模型 id 列表（未配置用默认示例；reset() 不清除本配置） */
+  setModels(ids: string[]): void;
   /** 关闭并释放端口 */
   close(): Promise<void>;
 }
@@ -335,8 +337,22 @@ export async function createMockUpstream(opts?: { name?: string; format?: MockFo
   let mode: AnthropicResponseMode | OpenAIResponseMode | AutoResponseMode =
     format === 'openai' ? 'chat-sse' : format === 'auto' ? 'sse' : 'sse-text';
 
+  // /models 响应的模型 id 列表（setModels 配置；reset() 不清除）
+  let modelsList: string[] = ['mock-model-1', 'mock-model-2'];
+
+  /** models 列表请求识别：去 query 后 stripped path 全等（含/不含 /v1 前缀） */
+  const isModelsPath = (url: string): boolean => {
+    const p = url.split('?')[0];
+    return p === '/models' || p.endsWith('/v1/models');
+  };
+
   /** auto 模式下按 URL 决定 protocol, 然后按 mode 响应 */
   const respondAuto = (url: string, m: AutoResponseMode, res: ServerResponse): boolean => {
+    // models 列表端点（协议无关）→ OpenAI list 格式（生态事实标准）
+    if (isModelsPath(url)) {
+      respondJSON(res, 200, openaiModelsBody(modelsList));
+      return true;
+    }
     const isAnthropic = url.includes('/messages');
     const isChat = url.includes('/chat/completions');
     const isResponses = url.includes('/responses');
@@ -380,6 +396,13 @@ export async function createMockUpstream(opts?: { name?: string; format?: MockFo
       headers: req.headers as Record<string, string>,
       body,
     });
+
+    // models 列表端点：固定格式实例按各自协议格式响应（auto 在 respondAuto 内处理）
+    if (format !== 'auto' && isModelsPath(req.url || '/')) {
+      const body = format === 'anthropic' ? anthropicModelsBody(modelsList) : openaiModelsBody(modelsList);
+      respondJSON(res, 200, body);
+      return;
+    }
 
     if (format === 'auto') {
       respondAuto(req.url || '/', mode as AutoResponseMode, res);
@@ -427,11 +450,42 @@ export async function createMockUpstream(opts?: { name?: string; format?: MockFo
     requests,
     reset() { requests.length = 0; },
     setMode(m: AnthropicResponseMode | OpenAIResponseMode | AutoResponseMode) { mode = m; },
+    setModels(ids: string[]) { modelsList = [...ids]; },
     close() {
       return new Promise<void>((resolve) => {
         server.close(() => resolve());
       });
     },
+  };
+}
+
+// ==================== models 响应 fixture ====================
+
+/** OpenAI list 格式（生态事实标准，auto / openai 实例共用） */
+function openaiModelsBody(ids: string[]): object {
+  return {
+    object: 'list',
+    data: ids.map((id, i) => ({
+      id,
+      object: 'model',
+      created: 1735689600 + i,
+      owned_by: 'lucent-mock',
+    })),
+  };
+}
+
+/** Anthropic models 格式（同名 /v1/models 端点的 Anthropic 变体） */
+function anthropicModelsBody(ids: string[]): object {
+  return {
+    data: ids.map(id => ({
+      type: 'model',
+      id,
+      display_name: id,
+      created_at: '2025-01-01T00:00:00Z',
+    })),
+    first_id: ids[0] ?? null,
+    last_id: ids[ids.length - 1] ?? null,
+    has_more: false,
   };
 }
 
