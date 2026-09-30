@@ -11,8 +11,9 @@
 
 import { createServer } from 'node:http';
 import { getConfig, findProviderByName } from './config.js';
-import { type EndpointType } from './types.js';
+import { type EndpointType, type Provider } from './types.js';
 import { inferEndpointTypeFromPath } from './endpoint-registry.js';
+import { MODELS_PATH, MODELS_ENDPOINT_PRIORITY, type ProtocolId } from '../shared/protocols.js';
 import { applyBodyRewritesToBuffer } from './body-rewriter.js';
 import {
   DEFAULT_PROXY_PORT,
@@ -49,6 +50,90 @@ function inferEndpointType(rest: string): EndpointType | null {
   const path = rest.split('?')[0];
   const stripped = path.replace(/^\/v1(?=\/)/, '');
   return inferEndpointTypeFromPath(stripped);
+}
+
+// ==================== models 端点旁路 ====================
+
+/**
+ * models 请求解析结果
+ * - ok:命中 models 端点,携带解析出的转发目标(协议无关)
+ * - not-models:非 models 请求,走原协议推断链路
+ * - error:命中 models 但无法转发(400 非法 protocol / 404 无可用 endpoint)
+ */
+type ModelsResolution =
+  | { kind: 'ok'; baseUrl: string; rest: string }
+  | { kind: 'not-models' }
+  | { kind: 'error'; status: number; error: string };
+
+/**
+ * 显式 protocol 参数值 → 候选 endpoint 顺序
+ * - 'openai':openai 系(openai-chat → openai-responses)
+ * - 'anthropic' / 'anthropic-messages':anthropic-messages
+ * - 协议 id 全名:精确指定
+ */
+function resolveProtocolCandidates(value: string): readonly ProtocolId[] | null {
+  switch (value) {
+    case 'openai': return ['openai-chat', 'openai-responses'];
+    case 'anthropic':
+    case 'anthropic-messages': return ['anthropic-messages'];
+    case 'openai-chat':
+    case 'openai-responses': return [value];
+    default: return null;
+  }
+}
+
+/**
+ * 识别并解析 models 列表请求(stripped path 全等 MODELS_PATH,不模糊匹配)。
+ *
+ * 目标解析:显式 ?protocol=<p> 限定候选;无参数按 MODELS_ENDPOINT_PRIORITY
+ * (openai 优先)取首个非 null endpoint。protocol 参数从 query 剥离,
+ * 不透传上游;其余 query 参数保持原始编码原样透传。
+ */
+function resolveModelsRequest(rest: string, provider: Provider): ModelsResolution {
+  const qIdx = rest.indexOf('?');
+  const path = qIdx === -1 ? rest : rest.slice(0, qIdx);
+  const query = qIdx === -1 ? null : rest.slice(qIdx + 1);
+  const stripped = path.replace(/^\/v1(?=\/)/, '');
+  if (stripped !== MODELS_PATH) return { kind: 'not-models' };
+
+  // query 拆解:抽出 protocol,其余原样保留(手工拼装,不重新编码)
+  let protocolRaw: string | null = null;
+  let cleanedQuery: string | null = null;
+  if (query !== null) {
+    const kept: string[] = [];
+    for (const pair of query.split('&')) {
+      const eq = pair.indexOf('=');
+      const key = eq === -1 ? pair : pair.slice(0, eq);
+      if (key === 'protocol') {
+        protocolRaw = eq === -1 ? '' : pair.slice(eq + 1);
+      } else {
+        kept.push(pair);
+      }
+    }
+    cleanedQuery = kept.length > 0 ? kept.join('&') : null;
+  }
+
+  let candidates: readonly ProtocolId[];
+  if (protocolRaw !== null) {
+    const resolved = resolveProtocolCandidates(decodeURIComponent(protocolRaw));
+    if (!resolved) {
+      return { kind: 'error', status: 400, error: `invalid protocol: ${decodeURIComponent(protocolRaw)}` };
+    }
+    candidates = resolved;
+  } else {
+    candidates = MODELS_ENDPOINT_PRIORITY;
+  }
+
+  const target = candidates.find(id => provider.endpoints[id] != null);
+  if (!target) {
+    return { kind: 'error', status: 404, error: `provider '${provider.name}' does not support models` };
+  }
+
+  return {
+    kind: 'ok',
+    baseUrl: provider.endpoints[target] as string,
+    rest: cleanedQuery !== null ? `${path}?${cleanedQuery}` : path,
+  };
 }
 
 // ==================== 请求头处理 ====================
@@ -163,7 +248,9 @@ export async function startProxyServer(options?: { port?: number; host?: string 
           return;
         }
 
-        const [, providerName, rest] = match;
+        const [, providerName, rawRest] = match;
+        // models 旁路会剥离 ?protocol= 后重写 rest,故为可变绑定
+        let rest = rawRest;
 
         // 2. 查找 provider
         const config = getConfig();
@@ -173,18 +260,32 @@ export async function startProxyServer(options?: { port?: number; host?: string 
           return;
         }
 
-        // 3. 推断 endpointType
-        const endpointType = inferEndpointType(rest);
-        if (!endpointType) {
-          sendJsonError(res, 404, `unsupported endpoint path: ${rest}`);
+        // 3. 路由解析:models 端点(协议无关旁路)优先识别,否则走协议推断
+        //    endpointType 为 null 表示 models 请求(EndpointType 保持协议纯净,不收录 'models')
+        let endpointType: EndpointType | null;
+        let baseUrl: string;
+        const models = resolveModelsRequest(rest, provider);
+        if (models.kind === 'error') {
+          sendJsonError(res, models.status, models.error);
           return;
-        }
+        } else if (models.kind === 'ok') {
+          endpointType = null;
+          baseUrl = models.baseUrl;
+          rest = models.rest;
+        } else {
+          endpointType = inferEndpointType(rest);
+          if (!endpointType) {
+            sendJsonError(res, 404, `unsupported endpoint path: ${rest}`);
+            return;
+          }
 
-        // 4. 检查 provider 是否支持此端点
-        const baseUrl = provider.endpoints[endpointType];
-        if (!baseUrl) {
-          sendJsonError(res, 404, `provider '${providerName}' does not support ${endpointType}`);
-          return;
+          // 4. 检查 provider 是否支持此端点
+          const ep = provider.endpoints[endpointType];
+          if (!ep) {
+            sendJsonError(res, 404, `provider '${providerName}' does not support ${endpointType}`);
+            return;
+          }
+          baseUrl = ep;
         }
 
         // 5. 转换请求头（纯透传，不修改鉴权头）
@@ -195,9 +296,13 @@ export async function startProxyServer(options?: { port?: number; host?: string 
         headers = stripContentLengthHeader(headers);
 
         // 标记代理转发 + 传递路由信息给拦截器
+        // x-lucent-endpoint 仅聊天端点注入(models 无协议归属,拦截器对缺失已容错,
+        // 日志中该条目 endpointType/apiType 为空,按 URL 识别)
         headers[PROXY_TRACE_HEADER] = 'true';
         headers['x-lucent-provider'] = providerName;
-        headers['x-lucent-endpoint'] = endpointType;
+        if (endpointType) {
+          headers['x-lucent-endpoint'] = endpointType;
+        }
         // TTFT/Duration 时钟起点：客户端请求到达代理的时刻（startTime 在请求入口取）
         headers[REQ_START_HEADER] = String(startTime);
 

@@ -64,3 +64,24 @@ export const PROTOCOL_REGISTRY = {
 
 /** 所有协议 id(派生自 registry,不得手写) */
 export const PROTOCOL_IDS = Object.keys(PROTOCOL_REGISTRY) as ProtocolId[];
+
+/**
+ * models 列表端点(协议无关)。
+ *
+ * GET /v1/models 是 OpenAI 定下的事实标准路径,Anthropic 亦实现同名端点
+ * (响应格式各随协议)。它不属于任何协议的 strippedPaths——塞进去会破坏
+ * protocol-model spec 的协议身份与「strippedPaths 无交集」约束——故以独立
+ * 常量声明,proxy 的 models 旁路专用。字面量单源,业务代码不得另行硬编码。
+ */
+export const MODELS_PATH = '/models';
+
+/**
+ * models 请求的默认转发优先级(协议无关端点,无法从路径推断协议)。
+ * OpenAI list 格式是生态事实标准,故 OpenAI 系优先;需要 Anthropic 格式时
+ * 由请求方用 ?protocol= 显式指定(见 proxy.ts 的 models 旁路)。
+ */
+export const MODELS_ENDPOINT_PRIORITY: readonly ProtocolId[] = [
+  'openai-chat',
+  'openai-responses',
+  'anthropic-messages',
+];
