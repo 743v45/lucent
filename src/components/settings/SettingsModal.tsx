@@ -8,6 +8,7 @@ import {
   EditOutlined,
   DeleteOutlined,
   ExclamationCircleOutlined,
+  InfoCircleOutlined,
   CloseOutlined,
   ArrowLeftOutlined,
   DownloadOutlined,
@@ -630,6 +631,24 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
         <div className="p-3 rounded-md border border-border-subtle bg-bg-surface/30">
           <div className="flex items-center gap-2 text-[15px] mb-2">
             <span className="text-text-secondary">上游接入地址</span>
+            <Tooltip
+              title={
+                <div className="text-[12px] max-w-[360px]">
+                  <div>上游接入地址 = 真实 API 的 base URL，须含 /v1。</div>
+                  <div className="mt-1">
+                    客户端把「下游接入地址」配置为 baseUrl 即可接入：代理按 /v1
+                    去重转发（下游 /name/v1/xxx → 上游 …/v1/xxx），鉴权头原样透传。
+                  </div>
+                  <div className="mt-1">
+                    模型列表 /v1/models 默认转发 OpenAI 系端点（OpenAI list
+                    格式）；需要 Anthropic 格式时请求
+                    /v1/models?protocol=anthropic。
+                  </div>
+                </div>
+              }
+            >
+              <InfoCircleOutlined className="text-text-quaternary cursor-help" data-testid="upstream-url-help" />
+            </Tooltip>
           </div>
 
           {/* 三个 Endpoint */}

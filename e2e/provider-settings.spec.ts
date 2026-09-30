@@ -200,4 +200,29 @@ test.describe('供应商设置（SettingsModal 全流程）', () => {
     }, name);
     expect(after, '删除后后端 config 应已无该 provider').toBe(404);
   });
+
+  test('上游接入地址旁提示图标：hover 展示地址关联与用法映射说明', async ({ page, lucent }) => {
+    await page.goto(lucent.webBaseUrl);
+    await page.getByTestId('settings-open-btn').click();
+    await expect(page.getByTestId('settings-modal')).toBeVisible();
+    await waitForListLoaded(page);
+
+    // 展开种子 openai 供应商的编辑器（点击行切换展开态）
+    const row = page.locator('[data-testid="provider-row"][data-name="openai"]');
+    await row.click();
+
+    // 圆圈叹号提示图标存在，hover 触发说明
+    const helpIcon = page.getByTestId('upstream-url-help');
+    await expect(helpIcon).toBeVisible();
+    await helpIcon.hover();
+
+    // 说明覆盖三要点：上游地址语义（须含 /v1）、下游→上游映射 + 鉴权透传、models 行为
+    const tooltip = page.locator('.ant-tooltip');
+    await expect(tooltip).toBeVisible();
+    await expect(tooltip).toContainText('base URL');
+    await expect(tooltip).toContainText('/v1');
+    await expect(tooltip).toContainText('原样透传');
+    await expect(tooltip).toContainText('/v1/models');
+    await expect(tooltip).toContainText('protocol=anthropic');
+  });
 });
